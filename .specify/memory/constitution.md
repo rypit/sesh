@@ -1,7 +1,8 @@
 # sesh Constitution
 
-sesh ("scribe") runs a coding agent against a local AI stack inside a
-sandbox, so that a prompt-injected agent cannot harm the Mac it runs on.
+sesh ("scribe") runs the coding agent of the user's choice inside a
+sandbox, as easily as running it directly, so that a prompt-injected
+agent cannot harm the Mac it runs on.
 These principles are binding on every spec, plan, task and change. When a
 principle and a convenience conflict, the principle wins.
 
@@ -60,6 +61,11 @@ brick a machine.
 Repository content can never widen what a sandbox may do. There is no
 repo-local configuration that grants network access, secrets, mounts or
 tools. If repo-local config is ever added, it may only *narrow* policy.
+Recipes count as user configuration only when they ship with sesh or
+live in the user's config directory; every allowance a recipe adds is
+shown, with its source, by `sesh policy show`. Harness configuration
+imported from the host is copied in for the harness to read and never
+contributes to policy.
 
 *Rationale*: an attacker controls repo content (Principle I), so repo
 content must not control the boundary.
@@ -77,8 +83,10 @@ also make it possible to swap the sandbox runtime without losing them.
 ### VII. Compose, don't rebuild
 
 sesh is glue. It composes existing components (the sandbox runtime, the
-inference engine, the harness, the search service) and writes custom
-code only where no existing component meets an invariant. Each
+user's harness, the endpoints the user runs or subscribes to) and writes
+custom code only where no existing component meets an invariant. sesh
+does not run inference or search services itself, and holds no
+harness-specific logic outside data-only recipes. Each
 component sits behind exactly one module (a seam), so it can be
 replaced. Features that are not needed by an accepted spec are not built.
 
@@ -89,25 +97,23 @@ use case.)
 
 ### VIII. One command, sensible defaults
 
-The happy path is `sesh` in a repo directory, with zero required
-configuration after one-time setup. Configuration exists to change
-defaults, never to make the default work. Commands are idempotent, and a
-warm start (stack up, sandbox exists) is fast.
+The happy path is `sesh` (or `sesh <recipe>`) in a repo directory, with
+zero required configuration after one-time setup. Configuration exists
+to change defaults, never to make the default work. Commands are
+idempotent, and a warm start (sandbox exists) is fast.
 
 *Rationale*: if the secure path isn't the easy path, it won't be used.
 
 ## Additional Constraints
 
-- **Platform**: macOS on Apple Silicon only (initially M3 or later with
-  macOS 26.4+, inherited from the default engine). No Linux or Windows
-  support is planned.
+- **Platform**: macOS on Apple Silicon only, at the minimum versions the
+  sandbox runtime requires. No Linux or Windows support is planned.
 - **No sesh daemon**: sesh is a CLI. Long-running processes are the
-  components it supervises (engine, search, sandbox runtime, credential
-  shims), managed through launchd or the component's own lifecycle,
-  never by a sesh-owned background process. Credential shims are stack
-  services: separate `sesh-shim` processes that launchd starts and
-  keeps alive, one per shim, visible in `sesh stack status`. The `sesh`
-  CLI itself never stays resident after a command ends.
+  sandbox runtime and credential shims, managed through launchd or the
+  component's own lifecycle, never by a sesh-owned background process.
+  Credential shims are separate `sesh-shim` processes that launchd
+  starts and keeps alive, one per shim, visible in `sesh doctor`. The
+  `sesh` CLI itself never stays resident after a command ends.
 - **No outbound telemetry** from sesh itself.
 - **Pinned minimum versions** for security-relevant components (e.g. the
   sbx version that supports method/path rules). `sesh doctor` refuses to
@@ -148,4 +154,4 @@ updates any affected invariant checks and templates. Versioning:
 
 All reviews check compliance with this constitution.
 
-**Version**: 1.1.1 | **Ratified**: 2026-11-19 | **Last Amended**: 2026-11-19
+**Version**: 1.2.0 | **Ratified**: 2026-11-19 | **Last Amended**: 2026-11-19
