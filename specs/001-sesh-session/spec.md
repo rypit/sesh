@@ -16,6 +16,7 @@ need them, and the agent never has direct access to them."
 ### Session 2026-11-19
 
 - Q: When `sesh` runs in a checkout with uncommitted or untracked changes, what does the sandbox workspace start from? → A: `HEAD` plus the uncommitted diff and untracked (non-ignored) files, copied into the isolated clone as one "sesh: carried changes" commit, automatically and without prompting.
+- Q: With no flags, does a session get web search, package registries and configured APIs, or only the local model? → A: Default profile is `online`; `sesh --profile offline` (or `profile = "offline"` in user config) selects the local-model-only profile.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -293,9 +294,10 @@ credential from the Keychain, and the sandbox never sees the credential.
   with no cloud model provider configured.
 - **FR-019**: Web search MUST be available to the agent as a tool when
   the session's network profile is `online`. An `offline` profile MUST
-  allow only the local engine and nothing else.
-  [NEEDS CLARIFICATION: is the default profile `online` (search,
-  registries, configured APIs) or `offline`?]
+  allow only the local engine and nothing else. The default profile
+  MUST be `online`; `sesh --profile offline`, or `profile` in user
+  config, MUST select `offline`, and
+  `sesh policy show` MUST state which profile applies.
 - **FR-020**: Tools MUST be declared in user config as: an optional
   host-side service, the endpoint the sandbox may reach, any credential
   bindings, and the harness integration. Built-in search MUST use the
@@ -335,7 +337,8 @@ credential from the Keychain, and the sandbox never sees the credential.
 - **Credential binding**: a credential name, its source (Keychain item or
   secrets-manager reference), the hosts it's bound to, and how it's
   attached (runtime injection or shim).
-- **Profile**: a named policy preset (`online`, `offline`).
+- **Profile**: a named policy preset (`online`, the default, or
+  `offline`).
 - **Tool**: an agent capability made of a harness integration plus,
   optionally, a host service, an allowed endpoint, and credential
   bindings.
