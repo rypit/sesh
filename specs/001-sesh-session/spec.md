@@ -11,6 +11,12 @@ tools. Easy installation. Tight network, directory and secret isolation:
 secrets only reach the tools that need them, only for the requests that
 need them, and the agent never has direct access to them."
 
+## Clarifications
+
+### Session 2026-11-19
+
+- Q: When `sesh` runs in a checkout with uncommitted or untracked changes, what does the sandbox workspace start from? → A: `HEAD` plus the uncommitted diff and untracked (non-ignored) files, copied into the isolated clone as one "sesh: carried changes" commit, automatically and without prompting.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Start a protected session in a repo (Priority: P1)
@@ -196,7 +202,8 @@ credential from the Keychain, and the sandbox never sees the credential.
 
 - The cwd is not a git repository, or is a repo with no commits.
 - The working tree has uncommitted or untracked changes when `sesh`
-  starts (see FR-011).
+  starts: they are carried into the workspace as one commit (FR-011);
+  ignored files are not.
 - The repo uses submodules or Git LFS.
 - Two `sesh` sessions are started for the same repo at the same time.
 - The engine isn't installed, the model isn't downloaded, or there isn't
@@ -251,10 +258,12 @@ credential from the Keychain, and the sandbox never sees the credential.
   written inside it can execute on the host through git or any other
   tool the host runs implicitly (Principle IV). Specifically, the host
   checkout's `.git` directory MUST NOT be writable from the sandbox.
-- **FR-011**: On session start, uncommitted changes in the host checkout
-  MUST be [NEEDS CLARIFICATION: carried into the sandbox workspace, or
-  must `sesh` refuse to start on a dirty tree, or start from `HEAD` and
-  warn?].
+- **FR-011**: On session start, the sandbox workspace MUST start from the
+  host checkout's `HEAD` plus its uncommitted changes and untracked,
+  non-ignored files, recorded in the isolated clone as a single
+  "sesh: carried changes" commit. This MUST happen without prompting and
+  MUST NOT modify the host checkout. `sesh pull` MUST make the carried
+  commit distinguishable from the agent's commits.
 - **FR-012**: `sesh pull` MUST transfer the agent's commits to the host
   checkout as data (e.g. a git bundle produced inside the sandbox) onto
   a `sesh/<session>` branch, without running host git against the
