@@ -52,11 +52,11 @@ sbx version pinned; no secret values in any file sesh writes.
 | VII. Compose, don't rebuild | Only glue code. One seam per external component. No proxy, sandbox or harness of our own. |
 | VIII. One command, sensible defaults | `sesh` does everything with a zero-config default. `sesh init` is idempotent. |
 
-Result: **PASS**, no exceptions. Three open clarifications in the spec
-(FR-011, FR-019, FR-025) have recommended defaults below and don't
-affect compliance.
+Result: **PASS**, no exceptions. The spec's three clarifications
+(FR-011, FR-019, FR-025) were resolved on 2026-11-19 as recommended
+below (see spec.md, Clarifications) and don't affect compliance.
 
-### Recommended answers to the spec's open clarifications
+### Resolved clarifications (accepted as recommended)
 
 | Item | Recommendation | Why |
 |---|---|---|
