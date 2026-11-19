@@ -17,6 +17,7 @@ need them, and the agent never has direct access to them."
 
 - Q: When `sesh` runs in a checkout with uncommitted or untracked changes, what does the sandbox workspace start from? → A: `HEAD` plus the uncommitted diff and untracked (non-ignored) files, copied into the isolated clone as one "sesh: carried changes" commit, automatically and without prompting.
 - Q: With no flags, does a session get web search, package registries and configured APIs, or only the local model? → A: Default profile is `online`; `sesh --profile offline` (or `profile = "offline"` in user config) selects the local-model-only profile.
+- Q: After a session ends, is the repository's sandbox kept or discarded? → A: Kept per repository between sessions; `sesh reset` discards it after listing unpulled work and confirming.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -317,9 +318,10 @@ credential from the Keychain, and the sandbox never sees the credential.
 - **FR-024**: `sesh policy show` MUST print the compiled policy for a
   repository's sandbox: allowed endpoints, method/path rules, credential
   bindings (names and hosts, never values).
-- **FR-025**: The sandbox for a repository MUST be [NEEDS
-  CLARIFICATION: kept between sessions (faster warm start, cached
-  dependencies) or discarded when the session ends (clean slate)?].
+- **FR-025**: The sandbox for a repository, including its workspace and
+  caches, MUST be kept between sessions and reused on the next `sesh`
+  run. `sesh reset` MUST discard it, listing unpulled work and asking for
+  confirmation first.
 
 ### Key Entities
 
@@ -329,7 +331,8 @@ credential from the Keychain, and the sandbox never sees the credential.
 - **Service**: one host-side process in the stack, with a loopback
   endpoint and a health check.
 - **Sandbox**: an isolated environment for one repository, with a
-  workspace, an applied policy, and a lifecycle.
+  workspace, an applied policy, and a lifecycle. It persists across
+  sessions until `sesh reset`.
 - **Session**: one run of the harness in a sandbox. Has an id, used to
   name the branch its work returns on.
 - **Policy**: the compiled set of allowed endpoints, method/path rules,
