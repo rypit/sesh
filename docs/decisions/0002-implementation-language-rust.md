@@ -25,8 +25,9 @@ Two facts weigh on the choice:
 ## Decision
 
 sesh is written in **Rust** (stable, edition 2024, toolchain pinned in
-`rust-toolchain.toml`), as a single Cargo package that builds one
-`sesh` binary for `aarch64-apple-darwin`.
+`rust-toolchain.toml`), as a single Cargo package targeting
+`aarch64-apple-darwin`. (Amended by ADR 0003: the package builds two
+binaries, `sesh` and `sesh-shim`.)
 
 - Crates start minimal: `clap` (CLI), `serde` + `toml` (config, with
   `deny_unknown_fields` on every config type), `anyhow` (errors), and a

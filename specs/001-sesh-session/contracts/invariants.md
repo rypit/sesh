@@ -16,6 +16,7 @@ Every invariant must be seen to FAIL when its protection is removed
 | INV-N5 | Inside: reach a LAN address (e.g. router IP) and an un-allowed host loopback port | refused | allowing that port |
 | INV-N6 | Inside: `DELETE` on a GitHub repo path that doesn't exist, so a policy failure is harmless | refused by the sbx proxy (not a GitHub 404) | removing the deny rule |
 | INV-N7 | Offline profile: N3 and registry access | refused | running in the online profile |
+| INV-N8 | Host: every stack port (engine, search, each `sesh-shim`) is bound to `127.0.0.1` only (FR-017) | true | binding a service to `0.0.0.0` |
 
 ## Secrets
 
@@ -43,6 +44,7 @@ Every invariant must be seen to FAIL when its protection is removed
 | INV-P1 | Host: rules applied in sbx == rules compiled from config | identical | adding a rule by hand with `sbx policy` |
 | INV-P2 | Host: a repo containing `.sesh.toml`, a pi `models.json` and an `AGENTS.md` asking for more access gets the same compiled policy as an empty repo | identical | reading repo-local config |
 | INV-P3 | Host: sbx, Splash and pi versions are at or above the pinned minimums | true | lowering the pin |
+| INV-P4 | Host: with no session open, no `sesh` process is running, and every `sesh-shim` process is a launchd job (SC-007) | true | leaving a `sesh` process in the background |
 
 ## Runtime extras
 

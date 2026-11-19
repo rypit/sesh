@@ -61,7 +61,7 @@ paths   = ["/repos/**"]
 # Built-in search is declared internally the same way.
 # [[tools]]
 # name        = "weather"
-# service     = { command = ["sesh-shim-weather"], port = 8901 }   # host side, loopback
+# service     = { command = ["sesh-shim", "weather"], port = 8901 }  # launchd job, 127.0.0.1 only
 # credentials = ["weather"]                                         # used by the shim, never the sandbox
 # harness     = { pi_extension = "~/.config/sesh/tools/weather.ts" }
 ```

@@ -19,17 +19,19 @@
   `.specify/memory/constitution.md`. (Done with Spec Kit v1.4.2,
   `--integration claude --script sh`. The constitution was kept. Add
   pi later with Spec Kit's integration support if wanted.)
-- [ ] T002 [P] Rust project skeleton (ADR 0002): `Cargo.toml` (edition
-  2024, `clap`, `serde`, `toml`, `anyhow`; `invariants` feature),
-  `rust-toolchain.toml`, `src/main.rs` + `src/lib.rs` with
+- [ ] T002 [P] Rust project skeleton (ADR 0002, ADR 0003): `Cargo.toml`
+  (edition 2024, `clap`, `serde`, `toml`, `anyhow`; `invariants`
+  feature; binaries `sesh` and `sesh-shim`), `rust-toolchain.toml`,
+  `src/main.rs`, `src/bin/sesh-shim.rs` (stub) and `src/lib.rs` with
   `#![forbid(unsafe_code)]`, and a `cargo install --locked --path .`
   smoke test.
 - [ ] T003 [P] Tooling: `cargo fmt`, `cargo clippy -- -D warnings`,
   `cargo test`, `cargo deny check` (`deny.toml`), all behind
   `make check`; CI on a macOS runner running everything except the
   `invariants` feature.
-- [ ] T004 [P] `docs/decisions/` with ADR template; ADR 0001 records R1
-  (sbx) and R6 (isolated workspace) as the founding decisions.
+- [x] T004 [P] `docs/decisions/` with ADR template; ADR 0001 records R1
+  (sbx) and R6 (isolated workspace) as the founding decisions. (Done:
+  `0000-template.md`, ADRs 0001–0003.)
 
 ## Phase 2: Spikes (hands-on, reference Mac)
 
@@ -71,37 +73,51 @@ plan.md or the contracts where behavior differs.
   no secret values accepted).
 - [ ] T014 [P] Unit tests, then `src/sandbox/policy.rs`: pure
   compiler config → sorted rule list (both profiles; deny wins;
-  deterministic).
+  deterministic). Its inputs are the user config and the profile only:
+  no repository path or repository content (FR-009, Principle V).
 - [ ] T015 [P] Seam `src/sandbox/sbx.rs`: a trait plus the only
   implementation invoking the sbx CLI (run, exec, policy
   apply/read-back, secret set/set-custom, reset). Unit tests use a fake
   implementation of the trait.
-- [ ] T016 [P] Seam `src/stack/launchd.rs` (trait + real impl): render plists,
-  bootstrap/bootout, status.
+- [ ] T016 [P] Seam `src/stack/launchd.rs` (trait + real impl): render plists
+  (with `KeepAlive`, so launchd restarts crashed services), bootstrap/
+  bootout, status, and the PID and listening port of each job.
 - [ ] T017 Invariant runner `src/verify/runner.rs` + probe
   packaging (POSIX shell probes embedded in the binary): copy probes
   into a sandbox, run them, collect
   PASS/FAIL/KNOWN-RISK per contracts/invariants.md.
 - [ ] T018 [P] `src/doctor.rs`: platform checks (chip, macOS,
-  memory), minimum versions, config validity.
+  memory), minimum versions, config validity, and the FR-027 refusals
+  with their exit codes: not a git repo or no commits (2); engine or
+  model missing, sbx logged out, stopped or too old, too little free
+  memory, a stack port held by a foreign process (3). Each message names
+  the fix.
 
 ## Phase 4: US1, protected session (P1) 🎯 MVP
 
-**Invariants first**: INV-N1, N2, N4, N5, F1, F2, P1, P3, R1, R2.
+**Invariants first**: INV-N1, N2, N4, N5, N8, F1, F2, P1, P2, P3, P4,
+R1, R2.
 
 - [ ] T019 [US1] Write invariant probes listed above; run against a bare
   sandbox and record which fail.
 - [ ] T020 [P] [US1] `stack/engine.rs` + `stack/health.rs`: Splash under
-  launchd, loopback only, health wait.
+  launchd, loopback only, health wait; record a hash of the stack config
+  at `stack up`, so a later `sesh` can detect a stale stack (FR-027).
 - [ ] T021 [P] [US1] `stack/search.rs`: SearXNG per T011.
-- [ ] T022 [US1] `workspace.rs`: isolated clone in the state dir; carried
-  changes per FR-011.
+- [ ] T022 [US1] `workspace.rs`: isolated clone in the state dir; record
+  the host `HEAD` it started from; carried changes per FR-011 as one
+  commit with the `Sesh-Carried-Changes: yes` trailer; warn on
+  submodules and LFS (FR-027).
 - [ ] T023 [US1] `sandbox/kit/` + `harness/pi/`: the pi kit with
   `models.json` for the local engine.
 - [ ] T024 [US1] `sesh` command flow (plan.md "Key flows"): quick doctor
-  → stack up → workspace → policy apply + read-back → secrets → run kit.
-- [ ] T025 [US1] Warm-start path: reuse the stack and sandbox; measure
-  against SC-001.
+  → session lock (FR-026, stale locks cleared) → stack up (refuse if
+  stale) → workspace → policy apply + read-back → secrets → run kit.
+  Continue the current session unless `--new`. On an abnormal harness
+  exit, keep the workspace and exit non-zero.
+- [ ] T025 [US1] Warm-start path: reuse the stack and sandbox. Measure
+  both halves of SC-001: warm start under 10 s, and cold start (stack
+  stopped, no sandbox, downloads done) under 90 s.
 - [ ] T026 [US1] Run the US1 invariants: all PASS.
 
 **Checkpoint**: `sesh` opens pi in a sandbox against Splash; work
@@ -113,9 +129,11 @@ persists between sessions.
 
 - [ ] T027 [US2] Write the INV-H1 planted-content probe (hook,
   fsmonitor, `.envrc`, Makefile, with a host sentinel file) and INV-H2.
-- [ ] T028 [US2] `sesh pull`: in-sandbox `git bundle create`, host
-  `git fetch <bundle>` into `sesh/<session>/*`; report uncommitted
-  sandbox work.
+- [ ] T028 [US2] `sesh pull`: in-sandbox `git bundle create` from the
+  recorded base, host `git fetch <bundle>` into
+  `sesh/<session>/<branch>`; list the carried-changes commit separately;
+  record pulled commit ids in the state dir; report uncommitted sandbox
+  work and offer to commit it there first.
 - [ ] T029 [US2] Run INV-H1/H2: PASS; record SC-005.
 
 ## Phase 6: US3, web and secrets (P2)
@@ -123,15 +141,17 @@ persists between sessions.
 **Invariants first**: INV-N3, N6, N7, S1–S5.
 
 - [ ] T030 [US3] Echo server + test credential fixtures for
-  `sesh verify` (created and removed per run).
+  `sesh verify` (created and removed per run). The echo server is a
+  minimal `std::net` listener on `127.0.0.1`, with no new crate.
 - [ ] T031 [US3] Write the network and secrets probes listed above.
 - [ ] T032 [P] [US3] `sandbox/secrets.rs`: builtin and header bindings
   from config → sbx commands; Keychain/1Password/command sources; no
   values held in sesh's process longer than the sbx call.
 - [ ] T033 [P] [US3] pi search extension calling SearXNG JSON, declared
   as a built-in tool via `tools.rs`.
-- [ ] T034 [US3] Online/offline profiles wired through the compiler and
-  the `--profile` flag.
+- [ ] T034 [US3] Online/offline profiles wired through the compiler, the
+  `--profile` flag and the `profile` config key (flag wins); `online` is
+  the default.
 - [ ] T035 [US3] Run the US3 invariants; S3 reports KNOWN-RISK (#707);
   everything else PASS. Record SC-003 and SC-006.
 
@@ -149,21 +169,25 @@ persists between sessions.
 - [ ] T039 [US5] `sesh init`: platform gate before any change; install
   Splash, the model, SearXNG, sbx and the kit; write the default config;
   idempotent.
-- [ ] T040 [US5] `sesh policy show`, `ls`, `reset`, `logs`,
-  `stack up|down|status`.
+- [ ] T040 [US5] `sesh policy show` (printing the active profile), `ls`,
+  `reset` (listing commits not in the pulled record, then confirming),
+  `logs`, `stack up|down|status` (status lists every shim job).
 - [ ] T041 [US5] Fresh-account walkthrough of quickstart.md; record
   SC-004.
 
 ## Phase 9: US6, custom tools (P3)
 
-**Invariants first**: INV-P2, plus a tool-scoped variant of S1.
+**Invariants first**: a tool-scoped variant of INV-P2 (a tool declared
+only in the repo is ignored), plus a tool-scoped variant of S1.
 
 - [ ] T042 [US6] Tool declarations in config → policy rules + harness
   wiring; repo-declared tools ignored, with a message.
-- [ ] T043 [US6] First shim in `shims/`, justifying its HTTP server and
-  TLS client crates in plan.md (an API that needs query-param or
-  Basic auth) as the reference custom tool.
-- [ ] T044 [US6] Run INV-P2 and the tool secret check.
+- [ ] T043 [US6] First shim in `shims/`, run as `sesh-shim <name>` under
+  its own launchd job (ADR 0003), justifying its HTTP server and TLS
+  client crates in plan.md (an API that needs query-param or Basic
+  auth) as the reference custom tool.
+- [ ] T044 [US6] Run the tool-scoped INV-P2 variant and the tool secret
+  check.
 
 ## Phase 10: Polish
 

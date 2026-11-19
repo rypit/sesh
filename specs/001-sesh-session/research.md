@@ -70,7 +70,8 @@ since v0.32):
   This breaks git over HTTPS to hosts other than GitHub.
 - No request signing (SigV4, HMAC).
 
-**Shim design**: one small host service per awkward API. It binds to
+**Shim design** (ADR 0003): one small host service per awkward API,
+run as `sesh-shim <name>` under its own launchd job. It binds to
 loopback, reads its secret from the Keychain per request, adds the auth
 the upstream needs, and forwards only to its one upstream and only on
 allowed routes. The sandbox's policy allows only `localhost:<shim-port>`.

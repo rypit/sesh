@@ -102,15 +102,19 @@ warm start (stack up, sandbox exists) is fast.
   macOS 26.4+, inherited from the default engine). No Linux or Windows
   support is planned.
 - **No sesh daemon**: sesh is a CLI. Long-running processes are the
-  components it supervises (engine, search, sandbox runtime), managed
-  through launchd or the component's own lifecycle, never by a
-  sesh-owned background process.
+  components it supervises (engine, search, sandbox runtime, credential
+  shims), managed through launchd or the component's own lifecycle,
+  never by a sesh-owned background process. Credential shims are stack
+  services: separate `sesh-shim` processes that launchd starts and
+  keeps alive, one per shim, visible in `sesh stack status`. The `sesh`
+  CLI itself never stays resident after a command ends.
 - **No outbound telemetry** from sesh itself.
 - **Pinned minimum versions** for security-relevant components (e.g. the
   sbx version that supports method/path rules). `sesh doctor` refuses to
   run below them.
 - **Implementation**: Rust (stable, edition 2024, toolchain pinned),
-  one `sesh` binary, `unsafe` code forbidden. Minimal dependencies;
+  `unsafe` code forbidden. One Cargo package builds two binaries: the
+  `sesh` CLI and `sesh-shim` (credential shims only, ADR 0003). Minimal dependencies;
   anything heavier needs justification in a plan (ADR 0002).
 
 ## Development Workflow
@@ -144,4 +148,4 @@ updates any affected invariant checks and templates. Versioning:
 
 All reviews check compliance with this constitution.
 
-**Version**: 1.1.0 | **Ratified**: 2026-11-19 | **Last Amended**: 2026-11-19
+**Version**: 1.1.1 | **Ratified**: 2026-11-19 | **Last Amended**: 2026-11-19
