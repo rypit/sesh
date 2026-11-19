@@ -5,7 +5,7 @@
 
 ## Context
 
-Sesh runs an untrusted, possibly prompt-injected coding agent on the
+sesh runs an untrusted, possibly prompt-injected coding agent on the
 user's Mac. The main goal is that the agent can't harm the host: steal
 secrets, exfiltrate beyond an allowlist, or get code executed on the
 host. Inference and voice models must run natively (Metal isn't

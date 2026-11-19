@@ -1,6 +1,6 @@
 # Quickstart (target experience)
 
-This is how Sesh should feel when feature 001 is done. It's the
+This is how sesh should feel when feature 001 is done. It's the
 acceptance walkthrough for US1–US5.
 
 ## Requirements
@@ -63,7 +63,7 @@ sesh stack down       # stop the engine and search
 
 ## Things to know
 
-- Don't open Sesh's isolated workspace (`~/.local/state/sesh/…`) in your
+- Don't open sesh's isolated workspace (`~/.local/state/sesh/…`) in your
   editor or run its scripts on your Mac. Bring work back with
   `sesh pull` and review it in your own checkout.
 - Run the project's tests in the sandbox, not on your Mac, until you've

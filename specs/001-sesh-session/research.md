@@ -131,7 +131,7 @@ behind the same engine seam.
   `google`. Local servers are configured with a `baseUrl`.
 - Extensions are TypeScript modules that can add tools, commands and UI.
 - **No built-in MCP**; MCP support would come from an extension.
-  Sesh's tools (search, and custom tools later) are delivered as pi
+  sesh's tools (search, and custom tools later) are delivered as pi
   extensions (FR-020).
 - Packaging inside the sandbox: a custom sbx kit. The kit format is
   unsettled: the "Build your own agent kit" tutorial uses a `spec.yaml`
@@ -158,12 +158,12 @@ Plus non-git vectors: `.envrc` (direnv), `.vscode/` tasks and settings,
 Makefiles, package scripts.
 
 **Decision**: the workspace is an **isolated clone** of the user's
-checkout, in Sesh's state directory, never the checkout itself:
+checkout, in sesh's state directory, never the checkout itself:
 - The host checkout's `.git` is never mounted (FR-010).
-- Work comes back by `sesh pull`: Sesh runs `git bundle create` *inside*
+- Work comes back by `sesh pull`: sesh runs `git bundle create` *inside*
   the sandbox, then the host runs `git fetch <bundle>`. A bundle is pure
   data, and host git never reads the sandbox repo's config (FR-012).
-- Sesh never runs host git against the isolated clone.
+- sesh never runs host git against the isolated clone.
 - Documented: opening the isolated clone in an editor on the host
   re-creates the editor vector.
 
@@ -199,10 +199,10 @@ other runtime dependencies to start.
 
 **Why**: the user is fluent in it, and the patterns carry over from
 Sovereign (strict `extra="forbid"` config, single seams for external
-CLIs, hermetic tests). Sesh is mostly orchestration of other CLIs, so
+CLIs, hermetic tests). sesh is mostly orchestration of other CLIs, so
 Rust buys little here.
 
-**Revisit if**: Sesh ever owns a proxy or another long-running,
+**Revisit if**: sesh ever owns a proxy or another long-running,
 security-critical process.
 
 ## R9. SDD tooling → Spec Kit layout

@@ -1,6 +1,6 @@
 # Agent instructions
 
-Sesh is developed spec-first. Before changing anything:
+sesh is developed spec-first. Before changing anything:
 
 1. Read `.specify/memory/constitution.md`. It is binding and overrides
    convenience.
@@ -14,9 +14,11 @@ Sesh is developed spec-first. Before changing anything:
 Hard rules:
 
 - Never write secret values to any file, log, test fixture or commit.
-- Never read repository content as Sesh configuration (Principle V).
+- Never read repository content as sesh configuration (Principle V).
 - Only `src/sesh/sandbox/sbx.py` may invoke the `sbx` CLI.
 - Keep `src/sesh/sandbox/policy.py` pure (no I/O).
+- The project name is always lowercase, **sesh**, even at the start of a
+  sentence or in a title.
 
 Commands (once code exists): `make check` runs lint, typecheck and unit
 tests. Invariant tests (`pytest -m invariants`) need a real Mac with sbx.

@@ -74,7 +74,7 @@ and the code arrives as a reviewable branch.
    on the host, **Then** none of those modifications take effect on the
    host.
 3. **Given** the agent left uncommitted changes, **When** the user runs
-   `sesh pull`, **Then** Sesh reports them and offers to have them
+   `sesh pull`, **Then** sesh reports them and offers to have them
    committed inside the sandbox first, rather than silently dropping
    them.
 
@@ -122,7 +122,7 @@ The user runs `sesh verify` and gets a pass/fail report of every security
 invariant, checked from inside a real sandbox against the live stack.
 
 **Why this priority**: Principle VI. It also gives the user evidence
-after an upgrade of sbx, Splash or Sesh.
+after an upgrade of sbx, Splash or sesh.
 
 **Independent Test**: run `sesh verify` on a correct setup: everything
 passes. Deliberately loosen one policy (e.g. allow `example.com`), run it
@@ -143,7 +143,7 @@ again, and the matching check fails with a clear explanation.
 
 ### User Story 5 - Easy installation (Priority: P3)
 
-On a supported Mac, the user installs Sesh and completes one-time setup
+On a supported Mac, the user installs sesh and completes one-time setup
 with at most three commands, plus waiting for model downloads.
 
 **Why this priority**: important for adoption and for moving to a Mac
@@ -188,7 +188,7 @@ credential from the Keychain, and the sandbox never sees the credential.
    starts, **Then** the harness lists the tool and the sandbox policy
    allows exactly the tool's host-side endpoint, nothing more.
 2. **Given** a tool is declared only inside the repository, **When** a
-   session starts, **Then** it is ignored and Sesh says so (Principle V).
+   session starts, **Then** it is ignored and sesh says so (Principle V).
 
 ---
 
@@ -206,7 +206,7 @@ credential from the Keychain, and the sandbox never sees the credential.
   version.
 - The laptop sleeps, or the engine crashes, mid-session.
 - The stack is running with a configuration older than the current one.
-- The repository contains files that look like Sesh or harness config
+- The repository contains files that look like sesh or harness config
   (a malicious `.sesh*`, `AGENTS.md`, or pi config in the repo).
 - No network connection at all (fully offline use with the local model).
 - The harness exits abnormally; the agent's work must not be lost.
@@ -224,7 +224,7 @@ credential from the Keychain, and the sandbox never sees the credential.
   and open the harness, in one command with no required arguments.
 - **FR-002**: The stack MUST stay running after a session ends, so other
   sessions can use it; `sesh down` stops it.
-- **FR-003**: Sesh MUST be idempotent: running a command again when the
+- **FR-003**: sesh MUST be idempotent: running a command again when the
   desired state already holds changes nothing.
 - **FR-004**: Each repository MUST map to its own sandbox; sessions of
   different repositories MUST NOT share a sandbox or workspace.
@@ -235,7 +235,7 @@ credential from the Keychain, and the sandbox never sees the credential.
   compiled policy allows: the local stack's endpoints, configured
   package registries, configured APIs, and configured tool endpoints.
 - **FR-006**: The sandbox MUST NOT be able to reach the host's network
-  services other than the endpoints Sesh allows, nor the local network
+  services other than the endpoints sesh allows, nor the local network
   (router, NAS, other devices).
 - **FR-007**: The sandbox MUST NOT have access to any host path except
   its workspace.
@@ -263,15 +263,15 @@ credential from the Keychain, and the sandbox never sees the credential.
 **Credentials**
 
 - **FR-013**: Real credential values MUST NOT appear in the sandbox's
-  environment, filesystem, process arguments, or in Sesh's logs and
+  environment, filesystem, process arguments, or in sesh's logs and
   state files.
 - **FR-014**: Each credential MUST be bound to an explicit set of
   destination hosts, and attached only to requests to those hosts.
 - **FR-015**: Credentials MUST be read from the macOS Keychain or a
-  secrets manager at the time they're needed, not copied into Sesh
+  secrets manager at the time they're needed, not copied into sesh
   config or state.
 - **FR-016**: For APIs whose auth the sandbox runtime can't inject,
-  Sesh MUST support a host-side shim (a local service that adds the
+  sesh MUST support a host-side shim (a local service that adds the
   credential and forwards only to its one upstream), exposed to the
   sandbox as a single allowed local endpoint.
 
@@ -356,7 +356,7 @@ credential from the Keychain, and the sandbox never sees the credential.
 - **SC-006**: Asked to "search the web for X and summarize it", the agent
   succeeds with the sandbox making zero direct connections to the
   internet.
-- **SC-007**: Sesh runs no background process of its own; with no session
+- **SC-007**: sesh runs no background process of its own; with no session
   open, its only resident processes are the stack's services.
 
 ## Assumptions

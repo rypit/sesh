@@ -13,7 +13,7 @@
   egress and host-side credential injection.
 - **pi**: the harness, inside the sandbox via a custom sbx kit.
 
-Sesh compiles a per-sandbox policy from user config, gives the sandbox an
+sesh compiles a per-sandbox policy from user config, gives the sandbox an
 isolated clone of the repository (never the host checkout's `.git`),
 returns work as git bundles, and ships its security invariants as
 `sesh verify`.
@@ -35,8 +35,8 @@ machine: M5 Max, 128 GB.
 **Project Type**: single CLI project.
 **Performance Goals**: warm `sesh` to the harness prompt in under 10 s;
 cold start in under 90 s, excluding downloads (SC-001).
-**Constraints**: no Sesh daemon; loopback-only host services; minimum
-sbx version pinned; no secret values in any file Sesh writes.
+**Constraints**: no sesh daemon; loopback-only host services; minimum
+sbx version pinned; no secret values in any file sesh writes.
 **Scale/Scope**: one user, one machine, a handful of concurrent sandboxes.
 
 ## Constitution Check
@@ -46,7 +46,7 @@ sbx version pinned; no secret values in any file Sesh writes.
 | I. Host is the only trusted zone | Harness, tools and model output run only inside the sandbox. The workspace is an untrusted isolated clone. |
 | II. Deny by default | sbx strictest baseline; `policy.py` compiles explicit per-sandbox rules from user config; `sesh policy show` prints them. |
 | III. Secrets never enter the sandbox | sbx placeholders (built-in `github`, `set-custom` with `--command` reading the Keychain) and host shims. Never env, files or logs. Invariants INV-S1–S4. |
-| IV. Nothing agent-authored runs on host | Isolated clone; host `.git` never mounted; return via in-sandbox `git bundle` and host `git fetch <bundle>`; Sesh never runs host git in the clone. Invariant INV-H1. |
+| IV. Nothing agent-authored runs on host | Isolated clone; host `.git` never mounted; return via in-sandbox `git bundle` and host `git fetch <bundle>`; sesh never runs host git in the clone. Invariant INV-H1. |
 | V. Policy comes only from the user | Only `~/.config/sesh/config.toml` feeds the compiler; repo files are never read as config. Invariant INV-P2. |
 | VI. Every guarantee is executable | `src/sesh/verify/` holds the invariants, written first (Phase 2 tasks), and run by `sesh verify`. |
 | VII. Compose, don't rebuild | Only glue code. One seam per external component. No proxy, sandbox or harness of our own. |
@@ -130,7 +130,7 @@ logic is unit-testable without sbx.
    `state/sessions/<repo-id>/`, carrying uncommitted changes (FR-011).
 4. `policy.compile(config, profile)` produces the expected rules;
    `sbx.apply(sandbox, rules)`; then `sbx` reads the applied rules back
-   and Sesh compares them with the expected set (FR-022).
+   and sesh compares them with the expected set (FR-022).
 5. `secrets.apply(bindings)`: `sbx secret set github` /
    `set-custom --host … --env … --command "security find-generic-password …"`.
 6. `sbx run` the pi kit on the isolated workspace, attached to the

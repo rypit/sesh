@@ -122,7 +122,7 @@ persists between sessions.
 - [ ] T031 [US3] Write the network and secrets probes listed above.
 - [ ] T032 [P] [US3] `sandbox/secrets.py`: builtin and header bindings
   from config → sbx commands; Keychain/1Password/command sources; no
-  values held in Sesh's process longer than the sbx call.
+  values held in sesh's process longer than the sbx call.
 - [ ] T033 [P] [US3] pi search extension calling SearXNG JSON, declared
   as a built-in tool via `tools.py`.
 - [ ] T034 [US3] Online/offline profiles wired through the compiler and

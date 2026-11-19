@@ -1,6 +1,6 @@
-# Sesh Constitution
+# sesh Constitution
 
-Sesh ("scribe") runs a coding agent against a local AI stack inside a
+sesh ("scribe") runs a coding agent against a local AI stack inside a
 sandbox, so that a prompt-injected agent cannot harm the Mac it runs on.
 These principles are binding on every spec, plan, task and change. When a
 principle and a convenience conflict, the principle wins.
@@ -34,17 +34,17 @@ beyond their workspace. Every allowance must be:
 ### III. Secrets never enter the sandbox
 
 No real credential may appear in a sandbox's environment, filesystem,
-process arguments, or Sesh's own logs. Credentials are attached on the
+process arguments, or sesh's own logs. Credentials are attached on the
 host side: by the sandbox runtime's credential proxy (placeholder
 substitution bound to specific hosts) or by a host-side shim service.
 The source of truth is the macOS Keychain or a secrets manager, never a
-plaintext file in the repo or in Sesh's state directory.
+plaintext file in the repo or in sesh's state directory.
 
 *Rationale*: a secret the agent can read is a secret it can leak.
 
 ### IV. Nothing agent-authored runs on the host implicitly
 
-Sesh must not create a path by which content written in the sandbox
+sesh must not create a path by which content written in the sandbox
 executes on the host without a deliberate, informed user action. Known
 vectors include git hooks, repo-level git config (`core.fsmonitor`,
 `core.hooksPath`, filters, `diff.external`, pagers), `.envrc`, editor
@@ -76,7 +76,7 @@ also make it possible to swap the sandbox runtime without losing them.
 
 ### VII. Compose, don't rebuild
 
-Sesh is glue. It composes existing components (the sandbox runtime, the
+sesh is glue. It composes existing components (the sandbox runtime, the
 inference engine, the harness, the search service) and writes custom
 code only where no existing component meets an invariant. Each
 component sits behind exactly one module (a seam), so it can be
@@ -101,11 +101,11 @@ warm start (stack up, sandbox exists) is fast.
 - **Platform**: macOS on Apple Silicon only (initially M3 or later with
   macOS 26.4+, inherited from the default engine). No Linux or Windows
   support is planned.
-- **No Sesh daemon**: Sesh is a CLI. Long-running processes are the
+- **No sesh daemon**: sesh is a CLI. Long-running processes are the
   components it supervises (engine, search, sandbox runtime), managed
   through launchd or the component's own lifecycle, never by a
-  Sesh-owned background process.
-- **No outbound telemetry** from Sesh itself.
+  sesh-owned background process.
+- **No outbound telemetry** from sesh itself.
 - **Pinned minimum versions** for security-relevant components (e.g. the
   sbx version that supports method/path rules). `sesh doctor` refuses to
   run below them.

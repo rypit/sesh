@@ -8,7 +8,7 @@ Exit codes for every command:
 | 1 | general error |
 | 2 | usage error |
 | 3 | platform or prerequisite not met (doctor failure) |
-| 4 | security check failed (policy mismatch, invariant failure); Sesh refused to proceed |
+| 4 | security check failed (policy mismatch, invariant failure); sesh refused to proceed |
 
 ## Commands
 

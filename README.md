@@ -1,4 +1,4 @@
-# Sesh
+# sesh
 
 > *sesh* (Egyptian: "scribe"). The scribe writes; it doesn't hold the keys.
 

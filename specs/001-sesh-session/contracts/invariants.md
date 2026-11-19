@@ -1,7 +1,7 @@
 # Contract: invariant suite (`sesh verify`)
 
 Each invariant names the principle it verifies. "Inside" means run in the
-repo's sandbox through `sbx exec`; "host" means run by Sesh on the Mac.
+repo's sandbox through `sbx exec`; "host" means run by sesh on the Mac.
 Every invariant must be seen to FAIL when its protection is removed
 (SC-002); the removal is noted in the last column.
 
@@ -25,7 +25,7 @@ Every invariant must be seen to FAIL when its protection is removed
 | INV-S2 | Inside: request to a host echo server bound to the test credential, using its standard header | upstream receives the real value; response doesn't contain it | n/a |
 | INV-S3 | Inside: same as S2, but the placeholder sits in a made-up header (the #707 case) | real value never appears in the response | expected to leak on sbx while #707 is open: reported as **KNOWN-RISK**, not PASS, until fixed upstream |
 | INV-S4 | Inside: send the placeholder to a host the credential is NOT bound to | that host receives only the placeholder | binding the credential to that host |
-| INV-S5 | Host: grep Sesh's config, state dir and logs for the real test value | not found | logging the value |
+| INV-S5 | Host: grep sesh's config, state dir and logs for the real test value | not found | logging the value |
 
 ## Filesystem and host execution
 
