@@ -75,8 +75,9 @@ and the code arrives as a reviewable branch.
 
 1. **Given** the agent committed work in the sandbox, **When** the user
    runs `sesh pull`, **Then** the commits appear in the host checkout on
-   a branch named `sesh/<session>`, and the user's current branch and
-   working tree are untouched.
+   branches named `sesh/<session>/<branch>` (one per branch in the
+   sandbox), and the user's current branch and working tree are
+   untouched.
 2. **Given** the agent modified `.git/config` or `.git/hooks` in its
    workspace, **When** the user runs `sesh pull` and then any git command
    on the host, **Then** none of those modifications take effect on the
@@ -202,6 +203,8 @@ credential from the Keychain, and the sandbox never sees the credential.
 
 ### Edge Cases
 
+The required behavior for each case is in FR-026 and FR-027.
+
 - The cwd is not a git repository, or is a repo with no commits.
 - The working tree has uncommitted or untracked changes when `sesh`
   starts: they are carried into the workspace as one commit (FR-011);
@@ -232,7 +235,7 @@ credential from the Keychain, and the sandbox never sees the credential.
   needed, create or reuse that repository's sandbox, apply its policy,
   and open the harness, in one command with no required arguments.
 - **FR-002**: The stack MUST stay running after a session ends, so other
-  sessions can use it; `sesh down` stops it.
+  sessions can use it; `sesh stack down` stops it.
 - **FR-003**: sesh MUST be idempotent: running a command again when the
   desired state already holds changes nothing.
 - **FR-004**: Each repository MUST map to its own sandbox; sessions of
@@ -264,12 +267,15 @@ credential from the Keychain, and the sandbox never sees the credential.
   host checkout's `HEAD` plus its uncommitted changes and untracked,
   non-ignored files, recorded in the isolated clone as a single
   "sesh: carried changes" commit. This MUST happen without prompting and
-  MUST NOT modify the host checkout. `sesh pull` MUST make the carried
-  commit distinguishable from the agent's commits.
+  MUST NOT modify the host checkout. The carried commit's message MUST
+  carry a `Sesh-Carried-Changes: yes` trailer, and `sesh pull` MUST list
+  it separately from the agent's commits, so the user can drop it (the
+  same changes are still uncommitted in their own tree).
 - **FR-012**: `sesh pull` MUST transfer the agent's commits to the host
   checkout as data (e.g. a git bundle produced inside the sandbox) onto
-  a `sesh/<session>` branch, without running host git against the
-  sandbox's repository.
+  `sesh/<session>/<branch>` branches, without running host git against
+  the sandbox's repository. sesh MUST record which commits it has pulled,
+  so `sesh reset` can list unpulled work.
 
 **Credentials**
 
@@ -284,7 +290,8 @@ credential from the Keychain, and the sandbox never sees the credential.
 - **FR-016**: For APIs whose auth the sandbox runtime can't inject,
   sesh MUST support a host-side shim (a local service that adds the
   credential and forwards only to its one upstream), exposed to the
-  sandbox as a single allowed local endpoint.
+  sandbox as a single allowed local endpoint. A shim is a stack service:
+  launchd starts and supervises it, never the `sesh` CLI.
 
 **Stack and harness**
 
@@ -306,9 +313,10 @@ credential from the Keychain, and the sandbox never sees the credential.
 
 **Verification and setup**
 
-- **FR-021**: `sesh verify` MUST run every invariant check from inside a
-  real sandbox and report pass/fail per check, exiting non-zero on any
-  failure.
+- **FR-021**: `sesh verify` MUST run every invariant check against a real
+  sandbox and the live stack (from inside the sandbox, or on the host,
+  as each check specifies) and report pass/fail per check, exiting
+  non-zero on any failure.
 - **FR-022**: Before opening a session, `sesh` MUST run fast checks (the
   applied policy matches the compiled policy; components meet minimum
   versions) and refuse to start if any fails.
@@ -323,18 +331,52 @@ credential from the Keychain, and the sandbox never sees the credential.
   run. `sesh reset` MUST discard it, listing unpulled work and asking for
   confirmation first.
 
+**Edge-case behavior**
+
+- **FR-026**: Only one harness MAY run in a repository's sandbox at a
+  time. A second `sesh` in the same repository MUST refuse to start
+  (exit 1), naming the running session. A lock left by a crashed `sesh`
+  MUST be detected as stale and cleared.
+- **FR-027**: sesh MUST handle these cases as stated:
+  - Not a git repository, or a repository with no commits: refuse with
+    a usage error (exit 2) that says what's missing.
+  - Submodules or Git LFS: not supported in this feature. sesh MUST warn
+    that submodules aren't initialized and LFS objects aren't fetched in
+    the workspace, and continue.
+  - Engine not installed, model missing, sandbox runtime logged out,
+    stopped or too old, or too little free memory for the model: refuse
+    before starting anything (exit 3) and name the fix.
+  - A stack port in use by a process that isn't the expected service:
+    refuse (exit 3), name the port and process, and never allow the
+    sandbox to reach it.
+  - The engine crashes, or the Mac sleeps, mid-session: launchd restarts
+    the engine; the session stays open and its workspace is unaffected.
+  - The running stack's configuration is older than the current config:
+    refuse to open a session (exit 1), name the stale services, and tell
+    the user to run `sesh stack up` to restart them.
+  - Sesh- or harness-like config inside the repository: ignored for
+    policy (FR-009); sesh says it was ignored.
+  - No network connection: the `offline` profile works fully; in the
+    `online` profile the session still opens, and only network calls
+    fail.
+  - The harness exits abnormally: the workspace is kept (FR-025), and
+    `sesh` exits non-zero.
+
 ### Key Entities
 
 - **Stack**: the host-side services (inference engine, search service,
   tool shims) shared by all sessions. Has a state (stopped, starting,
   healthy, degraded).
-- **Service**: one host-side process in the stack, with a loopback
-  endpoint and a health check.
+- **Service**: one host-side process in the stack (engine, search, or a
+  `sesh-shim`), supervised by launchd, with a loopback-only endpoint and
+  a health check.
 - **Sandbox**: an isolated environment for one repository, with a
   workspace, an applied policy, and a lifecycle. It persists across
   sessions until `sesh reset`.
-- **Session**: one run of the harness in a sandbox. Has an id, used to
-  name the branch its work returns on.
+- **Session**: a line of work in a sandbox, with a short id unique per
+  repository that names the branches its work returns on. A session
+  begins on the first `sesh` run in a new sandbox and continues across
+  later runs until `sesh --new` or `sesh reset` starts another.
 - **Policy**: the compiled set of allowed endpoints, method/path rules,
   and credential bindings for a sandbox.
 - **Credential binding**: a credential name, its source (Keychain item or
@@ -372,7 +414,8 @@ credential from the Keychain, and the sandbox never sees the credential.
   succeeds with the sandbox making zero direct connections to the
   internet.
 - **SC-007**: sesh runs no background process of its own; with no session
-  open, its only resident processes are the stack's services.
+  open, its only resident processes are the stack's launchd-managed
+  services (engine, search, `sesh-shim` instances).
 
 ## Assumptions
 

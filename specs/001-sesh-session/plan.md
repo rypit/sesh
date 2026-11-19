@@ -24,7 +24,8 @@ returns work as git bundles, and ships its security invariants as
 `rust-toolchain.toml`; target `aarch64-apple-darwin` (ADR 0002).
 **Primary Dependencies**: `clap` (CLI), `serde` + `toml` (config),
 `anyhow` (errors), `ureq` (loopback health checks). Shim dependencies
-(HTTP server, TLS client) are justified at T043. Everything else is an
+(HTTP server, TLS client) belong to the `sesh-shim` binary only and are
+justified at T043 (ADR 0003). Everything else is an
 external CLI behind a seam: `sbx`, `launchctl`, `splash`,
 `container` (or `docker`), `git`, `security` (Keychain).
 **Storage**: config in `~/.config/sesh/config.toml`; state in
@@ -36,11 +37,14 @@ by fakes through their traits, runs in CI) and `invariants` (behind the
 also shipped as `sesh verify`).
 **Target Platform**: macOS 26.4+ on Apple Silicon M3 or later. Reference
 machine: M5 Max, 128 GB.
-**Project Type**: single CLI project.
+**Project Type**: single Cargo package, two binaries: the `sesh` CLI
+and `sesh-shim` (credential shims, run only by launchd).
 **Performance Goals**: warm `sesh` to the harness prompt in under 10 s;
 cold start in under 90 s, excluding downloads (SC-001).
-**Constraints**: no sesh daemon; loopback-only host services; minimum
-sbx version pinned; no secret values in any file sesh writes.
+**Constraints**: no sesh daemon (every long-running process, shims
+included, is a launchd job, INV-P4); loopback-only host services
+(INV-N8); minimum sbx version pinned; no secret values in any file sesh
+writes.
 **Scale/Scope**: one user, one machine, a handful of concurrent sandboxes.
 
 ## Constitution Check
@@ -55,6 +59,7 @@ sbx version pinned; no secret values in any file sesh writes.
 | VI. Every guarantee is executable | `src/verify/` holds the invariants, written first (Phase 2 tasks), and run by `sesh verify`. |
 | VII. Compose, don't rebuild | Only glue code. One seam per external component. No proxy, sandbox or harness of our own. |
 | VIII. One command, sensible defaults | `sesh` does everything with a zero-config default. `sesh init` is idempotent. |
+| Additional constraints | No sesh daemon: shims are launchd-supervised `sesh-shim` processes (ADR 0003), checked by INV-P4. Rust per ADR 0002. |
 
 Result: **PASS**, no exceptions. The spec's three clarifications
 (FR-011, FR-019, FR-025) were resolved on 2026-11-19 as recommended
@@ -88,11 +93,13 @@ specs/001-sesh-session/
 ### Source Code (repository root)
 
 ```text
-Cargo.toml            # one package, one `sesh` binary; `invariants` feature
+Cargo.toml            # one package, binaries `sesh` and `sesh-shim`; `invariants` feature
 rust-toolchain.toml
 deny.toml             # cargo-deny: licences, advisories, duplicate crates
 src/
-├── main.rs           # thin: calls cli::run, maps errors to exit codes
+├── main.rs           # `sesh`: thin, calls cli::run, maps errors to exit codes
+├── bin/
+│   └── sesh-shim.rs  # `sesh-shim <name>`: runs one shim; started only by launchd
 ├── lib.rs            # #![forbid(unsafe_code)]; module tree
 ├── cli.rs            # clap: parsing, output, exit codes only
 ├── config.rs         # serde models for config.toml (deny_unknown_fields; no I/O beyond load)
@@ -113,7 +120,7 @@ src/
 ├── harness/
 │   └── pi/           # models.json template, sesh extensions (search tool)
 ├── tools.rs          # tool declarations -> policy rules + harness wiring (FR-020)
-├── shims/            # host-side credential shims (FR-016), one module per API
+├── shims/            # credential shims (FR-016), one module per API; used only by sesh-shim
 └── verify/
     ├── runner.rs     # runs probes inside a sandbox, reports per invariant
     └── probes/       # POSIX shell probes, embedded and copied into the sandbox
@@ -135,9 +142,13 @@ logic is unit-testable without sbx.
 
 **`sesh` in a repository**:
 
-1. `doctor.quick()`: minimum versions present; config valid.
-2. `stack.ensure_up()`: launchd-load Splash and SearXNG if not loaded;
-   wait for health.
+1. `doctor.quick()`: in a git repo with commits; minimum versions
+   present; config valid; take the repo's session lock (FR-026),
+   clearing it if its owner is gone.
+2. `stack.ensure_up()`: launchd-load Splash, SearXNG and configured
+   shims if not loaded; check each port belongs to its launchd job;
+   refuse if the running stack's config is stale (FR-027); wait for
+   health.
 3. `workspace.prepare(repo)`: create or refresh the isolated clone in
    `state/sessions/<repo-id>/`, carrying uncommitted changes (FR-011).
 4. `policy.compile(config, profile)` produces the expected rules;
@@ -150,9 +161,15 @@ logic is unit-testable without sbx.
 
 **`sesh pull`**:
 
-1. `sbx exec <sandbox> git bundle create /workspace/.sesh/out.bundle <refs>`.
+1. `sbx exec <sandbox> git bundle create /workspace/.sesh/out.bundle
+   <base>..<refs>`, where `<base>` is the host `HEAD` the session
+   started from, so the host already has every prerequisite commit.
 2. On the host: `git fetch <bundle> 'refs/heads/*:refs/heads/sesh/<session>/*'`
    in the user's checkout. Host git never runs inside the isolated clone.
+3. List commits with the `Sesh-Carried-Changes: yes` trailer separately
+   (FR-011), and record the fetched commit ids in
+   `state/sessions/<repo-id>/pulled` so `sesh reset` can list unpulled
+   work.
 
 ## Phases
 
