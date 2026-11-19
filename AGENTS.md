@@ -7,18 +7,22 @@ sesh is developed spec-first. Before changing anything:
 2. Find the feature under `specs/NNN-*/`. Work from its `tasks.md`, in
    order, test-first: write an invariant or unit test and see it fail
    before implementing.
-3. If a change touches a principle, a seam (`sandbox/sbx.py`,
-   `stack/launchd.py`, the container-runtime call) or the threat model,
+3. If a change touches a principle, a seam (`sandbox/sbx.rs`,
+   `stack/launchd.rs`, the container-runtime call) or the threat model,
    write an ADR in `docs/decisions/`.
 
 Hard rules:
 
 - Never write secret values to any file, log, test fixture or commit.
 - Never read repository content as sesh configuration (Principle V).
-- Only `src/sesh/sandbox/sbx.py` may invoke the `sbx` CLI.
-- Keep `src/sesh/sandbox/policy.py` pure (no I/O).
+- Only `src/sandbox/sbx.rs` may invoke the `sbx` CLI.
+- Keep `src/sandbox/policy.rs` pure (no `std::fs`, `std::process`,
+  `std::net`).
+- No `unsafe` code (`#![forbid(unsafe_code)]`).
 - The project name is always lowercase, **sesh**, even at the start of a
   sentence or in a title.
 
-Commands (once code exists): `make check` runs lint, typecheck and unit
-tests. Invariant tests (`pytest -m invariants`) need a real Mac with sbx.
+sesh is written in Rust (ADR 0002). Commands (once code exists):
+`make check` runs `cargo fmt --check`, `cargo clippy -- -D warnings`,
+`cargo test` and `cargo deny check`. Invariant tests
+(`cargo test --features invariants`) need a real Mac with sbx.

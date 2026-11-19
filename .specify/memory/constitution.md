@@ -109,8 +109,9 @@ warm start (stack up, sandbox exists) is fast.
 - **Pinned minimum versions** for security-relevant components (e.g. the
   sbx version that supports method/path rules). `sesh doctor` refuses to
   run below them.
-- **Implementation**: Python 3.12+, distributed as a `uv tool`. Minimal
-  dependencies; anything heavier needs justification in a plan.
+- **Implementation**: Rust (stable, edition 2024, toolchain pinned),
+  one `sesh` binary, `unsafe` code forbidden. Minimal dependencies;
+  anything heavier needs justification in a plan (ADR 0002).
 
 ## Development Workflow
 
@@ -123,7 +124,8 @@ warm start (stack up, sandbox exists) is fast.
   and seen failing, before the code that provides the guarantee.
 - Two test tiers:
   - **unit**: hermetic and fast, with external CLIs (sbx, launchctl,
-    container runtimes) mocked at their seam. Runs in CI.
+    container runtimes) replaced by fakes at their seam trait. Runs in
+    CI.
   - **invariants**: run against a real stack and sandbox on the
     reference Mac before merge. Hosted CI runners likely can't run
     nested VMs; verify this before relying on it.
@@ -142,4 +144,4 @@ updates any affected invariant checks and templates. Versioning:
 
 All reviews check compliance with this constitution.
 
-**Version**: 1.0.0 | **Ratified**: 2026-11-19 | **Last Amended**: 2026-11-19
+**Version**: 1.1.0 | **Ratified**: 2026-11-19 | **Last Amended**: 2026-11-19
