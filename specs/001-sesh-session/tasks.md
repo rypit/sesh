@@ -14,9 +14,11 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Run `specify init --here` on the Mac to add Spec Kit
-  templates, scripts and agent commands. Confirm it keeps
-  `.specify/memory/constitution.md`.
+- [x] T001 Run `specify init --here` to add Spec Kit templates, scripts
+  and agent commands. Confirm it keeps
+  `.specify/memory/constitution.md`. (Done with Spec Kit v1.4.2,
+  `--integration claude --script sh`. The constitution was kept. Add
+  pi later with Spec Kit's integration support if wanted.)
 - [ ] T002 [P] Python project skeleton: `pyproject.toml` (Python 3.12,
   Typer, Pydantic), `src/sesh/__init__.py`, the `sesh` entry point, a
   `uv tool install .` smoke test.

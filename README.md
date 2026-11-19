@@ -60,5 +60,5 @@ Homebrew.
 
 Spec-driven, using [GitHub Spec Kit](https://github.github.com/spec-kit/)'s
 layout: constitution → specify → clarify → plan → tasks → implement.
-After cloning, run `specify init --here` to add Spec Kit's templates and
-agent commands (see tasks.md T001).
+Spec Kit v1.4.2 is initialized for Claude Code: the `/speckit-*` skills
+live in `.claude/skills/`, and templates and scripts in `.specify/`.
