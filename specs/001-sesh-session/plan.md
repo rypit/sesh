@@ -5,7 +5,7 @@
 
 ## Summary
 
-`sesh` is a Python CLI that glues four existing components together:
+`sesh` is a Rust CLI that glues four existing components together:
 
 - **Splash**: the inference engine, under launchd.
 - **SearXNG**: web search, in a host container.
@@ -20,16 +20,20 @@ returns work as git bundles, and ships its security invariants as
 
 ## Technical Context
 
-**Language/Version**: Python 3.12+
-**Primary Dependencies**: Typer (CLI), Pydantic v2 (config). Everything
-else is an external CLI behind a seam: `sbx`, `launchctl`, `splash`,
+**Language/Version**: Rust, stable, edition 2024, pinned in
+`rust-toolchain.toml`; target `aarch64-apple-darwin` (ADR 0002).
+**Primary Dependencies**: `clap` (CLI), `serde` + `toml` (config),
+`anyhow` (errors), `ureq` (loopback health checks). Shim dependencies
+(HTTP server, TLS client) are justified at T043. Everything else is an
+external CLI behind a seam: `sbx`, `launchctl`, `splash`,
 `container` (or `docker`), `git`, `security` (Keychain).
 **Storage**: config in `~/.config/sesh/config.toml`; state in
 `~/.local/state/sesh/` (sessions, isolated clones, bundles, logs). No
 database. No secrets in either.
-**Testing**: pytest. Two tiers: `unit` (hermetic, seams mocked, runs in
-CI) and `invariants` (real sbx and stack on the reference Mac; also
-shipped as `sesh verify`).
+**Testing**: `cargo test`. Two tiers: `unit` (hermetic, seams replaced
+by fakes through their traits, runs in CI) and `invariants` (behind the
+`invariants` Cargo feature; real sbx and stack on the reference Mac;
+also shipped as `sesh verify`).
 **Target Platform**: macOS 26.4+ on Apple Silicon M3 or later. Reference
 machine: M5 Max, 128 GB.
 **Project Type**: single CLI project.
@@ -44,19 +48,19 @@ sbx version pinned; no secret values in any file sesh writes.
 | Principle | How this plan complies |
 |---|---|
 | I. Host is the only trusted zone | Harness, tools and model output run only inside the sandbox. The workspace is an untrusted isolated clone. |
-| II. Deny by default | sbx strictest baseline; `policy.py` compiles explicit per-sandbox rules from user config; `sesh policy show` prints them. |
+| II. Deny by default | sbx strictest baseline; `policy.rs` compiles explicit per-sandbox rules from user config; `sesh policy show` prints them. |
 | III. Secrets never enter the sandbox | sbx placeholders (built-in `github`, `set-custom` with `--command` reading the Keychain) and host shims. Never env, files or logs. Invariants INV-S1–S4. |
 | IV. Nothing agent-authored runs on host | Isolated clone; host `.git` never mounted; return via in-sandbox `git bundle` and host `git fetch <bundle>`; sesh never runs host git in the clone. Invariant INV-H1. |
 | V. Policy comes only from the user | Only `~/.config/sesh/config.toml` feeds the compiler; repo files are never read as config. Invariant INV-P2. |
-| VI. Every guarantee is executable | `src/sesh/verify/` holds the invariants, written first (Phase 2 tasks), and run by `sesh verify`. |
+| VI. Every guarantee is executable | `src/verify/` holds the invariants, written first (Phase 2 tasks), and run by `sesh verify`. |
 | VII. Compose, don't rebuild | Only glue code. One seam per external component. No proxy, sandbox or harness of our own. |
 | VIII. One command, sensible defaults | `sesh` does everything with a zero-config default. `sesh init` is idempotent. |
 
-Result: **PASS**, no exceptions. Three open clarifications in the spec
-(FR-011, FR-019, FR-025) have recommended defaults below and don't
-affect compliance.
+Result: **PASS**, no exceptions. The spec's three clarifications
+(FR-011, FR-019, FR-025) were resolved on 2026-11-19 as recommended
+below (see spec.md, Clarifications) and don't affect compliance.
 
-### Recommended answers to the spec's open clarifications
+### Resolved clarifications (accepted as recommended)
 
 | Item | Recommendation | Why |
 |---|---|---|
@@ -84,39 +88,47 @@ specs/001-sesh-session/
 ### Source Code (repository root)
 
 ```text
-src/sesh/
-├── cli.py              # Typer app: parsing, output, exit codes only
-├── config.py           # Pydantic models for config.toml (pure, no I/O beyond load)
-├── paths.py            # config/state locations
-├── doctor.py           # platform and version checks (FR-022, FR-023)
-├── init.py             # one-time setup orchestration (US5)
+Cargo.toml            # one package, one `sesh` binary; `invariants` feature
+rust-toolchain.toml
+deny.toml             # cargo-deny: licences, advisories, duplicate crates
+src/
+├── main.rs           # thin: calls cli::run, maps errors to exit codes
+├── lib.rs            # #![forbid(unsafe_code)]; module tree
+├── cli.rs            # clap: parsing, output, exit codes only
+├── config.rs         # serde models for config.toml (deny_unknown_fields; no I/O beyond load)
+├── paths.rs          # config/state locations
+├── doctor.rs         # platform and version checks (FR-022, FR-023)
+├── init.rs           # one-time setup orchestration (US5)
 ├── stack/
-│   ├── launchd.py      # seam: launchctl (plist render + bootstrap/bootout)
-│   ├── engine.py       # Splash (oMLX later) behind one interface
-│   ├── search.py       # SearXNG via container runtime seam
-│   └── health.py       # HTTP health checks
+│   ├── launchd.rs    # seam: launchctl (plist render + bootstrap/bootout)
+│   ├── engine.rs     # Splash (oMLX later) behind one trait
+│   ├── search.rs     # SearXNG via container-runtime seam
+│   └── health.rs     # HTTP health checks
 ├── sandbox/
-│   ├── sbx.py          # seam: the ONLY module that invokes the sbx CLI
-│   ├── policy.py       # pure: config -> compiled policy -> sbx commands
-│   ├── secrets.py      # credential bindings -> sbx secret commands (no values held)
-│   └── kit/            # sbx kit for pi (spec + files/)
-├── workspace.py        # isolated clone, carried changes, bundle return (FR-010–012)
+│   ├── sbx.rs        # seam: the ONLY module that invokes the sbx CLI
+│   ├── policy.rs     # pure: config -> compiled policy -> sbx commands
+│   ├── secrets.rs    # credential bindings -> sbx secret commands (no values held)
+│   └── kit/          # sbx kit for pi (spec + files/), embedded with include_str!
+├── workspace.rs      # isolated clone, carried changes, bundle return (FR-010–012)
 ├── harness/
-│   └── pi/             # models.json template, sesh extensions (search tool)
-├── tools.py            # tool declarations -> policy rules + harness wiring (FR-020)
-├── shims/              # host-side credential shims (FR-016), one file per API
+│   └── pi/           # models.json template, sesh extensions (search tool)
+├── tools.rs          # tool declarations -> policy rules + harness wiring (FR-020)
+├── shims/            # host-side credential shims (FR-016), one module per API
 └── verify/
-    ├── runner.py       # runs probes inside a sandbox, reports per invariant
-    └── probes/         # the probe scripts copied into the sandbox
+    ├── runner.rs     # runs probes inside a sandbox, reports per invariant
+    └── probes/       # POSIX shell probes, embedded and copied into the sandbox
 
 tests/
-├── unit/               # hermetic; seams mocked
-└── invariants/         # pytest wrappers around verify/ for the reference Mac
+├── fakes/            # fake seam implementations shared by tests
+└── invariants.rs     # #[cfg(feature = "invariants")]: runs verify/ on the reference Mac
+
+(Unit tests live next to the code in `#[cfg(test)]` modules.)
 ```
 
 **Structure decision**: one package with three seams that matter
-(`sandbox/sbx.py`, `stack/launchd.py`, and the container-runtime call in
-`stack/search.py`). `policy.py` is pure, so the most security-relevant
+(`sandbox/sbx.rs`, `stack/launchd.rs`, and the container-runtime call in
+`stack/search.rs`), each a trait with one real implementation over
+`std::process::Command`. `policy.rs` is pure, so the most security-relevant
 logic is unit-testable without sbx.
 
 ## Key flows

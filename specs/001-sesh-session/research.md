@@ -192,18 +192,30 @@ profile for sensitive repositories.
 allowlist of documentation hosts. A host-side "reader" tool can come
 later as a custom tool (FR-020).
 
-## R8. Implementation language → Python 3.12, `uv tool`
+## R8. Implementation language → Rust
 
-**Decision**: Python with a thin CLI (Typer), Pydantic for config, no
-other runtime dependencies to start.
+**Decision** (ADR 0002, replacing an earlier unconfirmed Python choice):
+Rust, stable, edition 2024, one `sesh` binary. Start with `clap`,
+`serde` + `toml`, `anyhow` and `ureq`; nothing else without a
+justification in the plan. `unsafe` is forbidden.
 
-**Why**: the user is fluent in it, and the patterns carry over from
-Sovereign (strict `extra="forbid"` config, single seams for external
-CLIs, hermetic tests). sesh is mostly orchestration of other CLIs, so
-Rust buys little here.
+**Why**:
+- Most code will be agent-written. The compiler rejects whole classes of
+  defects before anything runs: unhandled errors (`Result`), missing
+  cases (exhaustive `match` over profiles, rule kinds and stack states),
+  and null values.
+- FR-016's shim is a long-running host process that holds real
+  credentials. That was the earlier "revisit if" condition, and it
+  already holds.
+- A single binary simplifies installation (US5).
 
-**Revisit if**: sesh ever owns a proxy or another long-running,
-security-critical process.
+**Costs**: slower edit-compile-test cycles. Logic errors (policy too
+loose, wrong command arguments) still need tests, invariants and
+review.
+
+**Patterns carried from Sovereign**, translated: strict config
+(`#[serde(deny_unknown_fields)]`), one seam per external CLI (a trait
+with a real and a fake implementation), hermetic unit tests.
 
 ## R9. SDD tooling → Spec Kit layout
 
@@ -220,7 +232,7 @@ the existing constitution.
 ## R10. Lessons carried from Sovereign
 
 **Keep**:
-- strict Pydantic config,
+- strict config (now `serde` with `deny_unknown_fields`),
 - one seam per external CLI, so tests mock it there,
 - ADRs for contract changes,
 - launchd for host services.

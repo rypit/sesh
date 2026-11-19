@@ -19,12 +19,15 @@
   `.specify/memory/constitution.md`. (Done with Spec Kit v1.4.2,
   `--integration claude --script sh`. The constitution was kept. Add
   pi later with Spec Kit's integration support if wanted.)
-- [ ] T002 [P] Python project skeleton: `pyproject.toml` (Python 3.12,
-  Typer, Pydantic), `src/sesh/__init__.py`, the `sesh` entry point, a
-  `uv tool install .` smoke test.
-- [ ] T003 [P] Tooling: ruff, mypy (strict on `src/sesh`), pytest with
-  `unit` and `invariants` markers, `make check`, CI running unit tests
-  only.
+- [ ] T002 [P] Rust project skeleton (ADR 0002): `Cargo.toml` (edition
+  2024, `clap`, `serde`, `toml`, `anyhow`; `invariants` feature),
+  `rust-toolchain.toml`, `src/main.rs` + `src/lib.rs` with
+  `#![forbid(unsafe_code)]`, and a `cargo install --locked --path .`
+  smoke test.
+- [ ] T003 [P] Tooling: `cargo fmt`, `cargo clippy -- -D warnings`,
+  `cargo test`, `cargo deny check` (`deny.toml`), all behind
+  `make check`; CI on a macOS runner running everything except the
+  `invariants` feature.
 - [ ] T004 [P] `docs/decisions/` with ADR template; ADR 0001 records R1
   (sbx) and R6 (isolated workspace) as the founding decisions.
 
@@ -57,27 +60,29 @@ plan.md or the contracts where behavior differs.
 - [ ] T011 [P] Search: run SearXNG with Apple `container`, published on
   `127.0.0.1` only, JSON format enabled, under launchd; fall back to
   Docker/OrbStack if needed.
-- [ ] T012 Resolve the spec's three NEEDS CLARIFICATION items (FR-011,
+- [x] T012 Resolve the spec's three NEEDS CLARIFICATION items (FR-011,
   FR-019, FR-025) with the user, using plan.md's recommendations. Update
-  spec.md.
+  spec.md. (Done 2026-11-19; all three accepted as recommended.)
 
 ## Phase 3: Foundational (blocks all user stories)
 
-- [ ] T013 [P] Unit tests, then `src/sesh/config.py`: config.toml models
-  per contracts/config.md (all optional, `extra="forbid"`, no secret
-  values accepted).
-- [ ] T014 [P] Unit tests, then `src/sesh/sandbox/policy.py`: pure
+- [ ] T013 [P] Unit tests, then `src/config.rs`: config.toml models
+  per contracts/config.md (all optional, `#[serde(deny_unknown_fields)]`,
+  no secret values accepted).
+- [ ] T014 [P] Unit tests, then `src/sandbox/policy.rs`: pure
   compiler config → sorted rule list (both profiles; deny wins;
   deterministic).
-- [ ] T015 [P] Seam `src/sesh/sandbox/sbx.py`: the only module invoking
-  the sbx CLI (run, exec, policy apply/read-back, secret set/set-custom,
-  reset). Unit tests mock it here.
-- [ ] T016 [P] Seam `src/sesh/stack/launchd.py`: render plists,
+- [ ] T015 [P] Seam `src/sandbox/sbx.rs`: a trait plus the only
+  implementation invoking the sbx CLI (run, exec, policy
+  apply/read-back, secret set/set-custom, reset). Unit tests use a fake
+  implementation of the trait.
+- [ ] T016 [P] Seam `src/stack/launchd.rs` (trait + real impl): render plists,
   bootstrap/bootout, status.
-- [ ] T017 Invariant runner `src/sesh/verify/runner.py` + probe
-  packaging: copy probes into a sandbox, run them, collect
+- [ ] T017 Invariant runner `src/verify/runner.rs` + probe
+  packaging (POSIX shell probes embedded in the binary): copy probes
+  into a sandbox, run them, collect
   PASS/FAIL/KNOWN-RISK per contracts/invariants.md.
-- [ ] T018 [P] `src/sesh/doctor.py`: platform checks (chip, macOS,
+- [ ] T018 [P] `src/doctor.rs`: platform checks (chip, macOS,
   memory), minimum versions, config validity.
 
 ## Phase 4: US1, protected session (P1) 🎯 MVP
@@ -86,11 +91,11 @@ plan.md or the contracts where behavior differs.
 
 - [ ] T019 [US1] Write invariant probes listed above; run against a bare
   sandbox and record which fail.
-- [ ] T020 [P] [US1] `stack/engine.py` + `stack/health.py`: Splash under
+- [ ] T020 [P] [US1] `stack/engine.rs` + `stack/health.rs`: Splash under
   launchd, loopback only, health wait.
-- [ ] T021 [P] [US1] `stack/search.py`: SearXNG per T011.
-- [ ] T022 [US1] `workspace.py`: isolated clone in the state dir; carried
-  changes per the FR-011 decision.
+- [ ] T021 [P] [US1] `stack/search.rs`: SearXNG per T011.
+- [ ] T022 [US1] `workspace.rs`: isolated clone in the state dir; carried
+  changes per FR-011.
 - [ ] T023 [US1] `sandbox/kit/` + `harness/pi/`: the pi kit with
   `models.json` for the local engine.
 - [ ] T024 [US1] `sesh` command flow (plan.md "Key flows"): quick doctor
@@ -120,11 +125,11 @@ persists between sessions.
 - [ ] T030 [US3] Echo server + test credential fixtures for
   `sesh verify` (created and removed per run).
 - [ ] T031 [US3] Write the network and secrets probes listed above.
-- [ ] T032 [P] [US3] `sandbox/secrets.py`: builtin and header bindings
+- [ ] T032 [P] [US3] `sandbox/secrets.rs`: builtin and header bindings
   from config → sbx commands; Keychain/1Password/command sources; no
   values held in sesh's process longer than the sbx call.
 - [ ] T033 [P] [US3] pi search extension calling SearXNG JSON, declared
-  as a built-in tool via `tools.py`.
+  as a built-in tool via `tools.rs`.
 - [ ] T034 [US3] Online/offline profiles wired through the compiler and
   the `--profile` flag.
 - [ ] T035 [US3] Run the US3 invariants; S3 reports KNOWN-RISK (#707);
@@ -155,7 +160,8 @@ persists between sessions.
 
 - [ ] T042 [US6] Tool declarations in config → policy rules + harness
   wiring; repo-declared tools ignored, with a message.
-- [ ] T043 [US6] First shim in `shims/` (an API that needs query-param or
+- [ ] T043 [US6] First shim in `shims/`, justifying its HTTP server and
+  TLS client crates in plan.md (an API that needs query-param or
   Basic auth) as the reference custom tool.
 - [ ] T044 [US6] Run INV-P2 and the tool secret check.
 

@@ -11,7 +11,7 @@ acceptance walkthrough for US1–US5.
 ## Install and set up once
 
 ```bash
-uv tool install git+https://github.com/rypit/sesh   # later: brew install rypit/tap/sesh
+cargo install --locked --git https://github.com/rypit/sesh   # needs Rust; later: brew install rypit/tap/sesh
 sesh init
 ```
 

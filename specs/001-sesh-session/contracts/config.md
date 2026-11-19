@@ -66,7 +66,7 @@ paths   = ["/repos/**"]
 # harness     = { pi_extension = "~/.config/sesh/tools/weather.ts" }
 ```
 
-## Compilation rules (`sandbox/policy.py`)
+## Compilation rules (`sandbox/policy.rs`)
 
 1. Start from sbx's strictest baseline.
 2. Always allow `localhost:<engine.port>`.
