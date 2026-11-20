@@ -2,26 +2,29 @@
 
 > *sesh* (Egyptian: "scribe"). The scribe writes; it doesn't hold the keys.
 
-Run a coding agent on your own Mac, against your own local models, without
-trusting it.
+Run the coding agent you already use, as easily as running it
+directly, without trusting it.
 
 ```bash
 cd ~/code/some-repo
-sesh
+sesh claude          # or codex, opencode, pi, or your own recipe
 ```
 
 That one command:
 
-1. brings up the local AI stack (Splash for inference, SearXNG for
-   search) if it isn't running,
-2. opens the repo in a **Docker Sandboxes (`sbx`) microVM**: deny-by-default
+1. opens the repo in a **Docker Sandboxes (`sbx`) microVM**: deny-by-default
    network, no host files beyond an isolated copy of the repo, and its
    own Docker engine,
-3. launches the **pi** harness inside it, wired to your local model.
+2. brings in your own harness settings, skills and tools as a read-only
+   copy, with credentials removed,
+3. lets it reach only the endpoints you've allowed (your model provider
+   or local inference server, registries, APIs), attaching credentials
+   outside the sandbox.
 
-When you're done, `sesh pull` brings the agent's commits back to your
-checkout as a branch to review, as plain data. Nothing the agent wrote
-runs on your Mac unless you choose to run it.
+When the harness exits, the agent's commits are back in your checkout as
+branches to review, as plain data, with files that could run code
+flagged. Nothing the agent wrote runs on your Mac unless you choose to
+run it.
 
 ## Guarantees
 
@@ -45,7 +48,8 @@ The [constitution](.specify/memory/constitution.md) is binding. In short:
 | [spec.md](specs/001-sesh-session/spec.md) | User stories, requirements, success criteria |
 | [research.md](specs/001-sesh-session/research.md) | Decisions, alternatives, evidence |
 | [plan.md](specs/001-sesh-session/plan.md) | Architecture, constitution check, structure |
-| [contracts/](specs/001-sesh-session/contracts/) | CLI, config schema, invariant suite |
+| [data-model.md](specs/001-sesh-session/data-model.md) | Entities, fields, state |
+| [contracts/](specs/001-sesh-session/contracts/) | CLI, config schema, recipe format, invariant suite |
 | [quickstart.md](specs/001-sesh-session/quickstart.md) | The target user experience |
 | [tasks.md](specs/001-sesh-session/tasks.md) | Ordered, test-first work items |
 
@@ -53,8 +57,9 @@ Decisions: [`docs/decisions/`](docs/decisions/).
 
 ## Requirements (planned)
 
-macOS 26.4+ on Apple Silicon M3 or later, 48 GB+ memory recommended,
-Homebrew.
+macOS on Apple Silicon at the version Docker Sandboxes requires,
+Homebrew, and a terminal coding harness with an API key or a local
+inference server.
 
 ## Development
 

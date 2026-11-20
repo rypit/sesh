@@ -1,82 +1,105 @@
 # Contract: `~/.config/sesh/config.toml`
 
-The only source of policy (Principle V). Every key is optional: an
-absent file means "all defaults". Unknown keys are an error
-(`extra="forbid"`). The file never contains secret values, only
-references to where they live.
+With recipes (contracts/recipe.md), the only source of policy
+(Principle V). Every key is optional: an absent file means "defaults",
+which is enough for built-in recipes once their credentials are in the
+Keychain. Unknown keys are an error (`deny_unknown_fields`). The file
+never contains secret values, only references to where they live.
 
 ```toml
-# Defaults shown. Port numbers are placeholders until spike T006 settles
-# Splash's default port.
+default_recipe = "claude"                      # written by `sesh init`
 
-[engine]
-kind  = "splash"                                  # "splash" | "omlx" (later)
-model = "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M"
-port  = 8800                                       # loopback only
-# api_key = "keychain:sesh/splash"                # optional; injected by sbx
+# --- Endpoints (FR-016) -----------------------------------------------------
+# Package registries most projects need. `sesh init` writes these.
+[[endpoints]]
+name = "npm"
+host = "registry.npmjs.org"
 
-[search]
-enabled = true
-port    = 8888                                     # SearXNG, loopback only
+[[endpoints]]
+name = "pypi"
+host = "pypi.org"
 
-[session]
-profile = "online"                                 # "online" | "offline"
-harness = "pi"                                     # "pi" | "claude" (fallback)
+[[endpoints]]
+name = "pypi-files"
+host = "files.pythonhosted.org"
 
-# Package registries the sandbox may reach in the online profile.
-[registries]
-allow = ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org", "crates.io", "static.crates.io"]
+[[endpoints]]
+name = "crates"
+host = "index.crates.io"
 
-# Documentation hosts for the online profile (R7).
-[docs]
-allow = ["docs.python.org", "developer.mozilla.org", "raw.githubusercontent.com"]
+[[endpoints]]
+name = "github"
+host = "api.github.com"
+methods = ["GET", "POST", "PATCH"]
+credentials = ["github"]
 
-# --- Credentials -----------------------------------------------------------
+# A local inference server the user runs (Splash, Ollama, LM Studio,
+# Sovereign…). sesh only checks, starts (optionally) and allows it.
+[[endpoints]]
+name          = "local-llm"
+local_port    = 11434
+api           = "openai"
+health        = "/v1/models"
+process       = "ollama"                       # optional listener check
+start         = ["brew", "services", "start", "ollama"]   # must exit once started
+start_timeout = 60
+
+# --- Credentials (FR-019, FR-020) --------------------------------------------
 # source: "keychain:<service>" | "1password:<op://…>" | "command:<argv>"
 # mode:   "builtin" (an sbx service) | "header" (sbx set-custom) | "shim"
 
 [[credentials]]
 name   = "github"
-mode   = "builtin"                                 # sbx `secret set github`
-source = "keychain:sesh/github"                    # fine-grained PAT, no gist/admin scopes
+mode   = "builtin"                             # sbx `secret set github`
+source = "keychain:sesh/github"                # fine-grained PAT, no gist/admin scopes
 
-[[credentials]]
-name   = "brave"
-mode   = "header"
-hosts  = ["api.search.brave.com"]
-env    = "BRAVE_API_KEY"                           # holds a placeholder inside the sandbox
-source = "keychain:sesh/brave"
-
-# --- Extra API rules ---------------------------------------------------------
-[[allow]]
-host    = "api.github.com"
-methods = ["GET", "POST", "PATCH"]
-
+# --- Deny rules (deny wins) ----------------------------------------------------
 [[deny]]
 host    = "api.github.com"
 methods = ["DELETE"]
 paths   = ["/repos/**"]
 
-# --- Tools (FR-020) ----------------------------------------------------------
-# Built-in search is declared internally the same way.
-# [[tools]]
-# name        = "weather"
-# service     = { command = ["sesh-shim", "weather"], port = 8901 }  # launchd job, 127.0.0.1 only
-# credentials = ["weather"]                                         # used by the shim, never the sandbox
-# harness     = { pi_extension = "~/.config/sesh/tools/weather.ts" }
+# --- Recipe overrides ------------------------------------------------------------
+# Point Claude Code at the local server instead of Anthropic's API.
+# [recipe.claude]
+# model_endpoint = "local-llm"
+
+# --- Per-repository scope (FR-018, FR-021) ------------------------------------
+# `sesh allow <host>` adds to extra_endpoints of the current repository.
+# [repo."/Users/me/code/secret-project"]
+# only            = ["local-llm"]               # narrows: nothing else, not even registries
+# extra_endpoints = [{ name = "docs-rs", host = "docs.rs" }]
+
+# --- Return summary and snapshot ---------------------------------------------
+# risky_paths = ["deploy/**"]                   # added to the built-in list
+# [snapshot]
+# max_size      = "50MB"
+# extra_exclude = [".claude/local-notes/**"]
 ```
 
 ## Compilation rules (`sandbox/policy.rs`)
 
+Inputs: this config, the selected recipe (with its override), and the
+current repository's path, used only as a key into `repo.<path>`. No
+repository content is read (FR-013).
+
 1. Start from sbx's strictest baseline.
-2. Always allow `localhost:<engine.port>`.
-3. Online profile only:
-   - `localhost:<search.port>` if search is enabled,
-   - each registry and docs host,
-   - each credential's hosts,
-   - each `[[allow]]` rule,
-   - each tool's `localhost:<port>`.
-4. Add every `[[deny]]` rule. Deny wins.
-5. The offline profile is step 1 plus step 2 only.
-6. Output is a sorted, deterministic rule list, so `policy show` and the
-   applied-vs-expected check (FR-022) compare exactly.
+2. Collect endpoints: the recipe's endpoints, then global `endpoints`,
+   then the repository's `extra_endpoints`. A later endpoint with the
+   same name replaces an earlier one.
+3. If the repository has `only`, keep only those names.
+4. Turn each endpoint into allow rules: `host` (with methods/paths) or
+   `localhost:<local_port>`.
+5. Add every `deny` rule. Deny wins.
+6. Attach each endpoint's credential bindings; a binding whose `hosts`
+   don't cover its endpoint is a config error.
+7. Sort rules deterministically; the result's hash is recorded on the
+   sandbox and compared with sbx's read-back before every session
+   (FR-023).
+
+## `sesh allow` writes
+
+`sesh allow <host> [--global] [--method M]… [--path P]…` appends one
+endpoint named after the host (dots replaced by dashes) to
+`repo."<path>".extra_endpoints`, or to the global `endpoints` with
+`--global`, and prints the TOML it added. It never adds credentials.

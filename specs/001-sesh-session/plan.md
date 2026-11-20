@@ -1,77 +1,99 @@
-# Implementation Plan: One-command protected agent session
+# Implementation Plan: Sandboxed agent sessions for any terminal harness
 
-**Branch**: `001-sesh-session` | **Date**: 2026-11-19 | **Spec**: [spec.md](./spec.md)
+**Branch**: `001-sesh-session` | **Date**: 2026-11-20 | **Spec**: [spec.md](./spec.md)
+
 **Input**: Feature specification from `specs/001-sesh-session/spec.md`
+(rewritten 2026-11-19, ADR 0004)
 
 ## Summary
 
-`sesh` is a Rust CLI that glues four existing components together:
+`sesh <recipe>` runs the user's own terminal harness in an sbx microVM,
+as easily as running the harness directly. sesh:
 
-- **Splash**: the inference engine, under launchd.
-- **SearXNG**: web search, in a host container.
-- **sbx**: one microVM sandbox per repository, with deny-by-default
-  egress and host-side credential injection.
-- **pi**: the harness, inside the sandbox via a custom sbx kit.
+- reads a data-only **recipe** for the harness (install, launch, config
+  to import, credential files, endpoints, endpoint wiring);
+- copies the user's harness config in as a **snapshot**, with
+  credentials and secret-looking files removed, never synced back;
+- compiles a deny-by-default **policy** from user config and the recipe
+  only, attaching credentials through sbx injection or `sesh-shim`;
+- gives the sandbox an **isolated clone** of the repository and, when
+  the harness exits, **returns** the agent's commits as a git bundle
+  onto `sesh/<session>/<branch>`, flagging risky paths;
+- reports **refused hosts** and lets `sesh allow` grant them;
+- ships its guarantees as **`sesh verify`**.
 
-sesh compiles a per-sandbox policy from user config, gives the sandbox an
-isolated clone of the repository (never the host checkout's `.git`),
-returns work as git bundles, and ships its security invariants as
-`sesh verify`.
+sesh does not run inference or search; those are endpoints the user
+declares (research.md R8).
 
 ## Technical Context
 
 **Language/Version**: Rust, stable, edition 2024, pinned in
 `rust-toolchain.toml`; target `aarch64-apple-darwin` (ADR 0002).
-**Primary Dependencies**: `clap` (CLI), `serde` + `toml` (config),
-`anyhow` (errors), `ureq` (loopback health checks). Shim dependencies
-(HTTP server, TLS client) belong to the `sesh-shim` binary only and are
-justified at T043 (ADR 0003). Everything else is an
-external CLI behind a seam: `sbx`, `launchctl`, `splash`,
-`container` (or `docker`), `git`, `security` (Keychain).
-**Storage**: config in `~/.config/sesh/config.toml`; state in
-`~/.local/state/sesh/` (sessions, isolated clones, bundles, logs). No
-database. No secrets in either.
-**Testing**: `cargo test`. Two tiers: `unit` (hermetic, seams replaced
-by fakes through their traits, runs in CI) and `invariants` (behind the
-`invariants` Cargo feature; real sbx and stack on the reference Mac;
-also shipped as `sesh verify`).
-**Target Platform**: macOS 26.4+ on Apple Silicon M3 or later. Reference
-machine: M5 Max, 128 GB.
-**Project Type**: single Cargo package, two binaries: the `sesh` CLI
-and `sesh-shim` (credential shims, run only by launchd).
-**Performance Goals**: warm `sesh` to the harness prompt in under 10 s;
-cold start in under 90 s, excluding downloads (SC-001).
-**Constraints**: no sesh daemon (every long-running process, shims
-included, is a launchd job, INV-P4); loopback-only host services
-(INV-N8); minimum sbx version pinned; no secret values in any file sesh
-writes.
-**Scale/Scope**: one user, one machine, a handful of concurrent sandboxes.
+
+**Primary Dependencies**: `clap` (CLI), `serde` + `toml` (config and
+recipes), `anyhow` (errors), `ureq` (endpoint health checks), `regex`
+(snapshot credential scan, research.md R6), `globset` (recipe
+exclusions, risky-path list), `sha2` (repo ids, policy hash). Shim
+HTTP/TLS crates belong to `sesh-shim` only and are justified when the
+first shim lands (ADR 0003). External CLIs, each behind one seam:
+`sbx`, `git`, `launchctl`, `lsof`, `security` (Keychain).
+
+**Storage**: user config in `~/.config/sesh/config.toml` and user recipes
+in `~/.config/sesh/recipes/`; state in `~/.local/state/sesh/`
+(`sandboxes/<id>/` with state, lock, isolated clone, returned-commit
+record; `snapshots/<id>/` staging; `logs/`). No database. No secrets in
+any of it.
+
+**Testing**: `cargo test`. Two tiers: `unit` (hermetic; every seam has
+a fake through its trait; runs in CI on a macOS runner) and `invariants`
+(behind the `invariants` Cargo feature; real sbx on the reference Mac;
+also shipped as `sesh verify`). Recipe files are unit-tested by loading
+and validating every built-in recipe.
+
+**Target Platform**: macOS on Apple Silicon, at sbx's minimum version.
+
+**Project Type**: single Cargo package, two binaries: the `sesh` CLI and
+`sesh-shim` (credential shims, run only by launchd).
+
+**Performance Goals**: warm `sesh <recipe>` to the harness prompt in
+under 10 s; first session in a new repository under 90 s excluding
+downloads (SC-001); returned work available within 5 s of harness exit
+for a 10,000-file repository (SC-006).
+
+**Constraints**: no sesh daemon (only launchd-run `sesh-shim` processes
+remain, INV-P4); local endpoints loopback-only (INV-N8); minimum sbx
+version pinned (INV-P3); no secret values in any file sesh writes
+(INV-S5); policy from user config and recipes only (INV-P2).
+
+**Scale/Scope**: one user, one machine, a handful of sandboxes; four
+built-in recipes.
+
+**Open questions** (no NEEDS CLARIFICATION remain; these are spikes on
+the reference Mac, research.md): sbx baseline preset and policy-log
+format (R3), local-endpoint rule syntax (R3), subscription logins
+(R2), each recipe's paths and wiring (R4), snapshot copy mechanism and
+workspace exposure (R5, R7).
 
 ## Constitution Check
 
-| Principle | How this plan complies |
+*GATE: checked before Phase 0 and again after Phase 1 design. Both pass.*
+
+| Principle / constraint | How this plan complies |
 |---|---|
-| I. Host is the only trusted zone | Harness, tools and model output run only inside the sandbox. The workspace is an untrusted isolated clone. |
-| II. Deny by default | sbx strictest baseline; `policy.rs` compiles explicit per-sandbox rules from user config; `sesh policy show` prints them. |
-| III. Secrets never enter the sandbox | sbx placeholders (built-in `github`, `set-custom` with `--command` reading the Keychain) and host shims. Never env, files or logs. Invariants INV-S1–S4. |
-| IV. Nothing agent-authored runs on host | Isolated clone; host `.git` never mounted; return via in-sandbox `git bundle` and host `git fetch <bundle>`; sesh never runs host git in the clone. Invariant INV-H1. |
-| V. Policy comes only from the user | Only `~/.config/sesh/config.toml` feeds the compiler; repo files are never read as config. Invariant INV-P2. |
-| VI. Every guarantee is executable | `src/verify/` holds the invariants, written first (Phase 2 tasks), and run by `sesh verify`. |
-| VII. Compose, don't rebuild | Only glue code. One seam per external component. No proxy, sandbox or harness of our own. |
-| VIII. One command, sensible defaults | `sesh` does everything with a zero-config default. `sesh init` is idempotent. |
-| Additional constraints | No sesh daemon: shims are launchd-supervised `sesh-shim` processes (ADR 0003), checked by INV-P4. Rust per ADR 0002. |
+| I. Host is the only trusted zone | Harness, imported config, tools and model output run only inside the sandbox. The workspace is an untrusted isolated clone; the snapshot is a copy, not a mount of host originals. |
+| II. Deny by default | sbx strictest baseline; `policy.rs` compiles explicit per-sandbox rules from config and recipe; `sesh policy show` prints each rule with its source. Refused hosts are reported, never auto-allowed. |
+| III. Secrets never enter the sandbox | sbx placeholders or `sesh-shim`; recipe credential files excluded and the snapshot scanned (R5, R6); logins that can't be attached host-side are refused, not copied in (FR-020). INV-S1–S6. |
+| IV. Nothing agent-authored runs on host | Isolated clone, host `.git` never mounted, return as an in-sandbox bundle fetched on the host; config snapshot never synced back; risky paths flagged. INV-H1–H3. |
+| V. Policy comes only from the user | Inputs are user config plus built-in or user recipes; the repo path is only a key into `repo.<path>`. Repo-local recipes and config ignored and reported. INV-P2. |
+| VI. Every guarantee is executable | Each guarantee above maps to an invariant in contracts/invariants.md, written before its code (tasks.md). |
+| VII. Compose, don't rebuild | sbx for isolation, injection and egress; user's harness via recipes; user's endpoints. sesh writes only policy compilation, snapshot, return, reporting and verify. No inference, search or harness code. |
+| VIII. One command, sensible defaults | `sesh` / `sesh <recipe>` with config written by `sesh init`; built-in recipes need no edits (SC-002). Idempotent commands; warm start reuses the sandbox. |
+| No sesh daemon | `sesh` exits with the harness; start commands must return (R8); shims are launchd jobs (ADR 0003). INV-P4. |
+| No outbound telemetry | sesh sends none; built-in recipes leave harness telemetry hosts blocked (R4). |
+| Pinned minimum versions | sbx only (INV-P3); harness versions are the recipe's concern. |
+| Implementation | Rust, `unsafe` forbidden; new crates (`regex`, `globset`, `sha2`) justified in Technical Context and research.md. |
 
-Result: **PASS**, no exceptions. The spec's three clarifications
-(FR-011, FR-019, FR-025) were resolved on 2026-11-19 as recommended
-below (see spec.md, Clarifications) and don't affect compliance.
-
-### Resolved clarifications (accepted as recommended)
-
-| Item | Recommendation | Why |
-|---|---|---|
-| FR-011 dirty working tree | Start from `HEAD` plus the uncommitted diff and untracked (non-ignored) files, copied into the isolated clone as one "sesh: carried changes" commit. | Matches what the user sees; nothing is lost; the host tree stays untouched. |
-| FR-019 default profile | `online` | The stated workflow needs search and APIs. `offline` is one flag away for sensitive repos. |
-| FR-025 sandbox lifetime | Keep per repo; `sesh reset` discards it. | Warm start under 10 s and cached dependencies. The workspace is already isolated from the host. |
+Result: **PASS**, no exceptions.
 
 ## Project Structure
 
@@ -79,118 +101,130 @@ below (see spec.md, Clarifications) and don't affect compliance.
 
 ```text
 specs/001-sesh-session/
-├── spec.md          # what and why
-├── research.md      # decisions and evidence
+├── spec.md          # what and why (rewritten, ADR 0004)
+├── research.md      # decisions, spikes, prior art
 ├── plan.md          # this file
+├── data-model.md    # entities, fields, state
 ├── contracts/
 │   ├── cli.md       # command surface, exit codes
-│   ├── config.md    # config.toml schema
-│   └── invariants.md # the verify suite, one row per guarantee
-├── quickstart.md    # target user experience, end to end
-└── tasks.md         # ordered, test-first work items
+│   ├── config.md    # config.toml schema, compilation rules
+│   ├── recipe.md    # recipe format, built-in examples
+│   └── invariants.md # the verify suite
+├── quickstart.md    # validation walkthroughs for US1–US6
+├── checklists/requirements.md
+└── tasks.md         # regenerated by /speckit-tasks
 ```
 
 ### Source Code (repository root)
 
 ```text
-Cargo.toml            # one package, binaries `sesh` and `sesh-shim`; `invariants` feature
+Cargo.toml            # one package; bins `sesh`, `sesh-shim`; `invariants` feature
 rust-toolchain.toml
-deny.toml             # cargo-deny: licences, advisories, duplicate crates
+deny.toml             # cargo-deny: licences, advisories, duplicates
+recipes/              # built-in recipes (claude, codex, opencode, pi), embedded with include_str!
 src/
 ├── main.rs           # `sesh`: thin, calls cli::run, maps errors to exit codes
 ├── bin/
-│   └── sesh-shim.rs  # `sesh-shim <name>`: runs one shim; started only by launchd
+│   └── sesh-shim.rs  # `sesh-shim <name>`: one shim; started only by launchd
 ├── lib.rs            # #![forbid(unsafe_code)]; module tree
-├── cli.rs            # clap: parsing, output, exit codes only
-├── config.rs         # serde models for config.toml (deny_unknown_fields; no I/O beyond load)
+├── cli.rs            # clap: parsing, recipe-vs-subcommand resolution, output, exit codes
+├── config.rs         # serde models for config.toml (deny_unknown_fields; load only)
 ├── paths.rs          # config/state locations
-├── doctor.rs         # platform and version checks (FR-022, FR-023)
-├── init.rs           # one-time setup orchestration (US5)
-├── stack/
-│   ├── launchd.rs    # seam: launchctl (plist render + bootstrap/bootout)
-│   ├── engine.rs     # Splash (oMLX later) behind one trait
-│   ├── search.rs     # SearXNG via container-runtime seam
-│   └── health.rs     # HTTP health checks
+├── recipe.rs         # recipe models, loading (built-in + user), override merge, validation
+├── endpoint.rs       # endpoint checks: reachability, loopback, start command, health
+├── snapshot.rs       # stage the config snapshot: exclusions, symlink rule, size cap
+├── scan.rs           # pure: credential rule set over file contents
+├── workspace.rs      # isolated clone, carried-changes commit, session base
+├── retrieve.rs       # bundle return, returned-commit record, risky paths, summary
+├── report.rs         # refused-host report from the policy log
+├── doctor.rs         # platform, versions, config, endpoints, probe
+├── init.rs           # one-time setup
+├── lock.rs           # per-sandbox lock with stale detection (FR-026)
 ├── sandbox/
 │   ├── sbx.rs        # seam: the ONLY module that invokes the sbx CLI
-│   ├── policy.rs     # pure: config -> compiled policy -> sbx commands
-│   ├── secrets.rs    # credential bindings -> sbx secret commands (no values held)
-│   └── kit/          # sbx kit for pi (spec + files/), embedded with include_str!
-├── workspace.rs      # isolated clone, carried changes, bundle return (FR-010–012)
-├── harness/
-│   └── pi/           # models.json template, sesh extensions (search tool)
-├── tools.rs          # tool declarations -> policy rules + harness wiring (FR-020)
-├── shims/            # credential shims (FR-016), one module per API; used only by sesh-shim
+│   ├── policy.rs     # pure: config + recipe -> compiled policy -> sbx commands
+│   └── secrets.rs    # credential bindings -> sbx secret commands / shim jobs
+├── host/
+│   ├── git.rs        # seam: host git (fetch bundle, status, commit for carried changes)
+│   ├── launchd.rs    # seam: launchctl for shim jobs
+│   ├── ports.rs      # seam: lsof listener checks
+│   └── keychain.rs   # seam: `security` for credential sources and init
+├── shims/            # credential shims (FR-020), one module per API; used only by sesh-shim
 └── verify/
-    ├── runner.rs     # runs probes inside a sandbox, reports per invariant
+    ├── runner.rs     # runs probes in a sandbox and on the host, reports per invariant
     └── probes/       # POSIX shell probes, embedded and copied into the sandbox
 
 tests/
 ├── fakes/            # fake seam implementations shared by tests
+├── fixtures/home/    # fake harness config homes for snapshot and scan tests
 └── invariants.rs     # #[cfg(feature = "invariants")]: runs verify/ on the reference Mac
-
-(Unit tests live next to the code in `#[cfg(test)]` modules.)
 ```
 
-**Structure decision**: one package with three seams that matter
-(`sandbox/sbx.rs`, `stack/launchd.rs`, and the container-runtime call in
-`stack/search.rs`), each a trait with one real implementation over
-`std::process::Command`. `policy.rs` is pure, so the most security-relevant
-logic is unit-testable without sbx.
+(Unit tests live next to the code in `#[cfg(test)]` modules.)
+
+**Structure decision**: one package, five seams (`sandbox/sbx.rs`,
+`host/git.rs`, `host/launchd.rs`, `host/ports.rs`, `host/keychain.rs`),
+each a trait with one real implementation over `std::process::Command`
+and a fake for tests. `policy.rs` and `scan.rs` are pure, so the most
+security-relevant logic is unit-testable without sbx. Harness knowledge
+is only in `recipes/` (FR-002).
 
 ## Key flows
 
-**`sesh` in a repository**:
+**`sesh [<recipe>] [args…]` in a repository**:
 
-1. `doctor.quick()`: in a git repo with commits; minimum versions
-   present; config valid; take the repo's session lock (FR-026),
-   clearing it if its owner is gone.
-2. `stack.ensure_up()`: launchd-load Splash, SearXNG and configured
-   shims if not loaded; check each port belongs to its launchd job;
-   refuse if the running stack's config is stale (FR-027); wait for
-   health.
-3. `workspace.prepare(repo)`: create or refresh the isolated clone in
-   `state/sessions/<repo-id>/`, carrying uncommitted changes (FR-011).
-4. `policy.compile(config, profile)` produces the expected rules;
-   `sbx.apply(sandbox, rules)`; then `sbx` reads the applied rules back
-   and sesh compares them with the expected set (FR-022).
-5. `secrets.apply(bindings)`: `sbx secret set github` /
-   `set-custom --host … --env … --command "security find-generic-password …"`.
-6. `sbx run` the pi kit on the isolated workspace, attached to the
-   terminal.
+1. Resolve the recipe (built-in, user, override) and validate it.
+2. `doctor::quick()`: git repo with commits; sbx present, logged in, at
+   the minimum version; config valid.
+3. `lock::acquire(sandbox)`: refuse (exit 1) if held by a live process;
+   clear a stale lock.
+4. `endpoint::ensure(required)`: reachable, else run `start` and wait;
+   local ones loopback-only and held by the expected process (exit 3
+   otherwise).
+5. `workspace::prepare()`: create or refresh the isolated clone; record
+   the base; carried-changes commit with trailer; warn on submodules
+   and LFS.
+6. `policy::compile(config, recipe, repo_key)`; `sbx` applies it; read
+   back and compare with the compiled hash (exit 4 on mismatch).
+7. `secrets::apply(bindings)`: sbx secrets; ensure shim jobs are loaded.
+8. `snapshot::stage(recipe)` then copy into the sandbox home; write the
+   recipe's `files`; report exclusions.
+9. `sbx` runs the recipe command attached to the terminal, with `env`
+   and the user's args.
+10. On exit, whatever the exit code: `retrieve::run()` (bundle,
+    fetch, record, summary), `report::refused()`, release the lock, exit
+    with the mapped code.
 
-**`sesh pull`**:
+**`sesh pull`**: steps 1–3 and 10 without running the harness.
 
-1. `sbx exec <sandbox> git bundle create /workspace/.sesh/out.bundle
-   <base>..<refs>`, where `<base>` is the host `HEAD` the session
-   started from, so the host already has every prerequisite commit.
-2. On the host: `git fetch <bundle> 'refs/heads/*:refs/heads/sesh/<session>/*'`
-   in the user's checkout. Host git never runs inside the isolated clone.
-3. List commits with the `Sesh-Carried-Changes: yes` trailer separately
-   (FR-011), and record the fetched commit ids in
-   `state/sessions/<repo-id>/pulled` so `sesh reset` can list unpulled
-   work.
+**`sesh allow <host>`**: load config, append one endpoint to the repo
+scope or global list, write the file, print the added TOML. No sandbox
+changes until the next session (step 6).
 
 ## Phases
 
-- **Phase 0, research and spikes**: research.md is done; spikes T005–T011
-  confirm the behaviors it flags. Each spike ends with a short note in
-  research.md and, where behavior differs, a change to this plan.
-- **Phase 1, design**: contracts/ and quickstart.md (drafted with this
-  plan), revised after the spikes.
-- **Phase 2, tasks**: tasks.md, ordered test-first: invariants before
-  the code that satisfies them.
+- **Phase 0, research**: research.md updated for the rewrite; spikes
+  (tasks.md Phase 2) confirm the sbx behaviors it flags and each
+  built-in recipe.
+- **Phase 1, design**: data-model.md, contracts/ (cli, config, recipe,
+  invariants) and quickstart.md, revised after the spikes.
+- **Phase 2, tasks**: tasks.md regenerated by `/speckit-tasks`, ordered
+  test-first: invariants before the code that satisfies them.
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| sbx custom secrets change format (experimental) | Pin the sbx version; the secret invariants catch regressions on upgrade. |
-| #707 any-header substitution | Echo-server invariant; don't bind secrets to echoing hosts; path deny rules. |
-| The sbx kit format churns (v2/v3) | Keep the kit tiny; the harness seam allows falling back to sbx's Claude Code kit. |
-| Splash's narrow model set | Engine seam with an oMLX implementation planned. |
-| Hosted CI can't run sbx (nested virtualization) | Invariants run on the reference Mac before merge; CI runs unit tests only. |
-| The user opens the isolated clone in an editor | Documented in the quickstart; the state dir lives under `~/.local/state`, not next to their code. |
+| Subscription logins can't be attached host-side | Spike first; API keys are the supported path; sesh refuses rather than copying tokens in (FR-020). |
+| A harness moves its config or credential files | Recipes are data, validated in CI; INV-S6 runs against each installed recipe's import rules; credential scan as backstop. |
+| A credential in an unknown format slips past the scan | Recipe `credential_files` is the primary control; the scan is a backstop; snapshot exclusions are user-extendable. |
+| Harnesses misbehave when telemetry/update hosts are blocked | Refused-host report plus `sesh allow`; recipes may declare hosts genuinely needed to work. |
+| sbx custom secrets change format (experimental) | Pin sbx; secret invariants catch regressions. |
+| #707 any-header substitution | Echo-server invariant (KNOWN-RISK); don't bind secrets to echoing hosts; path deny rules. |
+| The sbx kit format churns | Recipes may use an OCI image instead of a kit. |
+| Policy log lacks non-HTTP denials | Report says so; INV-N4 still proves they're blocked. |
+| Hosted CI can't run sbx | Invariants run on the reference Mac before merge; CI runs unit tests only. |
+| The user opens the isolated clone in an editor | Documented; the state dir lives under `~/.local/state`. |
 
 ## Complexity Tracking
 

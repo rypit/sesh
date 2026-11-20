@@ -8,7 +8,9 @@ sesh is developed spec-first. Before changing anything:
    order, test-first: write an invariant or unit test and see it fail
    before implementing.
 3. If a change touches a principle, a seam (`sandbox/sbx.rs`,
-   `stack/launchd.rs`, the container-runtime call) or the threat model,
+   `host/git.rs`, `host/launchd.rs`, `host/ports.rs`,
+   `host/keychain.rs`), a built-in recipe's credential handling, or the
+   threat model,
    write an ADR in `docs/decisions/`.
 
 Hard rules:
@@ -16,8 +18,10 @@ Hard rules:
 - Never write secret values to any file, log, test fixture or commit.
 - Never read repository content as sesh configuration (Principle V).
 - Only `src/sandbox/sbx.rs` may invoke the `sbx` CLI.
-- Keep `src/sandbox/policy.rs` pure (no `std::fs`, `std::process`,
-  `std::net`).
+- Keep `src/sandbox/policy.rs` and `src/scan.rs` pure (no `std::fs`,
+  `std::process`, `std::net`).
+- Harness-specific knowledge lives only in `recipes/` (data), never in
+  Rust code.
 - No `unsafe` code (`#![forbid(unsafe_code)]`).
 - The project name is always lowercase, **sesh**, even at the start of a
   sentence or in a title.

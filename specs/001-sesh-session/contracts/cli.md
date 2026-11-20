@@ -5,29 +5,40 @@ Exit codes for every command:
 | Code | Meaning |
 |---|---|
 | 0 | success |
-| 1 | general error |
-| 2 | usage error |
-| 3 | platform or prerequisite not met (doctor failure) |
+| 1 | general error (including: a harness already running in this sandbox; the harness exited abnormally) |
+| 2 | usage error (including: not a git repository, no commits) |
+| 3 | platform or prerequisite not met (sbx missing, logged out or too old; required endpoint unreachable; local endpoint not loopback-only or held by another process) |
 | 4 | security check failed (policy mismatch, invariant failure); sesh refused to proceed |
+
+When the harness itself exits non-zero, `sesh` exits 1 after returning
+work, and prints the harness's exit code.
 
 ## Commands
 
 | Command | Behavior | Spec refs |
 |---|---|---|
-| `sesh [--profile online\|offline] [--new]` | In a git repo: ensure the stack is up, prepare the isolated workspace, apply policy and secrets, open pi in the repo's sandbox. Continues the current session unless `--new` starts a fresh session id on the existing sandbox. Refuses (exit 1) if a harness is already running in this repo's sandbox. | FR-001–FR-011, FR-022, FR-026, FR-027, US1 |
-| `sesh pull [--session ID]` | Bundle the agent's commits inside the sandbox and fetch them into the host checkout as `sesh/<session>/<branch>`. Lists the carried-changes commit separately from the agent's commits, records what was pulled, and reports uncommitted work in the sandbox, offering to commit it there first. | FR-011, FR-012, US2 |
-| `sesh verify [--only ID…]` | Run the invariant suite inside a sandbox; print a PASS/FAIL table with expected vs observed for failures. | FR-021, US4 |
-| `sesh policy show [--profile …]` | Print the active profile and the compiled policy for the current repo's sandbox: endpoints, method/path rules, credential bindings (names and hosts only). | FR-019, FR-024 |
-| `sesh init` | One-time setup: check the platform, install components, download the default model, authenticate sbx, build the pi kit, write the default config if missing. Idempotent. | FR-023, US5 |
-| `sesh doctor` | Check the platform, component versions, config validity and stack health; print each check. No changes. | FR-022 |
-| `sesh stack up\|down\|status` | Manage host services (engine, search, each `sesh-shim`), all as launchd jobs. `up` restarts services whose config is stale. `down` stops them all. | FR-002, FR-027 |
-| `sesh ls` | List repositories with sandboxes, their sessions, and state. | — |
-| `sesh reset [--yes]` | Discard the current repo's sandbox and isolated clone after confirmation. Unpulled work is listed first. | FR-025 |
-| `sesh logs [engine\|search\|SHIM]` | Tail a host service's log. | — |
+| `sesh [--new] [<recipe>] [-- ] [args…]` | In a git repo: pre-launch checks, take the sandbox lock, create or reuse the (recipe, repo) sandbox, build and copy the config snapshot, apply policy and credentials, run the recipe's command attached to the terminal with `args` appended. On exit: return work (as `sesh pull`), print the return summary and the refused-host list. Without `<recipe>`, uses `default_recipe`. `--new` starts a new session id. Arguments after the recipe name, or after `--`, go to the harness unchanged. | FR-001–FR-012, FR-015, FR-021, FR-023, FR-026, FR-027, US1, US2 |
+| `sesh pull [--recipe R] [--session ID]` | Return work now: bundle commits since the session base inside the sandbox, fetch into `sesh/<session>/<branch>`, list the carried-changes commit separately, highlight risky paths, report uncommitted sandbox work and offer to commit it there first. | FR-011, FR-015, US2 |
+| `sesh allow <host> [--global] [--method M]… [--path P]…` | Add an endpoint for `<host>` to user config (repo-scoped by default) and print what was added. | FR-021, US3 |
+| `sesh verify [--recipe R] [--only ID…] [--json]` | Run the invariant suite against a real sandbox; PASS/FAIL/KNOWN-RISK table, expected vs observed for failures. | FR-022, US4 |
+| `sesh policy show [--recipe R] [--json]` | Print the compiled policy for this repo's sandbox: endpoints with their source, method/path rules, deny rules, credential bindings (names and hosts only). | FR-025 |
+| `sesh recipes [show <name>]` | List recipes with their source (built-in / user / override), or print one merged recipe. | FR-003, US5 |
+| `sesh init` | One-time setup: check the platform, install and authenticate sbx, choose a default recipe and model endpoint, store credentials in the Keychain, write a default config if missing. Idempotent. | FR-024, US6 |
+| `sesh doctor [--probe]` | Platform, sbx version and login, config and recipe validity, endpoints (reachable, loopback-only), shim jobs. `--probe` also sends one test request with a tool definition to the default recipe's model endpoint. No changes. | FR-023, FR-027 |
+| `sesh ls [--json]` | Sandboxes with recipe, repository, session, state, and unreturned commit count. | — |
+| `sesh reset [--recipe R] [--yes]` | Discard this repo's sandbox and isolated clone after listing unreturned work and confirming. | FR-025 |
+| `sesh logs <shim>` | Tail a shim's log. | — |
+
+`<recipe>` is resolved after subcommands, so a recipe can't be named
+like a subcommand (contracts/recipe.md).
 
 ## Output rules
 
-- Human-readable by default. `--json` on `status`, `ls`, `policy show`
-  and `verify`.
-- Secret values are never printed, including in `--verbose` and in error
-  messages. Placeholders may be shown.
+- Human-readable by default; `--json` where listed.
+- Secret values are never printed, including in `--verbose` and in
+  error messages. Placeholders and credential names may be shown.
+- The refused-host list shows hosts and counts only, with a ready-to-run
+  `sesh allow` line for each.
+- The return summary shows: branches and commit counts, the
+  carried-changes commit, risky paths touched, uncommitted work left in
+  the sandbox.

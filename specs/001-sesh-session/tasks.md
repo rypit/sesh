@@ -1,5 +1,9 @@
 # Tasks: One-command protected agent session
 
+> **STALE**: these tasks predate the 2026-11-19 spec rewrite (ADR 0004)
+> and the 2026-11-20 plan. Regenerate with `/speckit-tasks` before
+> implementing; only T001, T004 and T012 (done) still stand as written.
+
 **Input**: [plan.md](./plan.md), [spec.md](./spec.md),
 [research.md](./research.md), [contracts/](./contracts/)
 

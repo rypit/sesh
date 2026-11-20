@@ -1,72 +1,130 @@
-# Quickstart (target experience)
+# Quickstart and validation guide
 
-This is how sesh should feel when feature 001 is done. It's the
-acceptance walkthrough for US1–US5.
+How feature 001 should feel when done, written as runnable acceptance
+walkthroughs for US1–US6. Command details are in
+[contracts/cli.md](./contracts/cli.md), config in
+[contracts/config.md](./contracts/config.md), recipes in
+[contracts/recipe.md](./contracts/recipe.md), and the checks behind
+`sesh verify` in [contracts/invariants.md](./contracts/invariants.md).
 
-## Requirements
+## Prerequisites
 
-- Apple Silicon M3 or later, macOS 26.4+, 48 GB+ memory recommended.
+- A Mac on Apple Silicon at the macOS version sbx requires.
 - Homebrew.
+- At least one harness you already use (Claude Code, Codex CLI,
+  opencode or pi), with an API key for its model provider, or a local
+  inference server.
 
-## Install and set up once
+## 1. Install and set up once (US6, SC-008)
 
 ```bash
-cargo install --locked --git https://github.com/rypit/sesh   # needs Rust; later: brew install rypit/tap/sesh
+cargo install --locked --git https://github.com/rypit/sesh   # later: brew install rypit/tap/sesh
 sesh init
 ```
 
-`sesh init` checks your Mac, then installs and sets up the components:
+`sesh init` checks the Mac, installs and logs in to sbx, asks for a
+default recipe and model endpoint, stores the key in the Keychain
+(`security add-generic-password` under `sesh/<name>`), and writes
+`~/.config/sesh/config.toml`.
 
-- Splash, plus the default model (this is the long download),
-- the SearXNG image,
-- sbx, including login,
-- the pi kit.
+**Expect**: `sesh doctor` passes. Running `sesh init` again changes
+nothing. On an unsupported Mac, `sesh init` stops before changing
+anything and names the unmet requirement (exit 3).
 
-It writes a default `~/.config/sesh/config.toml` if you don't have one.
-Running it again changes nothing.
-
-Optional, for GitHub access. Use a fine-grained token limited to the
-repos you work on, with no gist or admin permissions:
+## 2. Run your harness, sandboxed (US1, SC-001, SC-002)
 
 ```bash
-security add-generic-password -s sesh/github -a "$USER" -w   # paste the token at the prompt
+cd ~/code/some-repo
+sesh claude            # or: sesh codex / sesh opencode / sesh pi / sesh
 ```
 
-## Daily use
+**Expect**:
+- The harness opens with your own settings, skills and tool config, and
+  answers through your model endpoint. No edits to your harness config.
+- Ask it to `cat ~/.ssh/id_ed25519` or read your real `~/.claude`: the
+  read fails.
+- Ask it to add a hook to its settings, then exit. Your real harness
+  config on the Mac is unchanged, and the hook is gone next session.
+- Run `sesh claude` again: it opens in under 10 s, with the previous
+  work and installed dependencies still there.
+- `sesh claude --resume` passes `--resume` to the harness unchanged.
 
-```bash
-git clone https://github.com/you/project && cd project
-sesh                  # stack up -> sandbox -> pi, talking to your local model
+## 3. Get the work back (US2, SC-005, SC-006)
+
+Have the agent commit some code, plus a change to `.envrc` and
+`Makefile`, then exit the harness.
+
+**Expect**: within 5 s, a summary like
+
+```text
+Returned 3 commits to sesh/20261120-1/main
+  carried changes: 1 commit (your uncommitted edits at start)
+  risky paths: .envrc, Makefile   (can run code on your Mac; review first)
+Refused hosts this session:
+  statsig.anthropic.com (12)    sesh allow statsig.anthropic.com
 ```
 
-Work with the agent. It edits, builds and tests inside the sandbox. It
-can search the web and install packages. If you set up the GitHub token,
-it can push branches, but it never sees the token.
-
 ```bash
-sesh pull             # agent's commits arrive as branch sesh/<session>/*
-git log sesh/<session>/main
-git diff main sesh/<session>/main
-git merge sesh/<session>/main     # when you're happy
+git log sesh/20261120-1/main
+git diff main sesh/20261120-1/main
+git merge sesh/20261120-1/main      # when you're happy
 ```
 
-## Checking and housekeeping
+Your current branch and working tree are untouched, and no planted hook
+or `.envrc` ran (`sesh verify --only INV-H1` checks this).
+
+## 4. Grant access when something was blocked (US3, SC-007)
 
 ```bash
-sesh verify           # every security invariant, PASS/FAIL
-sesh policy show      # what this repo's sandbox can reach
-sesh --profile offline   # local model only, no internet at all
-sesh ls               # sandboxes and sessions
-sesh reset            # discard this repo's sandbox (lists unpulled work first)
-sesh stack down       # stop the engine and search
+sesh allow docs.rs              # this repo only
+sesh allow docs.rs --global     # every repo
+sesh policy show                # every endpoint, with where it came from
+```
+
+**Expect**: the next session reaches `docs.rs`. `sesh policy show` lists
+it with source `repo:<path>` or `global`, and shows credential bindings
+by name and host only.
+
+For a sensitive repository, restrict it to a local model in your
+config (`repo."<path>".only = ["local-llm"]`) and point the recipe at
+it (`recipe.claude.model_endpoint = "local-llm"`).
+
+## 5. Verify (US4, SC-003, SC-004)
+
+```bash
+sesh verify
+```
+
+**Expect**: every invariant PASS (INV-S3 KNOWN-RISK while
+docker/sbx-releases#707 is open), exit 0. Allow `example.com` globally
+and rerun: INV-N1 FAILs with expected vs observed, exit 4.
+
+## 6. Bring another harness (US5)
+
+Write `~/.config/sesh/recipes/<name>.toml` following
+[contracts/recipe.md](./contracts/recipe.md), then:
+
+```bash
+sesh recipes show <name>
+sesh <name>
+```
+
+**Expect**: it runs as in step 2. A recipe placed inside the repository
+(`.sesh/recipes/`) is ignored, and sesh says so.
+
+## Housekeeping
+
+```bash
+sesh ls                  # sandboxes, sessions, unreturned commits
+sesh reset               # discard this repo's sandbox (lists unreturned work first)
+sesh doctor --probe      # also test the model endpoint with one tool call
 ```
 
 ## Things to know
 
 - Don't open sesh's isolated workspace (`~/.local/state/sesh/…`) in your
-  editor or run its scripts on your Mac. Bring work back with
-  `sesh pull` and review it in your own checkout.
-- Run the project's tests in the sandbox, not on your Mac, until you've
-  reviewed the agent's changes.
-- Web searches leave your machine through SearXNG's upstream engines. Use
-  `--profile offline` for sensitive code.
+  editor or run its scripts on your Mac; review returned branches in
+  your own checkout.
+- Review files flagged as risky before running anything from them.
+- Your code goes to the endpoints you allowed. Choose them per
+  repository when it matters.
