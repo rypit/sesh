@@ -33,7 +33,9 @@ declares (research.md R8).
 **Primary Dependencies**: `clap` (CLI), `serde` + `toml` (config and
 recipes), `anyhow` (errors), `ureq` (endpoint health checks), `regex`
 (snapshot credential scan, research.md R6), `globset` (recipe
-exclusions, risky-path list), `sha2` (repo ids, policy hash). Shim
+exclusions, risky-path list), `sha2` (repo ids, policy hash),
+`toml_edit` (`sesh allow` and `sesh init` edit the user's config without
+losing comments). Shim
 HTTP/TLS crates belong to `sesh-shim` only and are justified when the
 first shim lands (ADR 0003). External CLIs, each behind one seam:
 `sbx`, `git`, `lsof`, and on macOS `launchctl` and `security`
@@ -138,7 +140,10 @@ src/
 ├── snapshot.rs       # stage the config snapshot: exclusions, symlink rule, size cap
 ├── scan.rs           # pure: credential rule set over file contents
 ├── workspace.rs      # isolated clone, carried-changes commit, session base
-├── retrieve.rs       # bundle return, returned-commit record, risky paths, summary
+├── session.rs        # orchestrates the `sesh [<recipe>]` flow (Key flows steps 1–10)
+├── retrieve.rs       # bundle return, returned-commit record, summary
+├── risky.rs          # risky-path matcher (built-in list + config)
+├── allow.rs          # `sesh allow`: edit user config, print the change
 ├── report.rs         # refused-host report from the policy log
 ├── doctor.rs         # platform, versions, config, endpoints, probe
 ├── init.rs           # one-time setup

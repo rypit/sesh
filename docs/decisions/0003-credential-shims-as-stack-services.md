@@ -23,7 +23,7 @@ The documents disagreed on what a shim is: plan.md built shims into the
   Cargo package (`src/bin/sesh-shim.rs`). One shim per process:
   `sesh-shim <name>`, one launchd job per configured shim.
 - The HTTP server and TLS client crates a shim needs are dependencies of
-  `sesh-shim` only, and are justified in plan.md when T043 adds them.
+  `sesh-shim` only, and are justified in plan.md when the first shim lands (T041 in feature 001).
 - Each shim binds to `127.0.0.1` only, reads its credential from the
   Keychain per request, and forwards only to its one upstream on its
   allowed routes (research.md R2).

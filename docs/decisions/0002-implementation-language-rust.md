@@ -32,7 +32,7 @@ binaries, `sesh` and `sesh-shim`.)
 - Crates start minimal: `clap` (CLI), `serde` + `toml` (config, with
   `deny_unknown_fields` on every config type), `anyhow` (errors), and a
   small blocking HTTP client (`ureq`) for health checks. Anything
-  heavier, such as an HTTP server and TLS stack for the shims (T043),
+  heavier, such as an HTTP server and TLS stack for the shims (feature 001 T041),
   is justified in the plan when it is added.
 - `#![forbid(unsafe_code)]` crate-wide.
 - Each external CLI seam (`sbx`, `launchctl`, the container runtime) is
