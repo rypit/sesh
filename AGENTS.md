@@ -8,8 +8,8 @@ sesh is developed spec-first. Before changing anything:
    order, test-first: write an invariant or unit test and see it fail
    before implementing.
 3. If a change touches a principle, a seam (`sandbox/sbx.rs`,
-   `host/git.rs`, `host/launchd.rs`, `host/ports.rs`,
-   `host/keychain.rs`), a built-in recipe's credential handling, or the
+   `host/git.rs`, `host/service_manager.rs`, `host/ports.rs`,
+   `host/secret_store.rs`), a built-in recipe's credential handling, or the
    threat model,
    write an ADR in `docs/decisions/`.
 

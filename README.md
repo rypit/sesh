@@ -57,7 +57,7 @@ Decisions: [`docs/decisions/`](docs/decisions/).
 
 ## Requirements (planned)
 
-macOS on Apple Silicon at the version Docker Sandboxes requires,
+macOS 14+ on Apple Silicon (Linux planned),
 Homebrew, and a terminal coding harness with an API key or a local
 inference server.
 

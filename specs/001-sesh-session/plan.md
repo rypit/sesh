@@ -36,7 +36,8 @@ recipes), `anyhow` (errors), `ureq` (endpoint health checks), `regex`
 exclusions, risky-path list), `sha2` (repo ids, policy hash). Shim
 HTTP/TLS crates belong to `sesh-shim` only and are justified when the
 first shim lands (ADR 0003). External CLIs, each behind one seam:
-`sbx`, `git`, `launchctl`, `lsof`, `security` (Keychain).
+`sbx`, `git`, `lsof`, and on macOS `launchctl` and `security`
+(Keychain), the last two behind OS-neutral seams (ADR 0005).
 
 **Storage**: user config in `~/.config/sesh/config.toml` and user recipes
 in `~/.config/sesh/recipes/`; state in `~/.local/state/sesh/`
@@ -50,7 +51,9 @@ a fake through its trait; runs in CI on a macOS runner) and `invariants`
 also shipped as `sesh verify`). Recipe files are unit-tested by loading
 and validating every built-in recipe.
 
-**Target Platform**: macOS on Apple Silicon, at sbx's minimum version.
+**Target Platform**: macOS 14+ on Apple Silicon (sbx's minimum).
+Linux later: only `host/secret_store.rs` and `host/service_manager.rs`
+need second implementations (ADR 0005).
 
 **Project Type**: single Cargo package, two binaries: the `sesh` CLI and
 `sesh-shim` (credential shims, run only by launchd).
@@ -146,9 +149,9 @@ src/
 │   └── secrets.rs    # credential bindings -> sbx secret commands / shim jobs
 ├── host/
 │   ├── git.rs        # seam: host git (fetch bundle, status, commit for carried changes)
-│   ├── launchd.rs    # seam: launchctl for shim jobs
+│   ├── service_manager.rs # seam: shim jobs (macOS impl: launchctl)
 │   ├── ports.rs      # seam: lsof listener checks
-│   └── keychain.rs   # seam: `security` for credential sources and init
+│   └── secret_store.rs # seam: credential sources (macOS impl: `security`)
 ├── shims/            # credential shims (FR-020), one module per API; used only by sesh-shim
 └── verify/
     ├── runner.rs     # runs probes in a sandbox and on the host, reports per invariant
@@ -163,7 +166,8 @@ tests/
 (Unit tests live next to the code in `#[cfg(test)]` modules.)
 
 **Structure decision**: one package, five seams (`sandbox/sbx.rs`,
-`host/git.rs`, `host/launchd.rs`, `host/ports.rs`, `host/keychain.rs`),
+`host/git.rs`, `host/service_manager.rs`, `host/ports.rs`,
+`host/secret_store.rs`),
 each a trait with one real implementation over `std::process::Command`
 and a fake for tests. `policy.rs` and `scan.rs` are pure, so the most
 security-relevant logic is unit-testable without sbx. Harness knowledge
@@ -181,9 +185,10 @@ is only in `recipes/` (FR-002).
 4. `endpoint::ensure(required)`: reachable, else run `start` and wait;
    local ones loopback-only and held by the expected process (exit 3
    otherwise).
-5. `workspace::prepare()`: create or refresh the isolated clone; record
-   the base; carried-changes commit with trailer; warn on submodules
-   and LFS.
+5. `workspace::prepare()`: create or refresh the isolated clone (never
+   sbx `--clone`, ADR 0005), with remote URLs stripped of embedded
+   credentials and no credential-helper config; record the base;
+   carried-changes commit with trailer; warn on submodules and LFS.
 6. `policy::compile(config, recipe, repo_key)`; `sbx` applies it; read
    back and compare with the compiled hash (exit 4 on mismatch).
 7. `secrets::apply(bindings)`: sbx secrets; ensure shim jobs are loaded.

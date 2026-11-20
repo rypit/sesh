@@ -45,7 +45,8 @@ and printing every change.
 |---|---|---|
 | `name` | string | Unique. |
 | `mode` | `builtin` \| `header` \| `shim` | `builtin` = an sbx secret service; `header` = `sbx secret set-custom`; `shim` = a `sesh-shim` job. |
-| `source` | `keychain:<service>` \| `1password:<ref>` \| `command:<argv>` | Never a literal value. |
+| `service` | sbx service name | `builtin` mode only: one of sbx's built-in services (anthropic, openai, github, …); sbx stores the secret and its login flow. |
+| `source` | `keychain:<service>` \| `1password:<ref>` \| `command:<argv>` | `header` and `shim` modes. Never a literal value. `keychain:` is the macOS secret store; Linux adds its own scheme later (ADR 0005). |
 | `hosts` | list | Required for `header` and `shim`. |
 | `env` | variable name | `header` mode: the variable that holds the placeholder in the sandbox. |
 | `shim` | shim name | `shim` mode: which `sesh-shim` module serves it. |

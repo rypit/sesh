@@ -38,7 +38,8 @@ No real credential may appear in a sandbox's environment, filesystem,
 process arguments, or sesh's own logs. Credentials are attached on the
 host side: by the sandbox runtime's credential proxy (placeholder
 substitution bound to specific hosts) or by a host-side shim service.
-The source of truth is the macOS Keychain or a secrets manager, never a
+The source of truth is the OS credential store (the Keychain on macOS)
+or a secrets manager, never a
 plaintext file in the repo or in sesh's state directory.
 
 *Rationale*: a secret the agent can read is a secret it can leak.
@@ -106,13 +107,16 @@ idempotent, and a warm start (sandbox exists) is fast.
 
 ## Additional Constraints
 
-- **Platform**: macOS on Apple Silicon only, at the minimum versions the
-  sandbox runtime requires. No Linux or Windows support is planned.
+- **Platform**: macOS on Apple Silicon first, at the minimum versions the
+  sandbox runtime requires. Linux is planned: OS-specific code (credential
+  store, service manager) sits behind seams so it can be added without
+  redesign (ADR 0005). Windows is not planned.
 - **No sesh daemon**: sesh is a CLI. Long-running processes are the
-  sandbox runtime and credential shims, managed through launchd or the
-  component's own lifecycle, never by a sesh-owned background process.
-  Credential shims are separate `sesh-shim` processes that launchd
-  starts and keeps alive, one per shim, visible in `sesh doctor`. The
+  sandbox runtime and credential shims, managed through the platform's
+  service manager (launchd on macOS) or the component's own lifecycle,
+  never by a sesh-owned background process. Credential shims are
+  separate `sesh-shim` processes that the service manager starts and
+  keeps alive, one per shim, visible in `sesh doctor`. The
   `sesh` CLI itself never stays resident after a command ends.
 - **No outbound telemetry** from sesh itself.
 - **Pinned minimum versions** for security-relevant components (e.g. the

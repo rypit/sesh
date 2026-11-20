@@ -362,11 +362,13 @@ The required behavior for each case is in FR-026 and FR-027.
   environment, filesystem, process arguments, or in sesh's logs and
   state files. Each credential MUST be bound to an explicit set of
   destination hosts and attached only to requests to those hosts. It
-  MUST be read from the macOS Keychain or a secrets manager when needed.
+  MUST be read from the OS credential store (the macOS Keychain) or a
+  secrets manager when needed.
 - **FR-020**: For credentials the sandbox runtime can't inject, sesh
   MUST support a host-side shim (a local service that adds the
   credential and forwards only to its one upstream), exposed to the
-  sandbox as a single local endpoint and supervised by launchd, never by
+  sandbox as a single local endpoint and supervised by the OS service
+  manager (launchd on macOS), never by
   the `sesh` CLI. A harness login that can be attached neither way is
   unsupported, and sesh MUST say so rather than place the credential in
   the sandbox.
@@ -486,8 +488,10 @@ The required behavior for each case is in FR-026 and FR-027.
 ## Assumptions
 
 - Reference machine: MacBook Pro, Apple Silicon, recent macOS. Platform
-  requirements are those of the sandbox runtime, not of any inference
-  engine.
+  requirements are those of the sandbox runtime (macOS 14+ on Apple
+  Silicon), not of any inference engine. The sandbox runtime also runs on
+  Linux and Windows, so macOS-only parts of sesh are confined to its
+  credential-store and service-manager seams (ADR 0005).
 - Single user, single machine.
 - Sandbox runtime: Docker Sandboxes (`sbx`), chosen for its microVM per
   sandbox, deny-by-default egress proxy, host-side credential injection
@@ -515,4 +519,6 @@ The required behavior for each case is in FR-026 and FR-027.
 - Starting, routing or benchmarking inference engines; dashboards.
 - Approval prompts before risky requests (planned later; needs an
   upstream proxy).
-- Remote access, multiple users, Linux or Windows hosts.
+- Remote access, multiple users.
+- Linux hosts (planned for a later feature; this feature keeps OS-specific
+  code behind seams) and Windows hosts (not planned).

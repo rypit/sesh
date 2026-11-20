@@ -70,8 +70,8 @@ SearXNG) and launch one harness (pi). Working through it showed that:
 - research.md, plan.md, tasks.md, quickstart.md and contracts/ are
   regenerated for the new spec.
 - Seams change: the container-runtime seam and `stack/launchd.rs` go;
-  the seams are `sandbox/sbx.rs`, `host/git.rs`, `host/launchd.rs`
-  (shim jobs), `host/ports.rs` (`lsof`) and `host/keychain.rs`
-  (`security`).
+  the seams are `sandbox/sbx.rs`, `host/git.rs`,
+  `host/service_manager.rs` (shim jobs), `host/ports.rs` (`lsof`) and
+  `host/secret_store.rs` (renamed from launchd/keychain by ADR 0005).
 - Future workspace kinds (volume) and attach modes (detached), e.g. for
   always-on agents, fit the recipe format without being built now.

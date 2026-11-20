@@ -49,9 +49,11 @@ start_timeout = 60
 # mode:   "builtin" (an sbx service) | "header" (sbx set-custom) | "shim"
 
 [[credentials]]
-name   = "github"
-mode   = "builtin"                             # sbx `secret set github`
-source = "keychain:sesh/github"                # fine-grained PAT, no gist/admin scopes
+name    = "github"
+mode    = "builtin"                            # stored by sbx: `sbx secret set github`
+service = "github"                             # fine-grained PAT, no gist/admin scopes
+# `sesh init` runs `sbx secret set <service>`; sbx keeps the value in the
+# OS keychain. header/shim credentials instead name a `source`.
 
 # --- Deny rules (deny wins) ----------------------------------------------------
 [[deny]]

@@ -4,12 +4,14 @@ Decisions behind `plan.md`. Items marked **Spike** need hands-on
 confirmation on the reference Mac before the code that depends on them
 is written (see tasks.md, Phase 2).
 
-Evidence for R1–R3 and R7 was gathered on 2026-11-19 from docs, READMEs
-and issue trackers. The spec was rewritten on 2026-11-20 (ADR 0004); the
-Docker Sandboxes docs were not reachable from the environment where this
-revision was written, so new sbx questions are recorded as spikes rather
-than answered from memory. Nothing below has yet been run on the
-reference Mac.
+Evidence for R1–R3 and R7 was first gathered on 2026-11-19 from docs,
+READMEs and issue trackers. On 2026-11-20 the Docker Sandboxes docs were
+re-read from their source, the public
+[docker/docs](https://github.com/docker/docs) repository
+(`content/manuals/ai/sandboxes/` and `content/manuals/ai/governance/`),
+against sbx 0.54.0 (released 2026-11-16); findings from that reading are
+marked *(docs 0.54)*. Nothing below has yet been run on the reference
+Mac.
 
 ---
 
@@ -31,6 +33,10 @@ pair (FR-005).
   deny wins), added around v0.50.
 - sbx ships agent kits for several harnesses, which recipes reuse
   (R4).
+- *(docs 0.54)* Platforms: macOS 14+ on Apple Silicon (installed with
+  `brew install docker/tap/sbx`), Windows 11 x64 with Windows
+  Hypervisor Platform, and Ubuntu 24.04+ (x86-64 or arm64) with KVM.
+  sesh's platform scope is a sesh choice, not an sbx limit (ADR 0005).
 
 **Alternatives considered**:
 - *Hardened Docker container + host mitmproxy*: shares one VM with every
@@ -73,14 +79,25 @@ pair (FR-005).
 job, bound to `127.0.0.1`, reading its secret from the Keychain per
 request, forwarding only to its one upstream on allowed routes.
 
-**Subscription logins** (Claude Pro/Max, ChatGPT sign-in): these are
-OAuth access and refresh tokens, not static API keys. The harness
-refreshes them itself and writes them back to its own credential store.
-Whether sbx can hold the refresh token host-side and inject a current
-access token is unknown. **Spike** (T008): try each built-in recipe's
-subscription login with sbx's credential features. If it can't be done
-without the token entering the sandbox, sesh reports the login as
-unsupported and asks for an API key (FR-020).
+**Built-in secret services** *(docs 0.54)*: `sbx secret set <service>`
+for anthropic, cursor, droid, github, google, groq, mistral, nebius,
+openai, openrouter and xai; the proxy injects the key on requests to
+that provider's API domains. sbx stores them in the OS keychain (a
+permission-protected file on headless Linux). Built-in recipes use these
+services (`mode = "builtin"`) rather than `set-custom` wherever one
+exists. `set-custom` is still marked experimental; its form is
+`sbx secret set-custom --host H --env VAR (--value-stdin | --command … |
+--ref …) [--sandbox S]`, and it substitutes in HTTP headers only.
+
+**Subscription logins** *(docs 0.54)*: "OAuth runs on the host and the
+token never enters the sandbox." Claude Code's `/login` inside the
+sandbox works for Max, Team and Enterprise plans (Pro is not mentioned);
+Codex uses `sbx secret set openai --oauth`, with the prompt shown on the
+host. This removes the main risk to US1's "already logged in" scenario
+for the `claude` and `codex` recipes. **Spike** (T008) narrows to:
+confirm both flows, check Claude Pro, and find whether opencode and pi
+can use these logins or need API keys. A login that can't be attached
+this way is still refused, not copied in (FR-020).
 
 **Token hygiene**: fine-grained GitHub PAT limited to the repos being
 worked on, no gist or admin scopes; branch protection on `main`.
@@ -88,17 +105,26 @@ worked on, no gist or admin scopes; branch protection on `main`.
 ## R3. Network policy shape and refused-host reporting
 
 - Local endpoints are allowed as `localhost:<port>` and reached from
-  inside the sandbox as `host.docker.internal:<port>`. A rule written for
+  inside the sandbox as `host.docker.internal:<port>` *(docs 0.54:
+  `sbx policy allow network localhost:11434`, then
+  `curl http://host.docker.internal:11434`)*. A rule written for
   `host.docker.internal:<port>` reportedly shows "Allowed" in
-  `sbx policy check` but still returns 403. **Spike** (T007).
-- Rules are scoped per sandbox with `--sandbox <name>`.
+  `sbx policy check` but still returns 403; **Spike** (T007) confirms
+  only that other host ports and LAN addresses stay refused.
+- Rules are scoped per sandbox with `--sandbox <name>`, or at creation
+  with `sbx create --deny-network …` *(docs 0.54)*. HTTP rule form:
+  `sbx policy allow network <host> --method GET,POST --path '/repos/**'
+  [--query k=v]`; methods comma-separated or `ANY`, paths start with
+  `/`.
 - Baseline: start from sbx's strictest preset; add only what the
   compiled policy needs. Preset names: **Spike** (T005).
 - HTTP rules match hostnames only; IP or CIDR destinations need plain
   network rules.
 
 **Refused hosts (FR-021)**: `sbx policy log` records proxy decisions
-(see R1 constraints). sesh reads it for the sandbox after the harness
+(see R1 constraints); the docs read so far mention only the dashboard's
+"connection logs", and the CLI reference is probably in
+`governance/local/inspect.md`, not yet read. sesh reads it for the sandbox after the harness
 exits and groups denials by host, keeping only hosts and counts (never
 paths, headers or bodies, which can carry data). Its output format and
 whether it can be filtered by sandbox and time: **Spike** (T005).
@@ -106,6 +132,15 @@ Non-HTTP denials (raw TCP/UDP, DNS) may not appear there; if not, the
 report says so and lists only HTTP(S) hosts.
 
 ## R4. Recipes → TOML data, sbx kits for installation
+
+**sbx agent kits** *(docs 0.54)*: `sbx run <agent>` for `claude`,
+`codex`, `opencode`, `copilot`, `cursor`, `kiro`, `droid`, `devin`,
+`docker-agent` and `shell` (`gemini` retired in 0.53). Arguments after
+`--` go to the agent (`sbx run claude -- --model sonnet`); if the first
+starts with `-`, the kit's defaults are kept and the arguments added.
+Three of the four built-in recipes (`claude`, `codex`, `opencode`) can
+use a kit directly. **pi has no kit**: its recipe uses a custom kit or
+an OCI image built on the `shell` agent.
 
 **Decision**: a recipe is a TOML file (contracts/recipe.md). Built-in
 recipes are embedded in the binary; user recipes live in
@@ -173,10 +208,13 @@ Rules applied while staging:
   isn't copied every session.
 - Regular files keep their mode bits except setuid/setgid.
 
-How files get into the sandbox (`sbx cp`, a read-only mount of the
-staging dir, or the kit's own mechanism) and how long it takes for a
-typical `~/.claude/`: **Spike** (T010). A read-only mount is acceptable
-only if sbx guarantees the sandbox can't write through it.
+**Copy mechanism** *(docs 0.54)*: `sbx cp <src> <sandbox>:<abs-path>`
+copies host files into a sandbox, and `sbx run` accepts extra mounts
+with a `:ro` suffix. Decision: copy with `sbx cp` after each session
+start (a copy can't be written back by construction). A read-only mount
+of the staging dir is the fallback if copying is too slow, acceptable
+only if the invariants show the sandbox can't write through it.
+**Spike** (T010): time `sbx cp` for a typical `~/.claude/`.
 
 ## R6. Credential scanning → small built-in rule set
 
@@ -242,10 +280,26 @@ against files changed in returned commits:
 
 The list is data in sesh, extendable in user config.
 
-**Spike** (T010): how `sbx run` exposes the isolated clone (bind mount
-vs sync, read-only options); confirm the host checkout stays
-unreachable; time bundle export and import on a 10,000-file repository
-against SC-006.
+**Workspace exposure** *(docs 0.54)*: by default `sbx run` mounts the
+current directory **read-write** at the same absolute path; another
+directory can be given (`sbx run claude ~/my-project`). `--clone` gives
+the agent its own Git clone inside the sandbox and mounts the host repo
+**read-only** at `/run/sandbox/source`.
+
+**Decision: sesh keeps its own isolated clone and does not use
+`--clone`** (ADR 0005). `sesh` passes the isolated clone's directory
+as the workspace, so the host checkout is never mounted at all. Why:
+`--clone` still exposes the whole host checkout to the agent, read-only:
+ignored files such as `.env` with real secrets (Principle III), and
+`.git/config`, which can hold tokens in remote URLs or credential-helper
+settings. sesh's clone contains only tracked files plus untracked,
+non-ignored ones (FR-011), and its remotes are rewritten to drop
+embedded credentials. How `--clone` returns work isn't documented;
+sesh's bundle return (FR-015) doesn't depend on it.
+
+**Spike** (T010): confirm the host checkout is unreachable when the
+isolated clone is the workspace, and time bundle export and import on a
+10,000-file repository against SC-006.
 
 ## R8. Endpoints → declared, checked, optionally started
 

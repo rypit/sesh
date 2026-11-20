@@ -45,12 +45,13 @@ name        = "anthropic"
 host        = "api.anthropic.com"
 credentials = ["anthropic"]
 
+# sbx's built-in `anthropic` service: an API key stored with
+# `sbx secret set anthropic`, or a Max/Team/Enterprise login done with
+# `/login` inside the sandbox (OAuth runs on the host; research.md R2).
 [[credentials]]
-name   = "anthropic"
-mode   = "header"
-hosts  = ["api.anthropic.com"]
-env    = "ANTHROPIC_API_KEY"
-source = "keychain:sesh/anthropic"
+name    = "anthropic"
+mode    = "builtin"
+service = "anthropic"
 
 # How the harness learns where its model endpoint is.
 [env]
@@ -67,7 +68,8 @@ attach         = "terminal"
 model_endpoint = "anthropic"
 
 [install]
-image = "ghcr.io/…/sesh-pi:<version>"   # or a custom kit; spike T009
+# sbx has no pi kit: a custom kit or image built on the `shell` agent.
+image = "ghcr.io/…/sesh-pi:<version>"   # spike T009
 
 [launch]
 command = ["pi"]
