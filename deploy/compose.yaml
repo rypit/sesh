@@ -4,7 +4,8 @@
 #   --env-file $SESH_DATA_DIR/secrets.env   values used for interpolation only
 #   SESH_DATA_DIR, SESH_WEBUI_PORT, SESH_ROUTER_PORT, SESH_INFERENCE_API_KEY
 # Each container receives only the variables listed for it.
-# Only open-webui and litellm publish ports, both on loopback.
+# Only open-webui, litellm and the gateway publish ports, all on loopback.
+# Executors (one per agent) come from the generated overlay `compose/generated.yaml`.
 # Images are pinned by tag and multi-arch index digest; upgrade deliberately.
 
 name: sesh
@@ -109,7 +110,56 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  gateway:
+    image: ${SESH_GATEWAY_IMAGE:-sesh-gateway:dev}
+    environment:
+      SESH_GATEWAY_CONFIG: /etc/sesh/gateway.toml
+      SESH_AGENTS_FILE: /etc/sesh/agents.toml
+      SESH_AUDIT_DATABASE_URL: postgresql://sesh_gateway:${GATEWAY_DB_PASSWORD:?run sesh init}@postgres:5432/gateway
+      SESH_GATEWAY_TEST_CONNECTORS: ${SESH_GATEWAY_TEST_CONNECTORS:-0}
+    volumes:
+      - ${SESH_DATA_DIR:?}/gateway:/etc/sesh:ro
+    ports:
+      - "127.0.0.1:${SESH_GATEWAY_PORT:-7000}:7000"
+    networks: [default, search]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/7000'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      postgres:
+        condition: service_healthy
+      searxng:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Web search. Reachable only from the gateway (the `search` network is
+  # internal); its own `searxng-egress` network lets it reach search engines.
+  searxng:
+    image: searxng/searxng:2026.11.23-a7163d091@sha256:a7fc607aa6723f5a8982105bcc5ffba4d1b9fc7c6922a31a88d6e4cba49ef12a
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?run sesh init}
+    volumes:
+      - ${SESH_DATA_DIR:?}/compose/searxng-settings.yml:/etc/searxng/settings.yml:ro
+    networks: [search, searxng-egress]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:
   open-webui-data:
+
+networks:
+  default: {}
+  search:
+    internal: true
+  searxng-egress: {}

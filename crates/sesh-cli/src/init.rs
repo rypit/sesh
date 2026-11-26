@@ -19,6 +19,8 @@ pub struct InitOptions {
     pub model: Option<String>,
     pub stub: bool,
     pub admin_email: Option<String>,
+    /// The household's home location for the gateway's `geo` connector.
+    pub home: Option<(f64, f64)>,
 }
 
 /// Where sesh keeps its files: `$SESH_DATA_DIR`, else
@@ -65,6 +67,12 @@ pub fn run(dir: &Path, opts: &InitOptions) -> Result<Vec<String>> {
     }
     if let Some(m) = model {
         config.aliases.insert(REQUIRED_ALIAS.to_string(), m);
+    }
+    if let Some((latitude, longitude)) = opts.home {
+        config.gateway.home = Some(sesh_core::Home {
+            latitude,
+            longitude,
+        });
     }
     config.validate()?;
     if !existing || config != before {

@@ -55,17 +55,29 @@ impl Check {
     }
 }
 
-const SERVICES: [&str; 4] = ["postgres", "redis", "litellm", "open-webui"];
+const SERVICES: [&str; 6] = [
+    "postgres",
+    "redis",
+    "litellm",
+    "searxng",
+    "gateway",
+    "open-webui",
+];
+
+/// Refusals per agent per hour that `audit-refusals` warns about.
+pub const REFUSAL_WARN: u64 = 10;
 
 pub fn run(
     config: &Config,
     secrets: &Secrets,
+    agents: &[String],
     compose: &dyn Compose,
     http: &dyn Http,
     tailscale: &dyn Tailscale,
 ) -> Vec<Check> {
     let mut checks = alias_checks(config, secrets, http);
-    checks.extend(stack_checks(config, compose));
+    checks.extend(stack_checks(config, agents, compose));
+    checks.push(audit_check(compose));
     checks.push(match tailscale.serves_port(config.ports.webui) {
         Ok(Some(true)) => Check::pass("tailscale-serve", "Open WebUI is served on the tailnet"),
         Ok(Some(false)) => Check::warn(
@@ -223,7 +235,33 @@ fn short(v: &Value) -> String {
     }
 }
 
-fn stack_checks(config: &Config, compose: &dyn Compose) -> Vec<Check> {
+/// Warns when an agent had many refusals in the last hour (FR-016).
+fn audit_check(compose: &dyn Compose) -> Check {
+    let sql = format!(
+        "SELECT agent || ' ' || count(*) FROM audit WHERE outcome = 'refused' AND at > now() - interval '1 hour' GROUP BY agent HAVING count(*) >= {REFUSAL_WARN};"
+    );
+    match compose.exec_sql("gateway", &sql) {
+        Ok(out) if out.trim().is_empty() => Check::pass(
+            "audit-refusals",
+            "no agent had repeated refusals in the last hour",
+        ),
+        Ok(out) => Check::warn(
+            "audit-refusals",
+            format!(
+                "repeated refusals in the last hour: {}",
+                out.trim().replace('\n', "; ")
+            ),
+            "review the audit log: docker compose -p sesh exec postgres psql -U sesh -d gateway -c 'select * from audit order by at desc limit 50'",
+        ),
+        Err(e) => Check::warn(
+            "audit-refusals",
+            format!("can't read the audit log: {e}"),
+            "run `sesh up`",
+        ),
+    }
+}
+
+fn stack_checks(config: &Config, agents: &[String], compose: &dyn Compose) -> Vec<Check> {
     let states = match compose.ps() {
         Ok(s) => s,
         Err(e) => {
@@ -257,12 +295,21 @@ fn stack_checks(config: &Config, compose: &dyn Compose) -> Vec<Check> {
         )
     };
 
-    let mut expected: Vec<&str> = SERVICES.to_vec();
+    let mut expected: Vec<String> = SERVICES.iter().map(|s| s.to_string()).collect();
     if is_stub(config) {
-        expected.push("stub-llm");
+        expected.push("stub-llm".into());
+    }
+    let executors: Vec<String> = agents.iter().map(|a| format!("executor-{a}")).collect();
+    let mut bad_exec = Vec::new();
+    for name in &executors {
+        match states.iter().find(|s| &s.service == name) {
+            Some(s) if s.state == "running" && (s.health.is_empty() || s.health == "healthy") => {}
+            Some(s) => bad_exec.push(format!("{name} {} {}", s.state, s.health)),
+            None => bad_exec.push(format!("{name} not running")),
+        }
     }
     let mut bad = Vec::new();
-    for name in expected {
+    for name in expected.iter().map(String::as_str) {
         match states.iter().find(|s| s.service == name) {
             None => bad.push(format!("{name} not running")),
             Some(s) if s.state != "running" => bad.push(format!("{name} {}", s.state)),
@@ -281,7 +328,15 @@ fn stack_checks(config: &Config, compose: &dyn Compose) -> Vec<Check> {
             "run `sesh up`; see `docker compose -p sesh logs <service>`",
         )
     };
-    vec![ports, health]
+    let exec = if bad_exec.is_empty() {
+        Check::pass(
+            "executors-healthy",
+            format!("{} executors running", executors.len()),
+        )
+    } else {
+        Check::fail("executors-healthy", bad_exec.join("; "), "run `sesh up`")
+    };
+    vec![ports, health, exec]
 }
 
 #[cfg(test)]
@@ -305,6 +360,8 @@ mod tests {
             ("postgres", None),
             ("redis", None),
             ("litellm", Some(("127.0.0.1", 4000))),
+            ("searxng", None),
+            ("gateway", Some(("127.0.0.1", 7000))),
             ("open-webui", Some(("127.0.0.1", 3000))),
         ])
     }
@@ -336,6 +393,7 @@ mod tests {
         let checks = run(
             &c,
             &s,
+            &[],
             &healthy_stack(),
             &good_router(true),
             &FakeTailscale(None),
@@ -345,6 +403,7 @@ mod tests {
         let served = run(
             &c,
             &s,
+            &[],
             &healthy_stack(),
             &good_router(true),
             &FakeTailscale(Some(true)),
@@ -353,11 +412,49 @@ mod tests {
     }
 
     #[test]
+    fn missing_executor_fails_and_refusals_warn() {
+        let (c, s) = setup(false);
+        let stack = healthy_stack();
+        let checks = run(
+            &c,
+            &s,
+            &["alice".into()],
+            &stack,
+            &good_router(true),
+            &FakeTailscale(None),
+        );
+        let e = checks.iter().find(|c| c.id == "executors-healthy").unwrap();
+        assert_eq!(e.status, Status::Fail);
+        assert!(e.detail.contains("executor-alice not running"));
+        assert_eq!(status(&checks, "audit-refusals"), Status::Pass);
+        *stack.sql_output.borrow_mut() = "mallory 12\n".into();
+        let checks = run(
+            &c,
+            &s,
+            &[],
+            &stack,
+            &good_router(true),
+            &FakeTailscale(None),
+        );
+        let a = checks.iter().find(|c| c.id == "audit-refusals").unwrap();
+        assert_eq!(a.status, Status::Warn);
+        assert!(a.detail.contains("mallory 12"));
+        assert_eq!(status(&checks, "executors-healthy"), Status::Pass);
+    }
+
+    #[test]
     fn open_port_fails_and_names_the_service() {
         let (c, s) = setup(false);
         let stack = healthy_stack();
-        stack.services.borrow_mut()[3].published[0].address = "0.0.0.0".into();
-        let checks = run(&c, &s, &stack, &good_router(true), &FakeTailscale(None));
+        stack.services.borrow_mut()[5].published[0].address = "0.0.0.0".into();
+        let checks = run(
+            &c,
+            &s,
+            &[],
+            &stack,
+            &good_router(true),
+            &FakeTailscale(None),
+        );
         let p = checks.iter().find(|c| c.id == "ports-loopback").unwrap();
         assert_eq!(p.status, Status::Fail);
         assert!(p.detail.contains("open-webui port 3000 on 0.0.0.0"));
@@ -369,6 +466,7 @@ mod tests {
         let checks = run(
             &c,
             &s,
+            &[],
             &healthy_stack(),
             &good_router(false),
             &FakeTailscale(None),
@@ -381,10 +479,10 @@ mod tests {
     fn unreachable_or_missing_alias_fails_alias_answers() {
         let (c, s) = setup(false);
         let none = FakeHttp::new(|_, _, _| (200, json!({"data": []})));
-        let checks = run(&c, &s, &healthy_stack(), &none, &FakeTailscale(None));
+        let checks = run(&c, &s, &[], &healthy_stack(), &none, &FakeTailscale(None));
         assert_eq!(status(&checks, "alias-answers"), Status::Fail);
         let down = FakeHttp::new(|_, _, _| (502, json!({"error": "upstream"})));
-        let checks = run(&c, &s, &healthy_stack(), &down, &FakeTailscale(None));
+        let checks = run(&c, &s, &[], &healthy_stack(), &down, &FakeTailscale(None));
         assert_eq!(status(&checks, "alias-answers"), Status::Fail);
     }
 
@@ -394,6 +492,7 @@ mod tests {
         let checks = run(
             &c,
             &s,
+            &[],
             &healthy_stack(),
             &good_router(true),
             &FakeTailscale(None),
@@ -404,7 +503,14 @@ mod tests {
         let (c, s) = setup(false);
         let stack = healthy_stack();
         stack.services.borrow_mut()[2].health = "unhealthy".into();
-        let checks = run(&c, &s, &stack, &good_router(true), &FakeTailscale(None));
+        let checks = run(
+            &c,
+            &s,
+            &[],
+            &stack,
+            &good_router(true),
+            &FakeTailscale(None),
+        );
         assert_eq!(status(&checks, "services-healthy"), Status::Fail);
     }
 
@@ -414,6 +520,7 @@ mod tests {
         let checks = run(
             &c,
             &Secrets::default(),
+            &[],
             &healthy_stack(),
             &good_router(true),
             &FakeTailscale(None),

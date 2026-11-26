@@ -13,8 +13,10 @@ use std::path::Path;
 pub const FILE_NAME: &str = "secrets.env";
 
 /// Values `sesh init` generates when missing.
-pub const GENERATED: [&str; 5] = [
+pub const GENERATED: [&str; 7] = [
     "POSTGRES_PASSWORD",
+    "GATEWAY_DB_PASSWORD",
+    "SEARXNG_SECRET",
     "REDIS_PASSWORD",
     "LITELLM_MASTER_KEY",
     "WEBUI_SECRET_KEY",

@@ -11,6 +11,8 @@ use std::cell::RefCell;
 pub struct FakeCompose {
     pub services: RefCell<Vec<ServiceState>>,
     pub calls: RefCell<Vec<String>>,
+    /// What `exec_sql` returns.
+    pub sql_output: RefCell<String>,
 }
 
 impl FakeCompose {
@@ -35,6 +37,7 @@ impl FakeCompose {
         FakeCompose {
             services: RefCell::new(states),
             calls: RefCell::default(),
+            sql_output: RefCell::default(),
         }
     }
 }
@@ -58,6 +61,10 @@ impl Compose for FakeCompose {
     }
     fn ps(&self) -> Result<Vec<ServiceState>> {
         Ok(self.services.borrow().clone())
+    }
+    fn exec_sql(&self, database: &str, _sql: &str) -> Result<String> {
+        self.calls.borrow_mut().push(format!("sql {database}"));
+        Ok(self.sql_output.borrow().clone())
     }
 }
 

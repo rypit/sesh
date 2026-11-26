@@ -1,0 +1,25 @@
+# Rendered by sesh-executor-supervisor at start: @GATEWAY@, @DATA@ and @DIST@ are replaced.
+using Workerd = import "/workerd/workerd.capnp";
+
+const config :Workerd.Config = (
+  services = [
+    (name = "main", worker = .host),
+    (name = "gateway", external = (address = "@GATEWAY@", http = ())),
+    (name = "do-disk", disk = (path = "@DATA@", writable = true)),
+  ],
+  sockets = [ (name = "http", address = "127.0.0.1:8080", http = (), service = "main") ],
+);
+
+const host :Workerd.Worker = (
+  modules = [ (name = "host.js", esModule = embed "@DIST@/host.js") ],
+  compatibilityDate = "2026-11-01",
+  bindings = [
+    (name = "LOADER", workerLoader = ()),
+    (name = "RUNTIME", durableObjectNamespace = "Runtime"),
+    (name = "GATEWAY", service = "gateway"),
+  ],
+  durableObjectNamespaces = [ (className = "Runtime", uniqueKey = "sesh-runtime", enableSql = true) ],
+  durableObjectStorage = (localDisk = "do-disk"),
+  # The host Worker itself has no general network either.
+  globalOutbound = "gateway",
+);

@@ -28,6 +28,10 @@ pub trait Compose {
     fn restart(&self, service: &str) -> Result<()>;
     fn down(&self, remove_volumes: bool) -> Result<()>;
     fn ps(&self) -> Result<Vec<ServiceState>>;
+    /// Runs SQL in the postgres service as the database owner, on stdin
+    /// (so nothing in it, such as a password, appears in a process list).
+    /// Returns psql's unaligned output.
+    fn exec_sql(&self, database: &str, sql: &str) -> Result<String>;
 }
 
 /// Runs `docker compose -p <project> --env-file <secrets> -f <files…>`.
@@ -92,6 +96,42 @@ impl Compose for DockerCompose {
 
     fn ps(&self) -> Result<Vec<ServiceState>> {
         parse_ps(&self.run(&["ps", "--all", "--format", "json"])?)
+    }
+
+    fn exec_sql(&self, database: &str, sql: &str) -> Result<String> {
+        use std::io::Write;
+        let mut child = self
+            .command()
+            .args([
+                "exec",
+                "-T",
+                "postgres",
+                "psql",
+                "-U",
+                "sesh",
+                "-d",
+                database,
+                "-At",
+                "-v",
+                "ON_ERROR_STOP=1",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("can't run `docker compose exec`")?;
+        child
+            .stdin
+            .take()
+            .context("no stdin")?
+            .write_all(sql.as_bytes())?;
+        let out = child.wait_with_output()?;
+        if !out.status.success() {
+            // stderr may echo SQL; report only its first line, never the input.
+            let err = String::from_utf8_lossy(&out.stderr);
+            bail!("psql failed: {}", err.lines().next().unwrap_or("").trim());
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 }
 

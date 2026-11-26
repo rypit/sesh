@@ -9,13 +9,16 @@ use std::path::Path;
 pub const FILE_NAME: &str = "sesh.toml";
 pub const REQUIRED_ALIAS: &str = "agent-main";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub inference: Inference,
     pub aliases: BTreeMap<String, String>,
     #[serde(default)]
     pub ports: Ports,
+    /// The gateway's limits, home location and upstreams (feature 002).
+    #[serde(default)]
+    pub gateway: sesh_core::GatewaySettings,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +72,7 @@ impl Config {
             },
             aliases,
             ports: Ports::default(),
+            gateway: sesh_core::GatewaySettings::default(),
         }
     }
 
@@ -127,6 +131,7 @@ impl Config {
                 bail!("alias {alias} has no model name");
             }
         }
+        self.gateway.validate()?;
         if self.ports.webui == self.ports.router {
             bail!("ports.webui and ports.router must differ");
         }
