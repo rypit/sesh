@@ -1,151 +1,177 @@
 # sesh Constitution
 
-sesh ("scribe") runs a coding agent against a local AI stack inside a
-sandbox, so that a prompt-injected agent cannot harm the Mac it runs on.
-These principles are binding on every spec, plan, task and change. When a
-principle and a convenience conflict, the principle wins.
+sesh ("scribe") is a local-first agent platform for one household: AI
+agents act on each user's behalf through a single trusted gateway, so no
+agent ever holds a secret. It runs in two modes on one stack:
+
+- **Assistant mode**: always-on agents for each household user plus a
+  shared Household agent, doing everyday tasks (email, calendar,
+  browsing, documents, errands).
+- **Operator mode**: the admin sets up and maintains sesh with the sesh
+  admin CLI and Claude Code operator skills, which no agent can reach.
+
+The design is described in the sesh Solutions Architecture document
+(ADR 0001). These principles are binding on every spec, plan, task and
+change. When a principle and a convenience conflict, the principle wins.
 
 ## Core Principles
 
-### I. The host is the only trusted zone
+### I. The control plane is the only trusted zone
 
-The macOS host (the user's account, Keychain, shell, editor, git config) is
-trusted. Everything inside a sandbox is untrusted: the harness, the model's
-output, tools running in the sandbox, and **every file the agent writes**.
-A repository the user cloned from someone else is untrusted too, before
-any agent touches it.
+The control plane (the gateway, its executor, the secret store, the
+approval channel, the audit log) and the operator's host account are
+trusted. Everything else is untrusted: every agent, the model's output,
+model-written scripts, and all content an agent reads (email, web pages,
+documents, other agents' requests). Isolation and approvals are enforced
+in the control plane, never in prompts.
 
-*Rationale*: prompt injection turns any content the agent reads into
-instructions. The only boundary we can reason about is the one between
-the host and the sandbox.
+*Rationale*: any agent can be manipulated by content it reads at any
+moment. The only boundary we can reason about is the one around the
+control plane.
 
-### II. Deny by default, allow explicitly
+### II. One way out
 
-Sandboxes start with no network egress and no host filesystem access
-beyond their workspace. Every allowance must be:
+Agents reach accounts, data, memory, documents and the browser only
+through the gateway. Agents have no built-in terminal, file or web tools,
+and no other network route to resources or the internet. Every allowance
+is declared in operator configuration, scoped as narrowly as possible,
+and inspectable.
 
-- declared in user-owned host configuration,
-- scoped as narrowly as the runtime allows (host, port, method, path),
-- applied per sandbox, and
-- inspectable (`sesh policy show` prints exactly what is allowed).
+*Rationale*: a single path is a path you can scope, approve and audit.
 
-*Rationale*: an allowlist you can read is an allowlist you can audit.
+### III. Agents never see secrets
 
-### III. Secrets never enter the sandbox
-
-No real credential may appear in a sandbox's environment, filesystem,
-process arguments, or sesh's own logs. Credentials are attached on the
-host side: by the sandbox runtime's credential proxy (placeholder
-substitution bound to specific hosts) or by a host-side shim service.
-The source of truth is the macOS Keychain or a secrets manager, never a
-plaintext file in the repo or in sesh's state directory.
+Credentials (OAuth tokens, API keys, site logins) live in the secret
+store and are used by the gateway alone, in memory, never logged or
+returned. Logins are filled into the browser by the gateway, never typed
+by the model. New credentials reach the secret store through a one-time
+form the person fills, never through an agent or a chat.
 
 *Rationale*: a secret the agent can read is a secret it can leak.
 
-### IV. Nothing agent-authored runs on the host implicitly
+### IV. Per-user isolation
 
-sesh must not create a path by which content written in the sandbox
-executes on the host without a deliberate, informed user action. Known
-vectors include git hooks, repo-level git config (`core.fsmonitor`,
-`core.hooksPath`, filters, `diff.external`, pagers), `.envrc`, editor
-task and settings files, and build scripts. The agent's work comes back
-to the host **as data** (git bundles or patches) for the user to review.
+Each user's agent can reach only that user's accounts, memory, documents
+and skills. Shared accounts belong to the Household agent alone. The
+gateway derives scope from the agent's token; the model never passes a
+user or scope.
 
-*Rationale*: the VM protects the laptop only until the user runs
-something the agent wrote. This is the most likely real-world way to
-brick a machine.
+*Rationale*: one manipulated agent must not reach another person's data.
 
-### V. Policy comes only from the user
+### V. Side effects need approval
 
-Repository content can never widen what a sandbox may do. There is no
-repo-local configuration that grants network access, secrets, mounts or
-tools. If repo-local config is ever added, it may only *narrow* policy.
+Purchases, sends, deletes, settings changes and first logins to a site
+pause for a human yes. The gateway writes the approval text itself and
+delivers it on a channel no agent can use.
 
-*Rationale*: an attacker controls repo content (Principle I), so repo
-content must not control the boundary.
+*Rationale*: the cost of a wrong action is bounded by a person who reads
+exactly what will happen.
 
-### VI. Every guarantee is executable
+### VI. Agent-authored content never becomes trusted implicitly
 
-Each security guarantee in this constitution has at least one automated
-invariant check, run from inside a real sandbox and shipped to users as
-`sesh verify`. A change that weakens or removes an invariant must update
-this constitution (see Governance) in the same change.
+Nothing an agent writes (skills, memory, notes, documents, downloads,
+scripts) may widen what any agent can do, run in the control plane, or
+enter this repository, except through a deliberate human step (review,
+copy, approved pull request). Agent and household data live outside this
+repository.
 
-*Rationale*: unverified guarantees decay. Runtime-agnostic invariants
-also make it possible to swap the sandbox runtime without losing them.
+*Rationale*: self-learned skills and memories are instructions in
+waiting; promoting them must be a human decision.
 
-### VII. Compose, don't rebuild
+### VII. Local-first
 
-sesh is glue. It composes existing components (the sandbox runtime, the
-inference engine, the harness, the search service) and writes custom
-code only where no existing component meets an invariant. Each
-component sits behind exactly one module (a seam), so it can be
-replaced. Features that are not needed by an accepted spec are not built.
+All inference and household data stay on the home server. Exceptions are
+named and minimal: Google APIs via OAuth, search engines behind the
+search service, and content-free push wake-ups. No outbound telemetry
+from sesh's own code.
+
+*Rationale*: the household's data is the thing being protected.
+
+### VIII. Adopt before build
+
+sesh composes existing open-source components and builds only what no
+project provides: the gateway, a few connectors, and glue. Each adopted
+component is reached through exactly one module of sesh's code, so it can
+be replaced. Features not needed by an accepted spec are not built.
 
 *Rationale*: a small codebase is a small attack surface and a small
-maintenance bill. (Lesson from Sovereign: multi-engine routing,
-dashboards and benchmark frameworks cost more than they earned for this
-use case.)
+maintenance bill.
 
-### VIII. One command, sensible defaults
+### IX. Swappable inference
 
-The happy path is `sesh` in a repo directory, with zero required
-configuration after one-time setup. Configuration exists to change
-defaults, never to make the default work. Commands are idempotent, and a
-warm start (stack up, sandbox exists) is fast.
+Clients call model aliases (e.g. `agent-main`), never engines, so the
+engine behind an alias can change without client changes.
 
-*Rationale*: if the secure path isn't the easy path, it won't be used.
+*Rationale*: local models and engines change faster than the platform.
+
+### X. Every guarantee is executable
+
+Each guarantee above has at least one automated check, including a
+negative test for every isolation rule, and every phase ends with its
+acceptance checks automated. A change that weakens or removes a check
+must update this constitution in the same change.
+
+*Rationale*: unverified guarantees decay.
 
 ## Additional Constraints
 
-- **Platform**: macOS on Apple Silicon only (initially M3 or later with
-  macOS 26.4+, inherited from the default engine). No Linux or Windows
-  support is planned.
-- **No sesh daemon**: sesh is a CLI. Long-running processes are the
-  components it supervises (engine, search, sandbox runtime, credential
-  shims), managed through launchd or the component's own lifecycle,
-  never by a sesh-owned background process. Credential shims are stack
-  services: separate `sesh-shim` processes that launchd starts and
-  keeps alive, one per shim, visible in `sesh stack status`. The `sesh`
-  CLI itself never stays resident after a command ends.
-- **No outbound telemetry** from sesh itself.
-- **Pinned minimum versions** for security-relevant components (e.g. the
-  sbx version that supports method/path rules). `sesh doctor` refuses to
-  run below them.
-- **Implementation**: Rust (stable, edition 2024, toolchain pinned),
-  `unsafe` code forbidden. One Cargo package builds two binaries: the
-  `sesh` CLI and `sesh-shim` (credential shims only, ADR 0003). Minimal dependencies;
-  anything heavier needs justification in a plan (ADR 0002).
+- **Platform**: the server is a Mac on Apple Silicon (built on an M5 Max
+  MacBook Pro; long-term on a Mac mini or Studio, 64 GB target, peak
+  about 45–50 GB). Only the inference engine runs on bare metal (Metal);
+  everything else runs in containers, and work that touches untrusted
+  web content runs in sbx microVMs.
+- **Languages**: code sesh writes for the **trusted plane** (the gateway,
+  the admin CLI, shared types) is **Rust** (stable, toolchain pinned,
+  `unsafe` forbidden). Code that runs **inside an untrusted runtime** uses
+  what that runtime requires: the JavaScript shim inside the script
+  executor, the Python memory plugin inside Hermes, the browser
+  controller inside its sandbox (ADR 0002). Minimal dependencies;
+  anything heavier needs justification in a plan.
+- **Repository boundaries**: this repository is the project monorepo:
+  code, deployment templates, operator skills, specs and decisions. It
+  holds no household data and no per-user or per-agent git repositories.
+  Per-user and household repositories (agent skills, and any later
+  per-user git integration) are separate, created by the admin CLI, and
+  local to the server by default (ADR 0003).
+- **No secrets in any repository**: `.env` holds only the secret store's
+  bootstrap identity, injected at runtime.
+- **Network**: all services listen on the container network or
+  localhost; people reach sesh over Tailscale only.
+- **Pinned minimum versions** for security-relevant components;
+  `sesh doctor` refuses to run below them.
 
 ## Development Workflow
 
 - Spec-driven: every feature goes through specify → clarify → plan →
-  tasks → implement, under `specs/NNN-feature/`.
+  tasks → implement, under `specs/NNN-feature/`. The architecture's
+  phases map to features.
 - Every plan includes a **Constitution Check** that lists each principle
   and says whether the plan complies. Any exception is recorded with a
   justification in the plan's Complexity Tracking section.
-- Test-first for invariants: a guarantee's invariant check is written,
-  and seen failing, before the code that provides the guarantee.
-- Two test tiers:
-  - **unit**: hermetic and fast, with external CLIs (sbx, launchctl,
-    container runtimes) replaced by fakes at their seam trait. Runs in
-    CI.
-  - **invariants**: run against a real stack and sandbox on the
-    reference Mac before merge. Hosted CI runners likely can't run
-    nested VMs; verify this before relying on it.
-- Decisions that change a principle, a seam, or the threat model are
-  recorded as ADRs in `docs/decisions/`.
+- Test-first: a guarantee's check is written, and seen failing, before
+  the code that provides it.
+- Three test tiers:
+  - **unit**: hermetic, with each adopted component faked at its module.
+    Runs in CI.
+  - **stack**: the Compose stack with a stub model server in place of the
+    inference engine; runs the isolation and approval negative tests.
+    Runs in CI where containers are available.
+  - **reference**: on the reference Mac, for what needs Metal or sbx
+    (model quality, browser sessions).
+- Decisions that change a principle, a component boundary, or the threat
+  model are recorded as ADRs in `docs/decisions/`.
 
 ## Governance
 
 This constitution supersedes other practices. Amendments require a pull
 request that edits this file, explains the change, bumps the version, and
-updates any affected invariant checks and templates. Versioning:
+updates any affected checks and templates. Versioning:
 
-- MAJOR: a principle is removed or weakened.
+- MAJOR: a principle is removed or weakened, or the product's scope
+  changes.
 - MINOR: a principle or constraint is added or materially expanded.
 - PATCH: clarifications and wording.
 
 All reviews check compliance with this constitution.
 
-**Version**: 1.1.1 | **Ratified**: 2026-11-19 | **Last Amended**: 2026-11-19
+**Version**: 1.0.0 | **Ratified**: 2026-11-26 | **Last Amended**: 2026-11-26
