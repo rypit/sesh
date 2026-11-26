@@ -7,7 +7,11 @@ FROM rust:1.97-slim-bookworm AS supervisor
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release -p sesh-executor-supervisor
+# Keep only the binary: the target directory and the crate registry
+# would otherwise stay in this layer's build cache (several GB).
+RUN cargo build --release -p sesh-executor-supervisor \
+ && cp target/release/sesh-executor-supervisor /sesh-executor-supervisor \
+ && rm -rf target /usr/local/cargo/registry
 
 FROM node:24-trixie-slim AS bundle
 WORKDIR /src
@@ -19,7 +23,7 @@ RUN npm run build \
 
 FROM debian:trixie-slim
 COPY --from=bundle /workerd /usr/local/bin/workerd
-COPY --from=supervisor /src/target/release/sesh-executor-supervisor /usr/local/bin/sesh-executor-supervisor
+COPY --from=supervisor /sesh-executor-supervisor /usr/local/bin/sesh-executor-supervisor
 COPY --from=bundle /src/dist /opt/sesh-executor/dist
 COPY executor/workerd.capnp.template /opt/sesh-executor/workerd.capnp.template
 USER 65534:65534
