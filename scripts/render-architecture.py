@@ -40,6 +40,7 @@ KEBAB = {
     "strokeWidth": "stroke-width",
     "strokeDasharray": "stroke-dasharray",
     "markerEnd": "marker-end",
+    "markerStart": "marker-start",
     "fillOpacity": "fill-opacity",
 }
 STYLE_ATTRS = {"fill", "stroke"}  # values that may hold var(); set via style

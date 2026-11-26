@@ -15,13 +15,14 @@ anything with side effects waits for a person's yes.
 - **Operator mode**: the `sesh` admin CLI and Claude Code operator
   skills set up users, rotate secrets and run backups. No agent can reach
   them.
-- **Local-first**: models run on the home server (oMLX on Apple
-  Silicon); household data stays there.
+- **Local-first**: models run on the home server, on any
+  OpenAI-compatible inference server (oMLX, Ollama, llama.cpp, vLLM…);
+  household data stays there.
 
 ## Architecture
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="sesh architecture: household users reach Hermes agents through Open WebUI or Telegram; agents reach Google, search, weather and maps, Paperless-ngx, a sandboxed browser and Mem0 only through the Code Mode gateway, which uses Infisical for secrets, an append-only audit log, and ntfy for approvals; inference runs on oMLX" width="760">
+  <img src="docs/architecture.svg" alt="sesh architecture: household users reach Hermes agents through Open WebUI or Telegram; agents, and the per-agent code executor that runs their scripts, reach Google, search, weather and maps, Paperless-ngx, a sandboxed browser and Mem0 only through the Code Mode gateway, which uses Infisical for secrets, an append-only audit log, and ntfy for approvals; inference runs on any OpenAI-compatible server" width="760">
 </p>
 
 Agents are untrusted; the gateway is their only way out. Approvals and
