@@ -506,19 +506,25 @@ fn gateway_stack() {
         listed.contains("alice") && listed.contains("bob"),
         "{listed}"
     );
-    // The test-only approval-gated connector (contracts/connectors.md); the
-    // gateway reloads agents.toml when it changes.
-    let agents_file = stack.dir.join("gateway/agents.toml");
-    let text = std::fs::read_to_string(&agents_file).unwrap();
-    std::fs::write(
-        &agents_file,
-        text.replacen(
-            "[\"search\", \"geo\"]",
-            "[\"search\", \"geo\", \"testgate\"]",
-            1,
-        ),
-    )
-    .unwrap();
+    // The test-only approval-gated connector (contracts/connectors.md),
+    // which `sesh agent add` doesn't offer; the gateway reloads agents.toml
+    // when it changes.
+    let gateway_dir = stack.dir.join("gateway");
+    let mut agents = sesh_core::AgentsFile::load(&gateway_dir).unwrap();
+    agents
+        .agents
+        .iter_mut()
+        .find(|a| a.name == "alice")
+        .expect("alice in agents.toml")
+        .connectors
+        .push("testgate".into());
+    agents.save(&gateway_dir).unwrap();
+    assert!(
+        std::fs::read_to_string(gateway_dir.join("agents.toml"))
+            .unwrap()
+            .contains("testgate"),
+        "testgate wasn't granted to alice"
+    );
     stack.sesh_ok(&["up"]);
     let (alice_t, bob_t) = (stack.token("alice"), stack.token("bob"));
 
