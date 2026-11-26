@@ -13,7 +13,7 @@ where those repositories live relative to this one.
 ## Decision
 
 - **This repository (`rypit/sesh`) is the project monorepo**: Rust
-  crates, the executor shim, the Hermes plugin, the browser controller,
+  crates, the executor's Code Mode configuration and connector stubs, the Hermes plugin, the browser controller,
   deployment templates (Compose), operator skills, specs and decisions.
 - It holds **no household data** and **no per-user or per-agent
   repositories**: no skills, memories, documents, chats or

@@ -18,9 +18,12 @@ sesh is the platform that document describes:
 
 - **Assistant mode**: Hermes agents, one per user plus a Household
   agent, reached through Open WebUI and Telegram.
-- **Control plane**: a Code Mode gateway (model-written scripts run in a
-  workerd executor with no network or secrets), Infisical for secrets,
-  ntfy for approvals, an append-only audit log.
+- **Control plane**: the gateway, Infisical for secrets, ntfy for
+  approvals, an append-only audit log.
+- **Executor**: model-written scripts run in a workerd executor per
+  agent, with no network or secrets, using the Code Mode runtime; it is
+  untrusted and every call it makes goes through the gateway
+  (ADR 0004).
 - **Resources** behind the gateway: Google (OAuth), Mem0, Paperless-ngx,
   SearXNG, Kiwix, weather and maps, and a browser in sbx microVMs.
 - **Inference**: oMLX on bare metal behind model aliases; no cloud models.

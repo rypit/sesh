@@ -78,15 +78,9 @@ gateway:
   its own agent, and a successful isolate escape reaches only that
   agent's runtime state.
 
-This keeps ADR 0002's rule (trusted-plane code is Rust) and Principle
-VIII (adopt before build). It implies two documentation changes:
-
-- ADR 0002 describes the executor side as a "minimal shim"; it would
-  instead run the adopted codemode runtime plus thin connector stubs.
-- The constitution lists the executor inside the trusted control plane.
-  Given observation 1, the executor should count as untrusted, with
-  authority (scope, secrets, approvals, audit) held only by the
-  gateway.
+This keeps the rule that trusted-plane code is Rust, and Principle VIII
+(adopt before build). Adopted in ADR 0002 and ADR 0004; constitution I
+counts the executor as untrusted.
 
 ## Still open
 

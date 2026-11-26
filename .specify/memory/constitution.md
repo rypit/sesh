@@ -18,12 +18,14 @@ change. When a principle and a convenience conflict, the principle wins.
 
 ### I. The control plane is the only trusted zone
 
-The control plane (the gateway, its executor, the secret store, the
-approval channel, the audit log) and the operator's host account are
-trusted. Everything else is untrusted: every agent, the model's output,
-model-written scripts, and all content an agent reads (email, web pages,
-documents, other agents' requests). Isolation and approvals are enforced
-in the control plane, never in prompts.
+The control plane (the gateway, the secret store, the approval channel,
+the audit log) and the operator's host account are trusted. Everything
+else is untrusted: every agent, the model's output, model-written
+scripts **and the executor that runs them**, and all content an agent
+reads (email, web pages, documents, other agents' requests). Authority
+(scope, secrets, approvals, audit) is exercised only by the gateway,
+whatever any other component reports. Isolation and approvals are
+enforced in the control plane, never in prompts.
 
 *Rationale*: any agent can be manipulated by content it reads at any
 moment. The only boundary we can reason about is the one around the
@@ -123,9 +125,10 @@ must update this constitution in the same change.
 - **Languages**: code sesh writes for the **trusted plane** (the gateway,
   the admin CLI, shared types) is **Rust** (stable, toolchain pinned,
   `unsafe` forbidden). Code that runs **inside an untrusted runtime** uses
-  what that runtime requires: the JavaScript shim inside the script
-  executor, the Python memory plugin inside Hermes, the browser
-  controller inside its sandbox (ADR 0002). Minimal dependencies;
+  what that runtime requires: the adopted Code Mode runtime and thin
+  connector stubs (JavaScript) inside the script executor, the Python
+  memory plugin inside Hermes, the browser controller inside its sandbox
+  (ADR 0002, ADR 0004). Minimal dependencies;
   anything heavier needs justification in a plan.
 - **Repository boundaries**: this repository is the project monorepo:
   code, deployment templates, operator skills, specs and decisions. It
@@ -174,4 +177,4 @@ updates any affected checks and templates. Versioning:
 
 All reviews check compliance with this constitution.
 
-**Version**: 1.0.0 | **Ratified**: 2026-11-26 | **Last Amended**: 2026-11-26
+**Version**: 1.1.0 | **Ratified**: 2026-11-26 | **Last Amended**: 2026-11-26
