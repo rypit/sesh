@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: make check
+        run: make check
+
+  stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Build the stub model server image
+        run: docker build -f deploy/stub.Dockerfile -t sesh-stub-llm:dev .
+      - name: Stack tests
+        run: make stack-test
+      - name: Stack logs
+        if: failure()
+        run: docker compose -p sesh logs --no-color --tail 200 || true

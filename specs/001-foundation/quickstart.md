@@ -8,8 +8,9 @@ packaged), Tailscale on the server. Details: [contracts/cli.md](./contracts/cli.
 
 ```bash
 cargo install --path crates/sesh-cli
-sesh init --admin-email you@example.com
-sesh up --stub
+docker build -f deploy/stub.Dockerfile -t sesh-stub-llm:dev .
+sesh init --stub --admin-email you@example.com
+sesh up
 sesh doctor            # all pass; tailscale-serve may warn
 make stack-test        # negative tests (FR-012)
 ```

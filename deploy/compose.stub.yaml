@@ -1,0 +1,9 @@
+# Development and CI only: adds the stub model server. `sesh up --stub`
+# points agent-main at it. Build the image first:
+#   docker build -f deploy/stub.Dockerfile -t sesh-stub-llm:dev .
+services:
+  stub-llm:
+    image: sesh-stub-llm:dev
+    environment:
+      STUB_TOOLS: ${STUB_TOOLS:-on}
+    restart: unless-stopped

@@ -44,10 +44,29 @@ The [constitution](.specify/memory/constitution.md) is binding. In short:
 
 ## Status
 
-**Planning.** No code yet. The design is in the sesh Solutions
+**Building.** Feature 001 (foundation stack) is in progress under
+[`specs/001-foundation/`](specs/001-foundation/). The design is in the sesh Solutions
 Architecture document; decisions are in [`docs/decisions/`](docs/decisions/)
 and reference notes in [`docs/research/`](docs/research/). The build
 follows the architecture's seven phases, each a feature under `specs/`.
+
+## Try it
+
+With Docker and Rust installed, no model needed:
+
+```bash
+docker build -f deploy/stub.Dockerfile -t sesh-stub-llm:dev .
+cargo install --path crates/sesh-cli
+sesh init --stub
+sesh up
+sesh doctor
+```
+
+Open WebUI is then on http://127.0.0.1:3000 (admin password in
+`~/.local/share/sesh/secrets.env`). For a real model, run
+`sesh init --inference-url http://<server>/v1 --model <name>` with any
+OpenAI-compatible server, then `sesh up`. See
+[`specs/001-foundation/quickstart.md`](specs/001-foundation/quickstart.md).
 
 ## Repository
 

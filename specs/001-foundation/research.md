@@ -120,7 +120,12 @@ runtime.
 - `sesh init`: write `sesh.toml` (inference URL, alias → model) and
   `secrets.env` if missing; render `litellm.yaml`. Idempotent.
 - `sesh up`: `docker compose up` the stack, create the Open WebUI client
-  key on first run, then start Open WebUI.
+  key on first run, then start Open WebUI. The stub is an ordinary
+  inference setting (`sesh init --stub`), not a flag on `up`.
+- Compose reads `secrets.env` only for interpolation; each container gets
+  only the variables listed for it, so Open WebUI never sees the router's
+  master key. The Compose files are embedded in the `sesh` binary and
+  written to `$SESH_DATA_DIR/compose/`.
 - `sesh doctor`: checks in contracts/cli.md. Talks to Docker only through
   `docker compose` (one seam), to HTTP through `ureq`, to Tailscale
   through its CLI (one seam each).

@@ -5,8 +5,8 @@ Exit codes: 0 success; 1 a check or operation failed; 2 usage error;
 
 | Command | Behavior | Spec refs |
 |---|---|---|
-| `sesh init [--inference-url URL] [--model NAME] [--admin-email EMAIL]` | Create `$SESH_DATA_DIR` (0700), write `sesh.toml` if missing (flags fill it; flags given for an existing file update `[inference]`/`aliases.agent-main`), generate `secrets.env` values that are missing, render `litellm.yaml`. Idempotent; prints what it wrote, never secret values. | FR-004, FR-007 |
-| `sesh up [--stub]` | Re-render `litellm.yaml`; `docker compose up -d` the stack (with `compose.stub.yaml` and the stub as the inference server when `--stub`); on first run create the Open WebUI router key restricted to the aliases and store it; start Open WebUI; wait for health. | FR-001, FR-003, FR-006 |
+| `sesh init [--inference-url URL --model NAME \| --stub] [--admin-email EMAIL]` | Create `$SESH_DATA_DIR` (0700), write `sesh.toml` if missing (flags fill it; flags given for an existing file update `[inference]`/`aliases.agent-main`), generate `secrets.env` values that are missing, render `litellm.yaml`. `--stub` sets the inference server to the stub service (`http://stub-llm:8000/v1`, model `stub-model`). Idempotent; prints what it wrote, never secret values. | FR-004, FR-007 |
+| `sesh up` | Write the Compose files to `$SESH_DATA_DIR/compose/` (adding the stub overlay when the inference server is the stub); re-render `litellm.yaml` and restart only the router if it changed; start postgres, redis and litellm; create (first run) or update the Open WebUI router key limited to the aliases; start Open WebUI; wait for health. | FR-001, FR-003, FR-006 |
 | `sesh down` | `docker compose down` (volumes kept). | FR-006 |
 | `sesh doctor [--json]` | Run the checks below; print one line per check (status, detail, fix); exit 1 if any fails. | FR-009 |
 

@@ -24,22 +24,22 @@ are written failing before the stack work they check.
 
 ## Phase 1: Setup
 
-- [ ] T001 Create the Cargo workspace: `Cargo.toml` (members `crates/sesh-cli`, `crates/sesh-stub-llm`; workspace lints with `unsafe_code = "forbid"`), `rust-toolchain.toml` (stable, pinned), `crates/sesh-cli/src/main.rs` and `crates/sesh-stub-llm/src/main.rs` stubs that compile
-- [ ] T002 [P] Add `deny.toml` (licences, advisories, duplicate versions) and a `Makefile` with `check` (cargo fmt --check, clippy -D warnings, cargo test, cargo deny check, `python3 scripts/render-architecture.py --check`, `docker compose -f deploy/compose.yaml -f deploy/compose.stub.yaml config -q`) and `stack-test` targets in `Makefile`
-- [ ] T003 [P] Extend `.gitignore` with `target/`, `*.env`, and any local `sesh-data/`; add a `make check` step that fails if a file named `secrets.env` or `litellm.yaml` is tracked, in `Makefile`
+- [X] T001 Create the Cargo workspace: `Cargo.toml` (members `crates/sesh-cli`, `crates/sesh-stub-llm`; workspace lints with `unsafe_code = "forbid"`), `rust-toolchain.toml` (stable, pinned), `crates/sesh-cli/src/main.rs` and `crates/sesh-stub-llm/src/main.rs` stubs that compile
+- [X] T002 [P] Add `deny.toml` (licences, advisories, duplicate versions) and a `Makefile` with `check` (cargo fmt --check, clippy -D warnings, cargo test, cargo deny check, `python3 scripts/render-architecture.py --check`, `docker compose -f deploy/compose.yaml -f deploy/compose.stub.yaml config -q`) and `stack-test` targets in `Makefile`
+- [X] T003 [P] Extend `.gitignore` with `target/`, `*.env`, and any local `sesh-data/`; add a `make check` step that fails if a file named `secrets.env` or `litellm.yaml` is tracked, in `Makefile`
 
 ---
 
 ## Phase 2: Foundational (blocks all stories)
 
-- [ ] T004 [P] Unit tests, then the config model in `crates/sesh-cli/src/config.rs` per data-model.md `Config.inference.base_url`, `Config.inference.api_key_env`, `Config.inference.timeout_secs`, `Config.aliases.<alias>`, `Config.ports.webui`, `Config.ports.router` (serde `deny_unknown_fields`; load and save `sesh.toml`; `agent-main` required)
-- [ ] T005 [P] Unit tests, then secrets handling in `crates/sesh-cli/src/secrets.rs` per data-model.md Secrets: generate missing values with `getrandom` (32 bytes, URL-safe base64), write `secrets.env` with mode 0600 and dir 0700, never print values; the `Debug` impl redacts
-- [ ] T006 [P] Unit tests, then the pure router-config renderer in `crates/sesh-cli/src/render.rs` per data-model.md Rendered router config and contracts/config.md `litellm.yaml` (one entry per alias, `openai/<model>`, no wildcards, telemetry off)
-- [ ] T007 [P] Seam `crates/sesh-cli/src/host/compose.rs`: a trait plus the only implementation running `docker compose` (up, down, ps as JSON with publishers and health, exec), and a fake in `crates/sesh-cli/src/host/fake.rs` for tests
-- [ ] T008 [P] Seam `crates/sesh-cli/src/host/http.rs`: trait + `ureq` implementation for JSON GET/POST with bearer key and timeout, plus a fake
-- [ ] T009 [P] Stub server in `crates/sesh-stub-llm/src/main.rs` per research.md R6 (`/v1/models` lists `stub-model` and `stub-raw-2`; chat replies "stub reply", SSE when `stream: true`; with tools, a call to the first tool), with unit tests; `deploy/stub.Dockerfile` builds it
-- [ ] T010 Compose files per contracts/stack.md: `deploy/compose.yaml` (postgres, redis, litellm, open-webui; loopback-only published ports from `${SESH_WEBUI_PORT}` and `${SESH_ROUTER_PORT}`; `env_file: ${SESH_DATA_DIR}/secrets.env`; LiteLLM mounts `${SESH_DATA_DIR}/litellm.yaml`; health checks; named volumes), `deploy/compose.stub.yaml` (adds `stub-llm`), `deploy/postgres/init.sql` (databases `openwebui`, `litellm`)
-- [ ] T011 `sesh init` in `crates/sesh-cli/src/init.rs` per contracts/cli.md: create `$SESH_DATA_DIR` (default `~/.local/share/sesh`), write or update `sesh.toml` from flags, generate secrets, set `WEBUI_ADMIN_EMAIL`, render `litellm.yaml`; idempotent; tests with a temp dir
+- [X] T004 [P] Unit tests, then the config model in `crates/sesh-cli/src/config.rs` per data-model.md `Config.inference.base_url`, `Config.inference.api_key_env`, `Config.inference.timeout_secs`, `Config.aliases.<alias>`, `Config.ports.webui`, `Config.ports.router` (serde `deny_unknown_fields`; load and save `sesh.toml`; `agent-main` required)
+- [X] T005 [P] Unit tests, then secrets handling in `crates/sesh-cli/src/secrets.rs` per data-model.md Secrets: generate missing values with `getrandom` (32 bytes, URL-safe base64), write `secrets.env` with mode 0600 and dir 0700, never print values; the `Debug` impl redacts
+- [X] T006 [P] Unit tests, then the pure router-config renderer in `crates/sesh-cli/src/render.rs` per data-model.md Rendered router config and contracts/config.md `litellm.yaml` (one entry per alias, `openai/<model>`, no wildcards, telemetry off)
+- [X] T007 [P] Seam `crates/sesh-cli/src/host/compose.rs`: a trait plus the only implementation running `docker compose` (up, down, ps as JSON with publishers and health, exec), and a fake in `crates/sesh-cli/src/host/fake.rs` for tests
+- [X] T008 [P] Seam `crates/sesh-cli/src/host/http.rs`: trait + `ureq` implementation for JSON GET/POST with bearer key and timeout, plus a fake
+- [X] T009 [P] Stub server in `crates/sesh-stub-llm/src/main.rs` per research.md R6 (`/v1/models` lists `stub-model` and `stub-raw-2`; chat replies "stub reply", SSE when `stream: true`; with tools, a call to the first tool), with unit tests; `deploy/stub.Dockerfile` builds it
+- [X] T010 Compose files per contracts/stack.md: `deploy/compose.yaml` (postgres, redis, litellm, open-webui; loopback-only published ports from `${SESH_WEBUI_PORT}` and `${SESH_ROUTER_PORT}`; `env_file: ${SESH_DATA_DIR}/secrets.env`; LiteLLM mounts `${SESH_DATA_DIR}/litellm.yaml`; health checks; named volumes), `deploy/compose.stub.yaml` (adds `stub-llm`), `deploy/postgres/init.sql` (databases `openwebui`, `litellm`)
+- [X] T011 `sesh init` in `crates/sesh-cli/src/init.rs` per contracts/cli.md: create `$SESH_DATA_DIR` (default `~/.local/share/sesh`), write or update `sesh.toml` from flags, generate secrets, set `WEBUI_ADMIN_EMAIL`, render `litellm.yaml`; idempotent; tests with a temp dir
 
 **Checkpoint**: config, secrets, rendering, seams, stub and Compose files exist and are unit-tested.
 
@@ -53,7 +53,7 @@ are written failing before the stack work they check.
 
 - [ ] T012 [US1] Stack test harness in `crates/sesh-cli/tests/stack.rs` (`#[ignore]`): temp `SESH_DATA_DIR`, `sesh init`, `sesh up --stub`, teardown with `sesh down` and volume removal; first tests: Open WebUI health, admin sign-in via its API with the generated password, one chat to `agent-main` returns "stub reply" — written before T013 and seen failing
 - [ ] T013 [US1] Negative stack test in `crates/sesh-cli/tests/stack.rs`: every published port of every service is bound to 127.0.0.1 (from `docker compose ps`), and connecting to the host's non-loopback address on those ports fails
-- [ ] T014 [US1] `sesh up` / `sesh down` in `crates/sesh-cli/src/up.rs` per contracts/cli.md: re-render config, start postgres, redis, litellm, wait for health, start open-webui, wait for health; `--stub` points the inference setting at `http://stub-llm:8000/v1` with alias `agent-main = stub-model`
+- [X] T014 [US1] `sesh up` / `sesh down` in `crates/sesh-cli/src/up.rs` per contracts/cli.md: re-render config, start postgres, redis, litellm, wait for health, start open-webui, wait for health; `--stub` points the inference setting at `http://stub-llm:8000/v1` with alias `agent-main = stub-model`
 - [ ] T015 [US1] Stack test: with the stub stopped, a chat returns an error promptly and works again after restarting the stub, in `crates/sesh-cli/tests/stack.rs`
 
 **Checkpoint**: chat works end to end against the stub; ports are loopback-only.
@@ -79,7 +79,7 @@ are written failing before the stack work they check.
 
 - [ ] T018 [US3] Negative stack tests in `crates/sesh-cli/tests/stack.rs`: with Open WebUI's router key, `stub-raw-2` and `openai/stub-model` are refused; with no key, 401; switching `agent-main` to `stub-raw-2` via `sesh init --model stub-raw-2` and `sesh up` changes only `litellm.yaml` and restarts only `litellm`
 - [ ] T019 [US3] Restricted client key in `crates/sesh-cli/src/up.rs`: on first run, create a LiteLLM virtual key limited to the configured aliases using the master key, store it as `WEBUI_ROUTER_KEY` in `secrets.env` (data-model.md Secrets), pass it to Open WebUI; if T018 shows `openai/<model>` still accepted, record that in `specs/001-foundation/research.md` R2 and keep the test as a documented known risk
-- [ ] T020 [US3] `sesh up` restarts only the services whose config changed (rendered `litellm.yaml` hash) in `crates/sesh-cli/src/up.rs`
+- [X] T020 [US3] `sesh up` restarts only the services whose config changed (rendered `litellm.yaml` hash) in `crates/sesh-cli/src/up.rs`
 
 ---
 
@@ -89,8 +89,8 @@ are written failing before the stack work they check.
 
 **Independent Test**: spec.md US4.
 
-- [ ] T021 [P] [US4] Seam `crates/sesh-cli/src/host/tailscale.rs`: trait + implementation of `tailscale serve status --json`, returning whether the Open WebUI port is served; fake for tests
-- [ ] T022 [US4] Unit tests with fakes, then `crates/sesh-cli/src/doctor.rs` per contracts/cli.md checks and data-model.md Doctor check (`Doctor check.id`, `Doctor check.status`, `Doctor check.detail`, `Doctor check.fix`): `alias-answers`, `alias-tools`, `ports-loopback`, `services-healthy`, `tailscale-serve` (warn only); text and `--json` output; exit codes
+- [X] T021 [P] [US4] Seam `crates/sesh-cli/src/host/tailscale.rs`: trait + implementation of `tailscale serve status --json`, returning whether the Open WebUI port is served; fake for tests
+- [X] T022 [US4] Unit tests with fakes, then `crates/sesh-cli/src/doctor.rs` per contracts/cli.md checks and data-model.md Doctor check (`Doctor check.id`, `Doctor check.status`, `Doctor check.detail`, `Doctor check.fix`): `alias-answers`, `alias-tools`, `ports-loopback`, `services-healthy`, `tailscale-serve` (warn only); text and `--json` output; exit codes
 - [ ] T023 [US4] Stack tests in `crates/sesh-cli/tests/stack.rs`: healthy stack → exit 0; stub stopped → `alias-answers` fails; a port overridden to `0.0.0.0` → `ports-loopback` fails naming the service; stub run with tool calls disabled (`STUB_TOOLS=off`) → `alias-tools` fails; completes in under 30 s (SC-005)
 
 ---
@@ -101,14 +101,14 @@ are written failing before the stack work they check.
 
 **Independent Test**: spec.md US5.
 
-- [ ] T024 [US5] `.github/workflows/ci.yml`: job `check` (`make check`) and job `stack` (build the stub image, `make stack-test`, upload `docker compose logs` on failure); remove `.github/workflows/docs.yml`, now covered by `make check`
+- [X] T024 [US5] `.github/workflows/ci.yml`: job `check` (`make check`) and job `stack` (build the stub image, `make stack-test`, upload `docker compose logs` on failure); remove `.github/workflows/docs.yml`, now covered by `make check`
 - [ ] T025 [US5] Pin images by digest in `deploy/compose.yaml` once CI resolves them, and record the digests in `specs/001-foundation/contracts/stack.md`
 
 ---
 
 ## Phase 8: Polish
 
-- [ ] T026 [P] Update `README.md` (getting started with the stub, `sesh init/up/doctor`) and `AGENTS.md` (commands now defined: `make check`, `make stack-test`)
+- [X] T026 [P] Update `README.md` (getting started with the stub, `sesh init/up/doctor`) and `AGENTS.md` (commands now defined: `make check`, `make stack-test`)
 - [ ] T027 [P] Add a Tailscale exposure note and the inference-switching steps to `specs/001-foundation/quickstart.md` as validated
 - [ ] T028 Run `specs/001-foundation/quickstart.md` "Without a real model" end to end in CI and record SC-002, SC-003, SC-005, SC-006 results in `specs/001-foundation/research.md`
 
