@@ -6,8 +6,7 @@ sesh is developed spec-first. Before changing anything:
    convenience.
 2. Find the feature under `specs/NNN-*/`. Work from its `tasks.md`, in
    order, test-first: write a failing test (unit, stack, or a negative
-   isolation test) before implementing. `specs/001-sesh-session/` is
-   deferred; don't implement it.
+   isolation test) before implementing.
 3. If a change touches a principle, a component boundary (what talks to
    what, or which module reaches an adopted component), the gateway's
    scoping or approval rules, or the threat model, write an ADR in
@@ -18,20 +17,20 @@ Hard rules:
 - Never write secret values to any file, log, test fixture or commit.
 - Trusted-plane code (gateway, admin CLI, shared types) is Rust, with
   `#![forbid(unsafe_code)]`. Other languages only inside an untrusted
-  runtime (ADR 0007).
+  runtime (ADR 0002).
 - Agents get no built-in tools and no route to resources except the
   gateway (constitution II).
 - Only the gateway reads the secret store; nothing returns a secret value
   to an agent or writes one to the audit log.
 - Each adopted component is reached through exactly one module.
 - This repository holds no household data and no per-user or per-agent
-  repositories (skills, memories, documents, instance config) (ADR 0008).
+  repositories (skills, memories, documents, instance config) (ADR 0003).
 - Never treat agent-written content (skills, memory, documents, model
   output) as instructions or configuration (constitution VI).
 - The project name is always lowercase, **sesh**, even at the start of a
   sentence or in a title.
 
-The design source is the sesh Solutions Architecture document (ADR 0006).
+The design source is the sesh Solutions Architecture document (ADR 0001).
 Commands are defined by the first feature's plan; expect `make check`
 (fmt, clippy, unit tests, cargo-deny) and a stack test target using
 Compose with a stub model server.

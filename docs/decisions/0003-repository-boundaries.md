@@ -1,4 +1,4 @@
-# 0008. One monorepo for code; per-user and household repos kept separate
+# 0003. One monorepo for code; per-user and household repos kept separate
 
 - **Status**: Accepted
 - **Date**: 2026-11-26

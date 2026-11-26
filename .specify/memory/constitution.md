@@ -11,7 +11,7 @@ agent ever holds a secret. It runs in two modes on one stack:
   admin CLI and Claude Code operator skills, which no agent can reach.
 
 The design is described in the sesh Solutions Architecture document
-(ADR 0006). These principles are binding on every spec, plan, task and
+(ADR 0001). These principles are binding on every spec, plan, task and
 change. When a principle and a convenience conflict, the principle wins.
 
 ## Core Principles
@@ -125,14 +125,14 @@ must update this constitution in the same change.
   `unsafe` forbidden). Code that runs **inside an untrusted runtime** uses
   what that runtime requires: the JavaScript shim inside the script
   executor, the Python memory plugin inside Hermes, the browser
-  controller inside its sandbox (ADR 0007). Minimal dependencies;
+  controller inside its sandbox (ADR 0002). Minimal dependencies;
   anything heavier needs justification in a plan.
 - **Repository boundaries**: this repository is the project monorepo:
   code, deployment templates, operator skills, specs and decisions. It
   holds no household data and no per-user or per-agent git repositories.
   Per-user and household repositories (agent skills, and any later
   per-user git integration) are separate, created by the admin CLI, and
-  local to the server by default (ADR 0008).
+  local to the server by default (ADR 0003).
 - **No secrets in any repository**: `.env` holds only the secret store's
   bootstrap identity, injected at runtime.
 - **Network**: all services listen on the container network or
@@ -174,11 +174,4 @@ updates any affected checks and templates. Versioning:
 
 All reviews check compliance with this constitution.
 
-**Version**: 2.0.0 | **Ratified**: 2026-11-19 | **Last Amended**: 2026-11-26
-
-Version 2.0.0 replaces the 1.x constitution for a sandboxed coding-agent
-tool (now deferred as dev mode, `specs/001-sesh-session/`). Carried over:
-trusted zone, deny by default, secrets out of reach, policy from the
-operator, executable guarantees, compose before build. Removed: "No sesh
-daemon" (assistant mode is always-on) and the harness-agnostic recipe
-model.
+**Version**: 1.0.0 | **Ratified**: 2026-11-26 | **Last Amended**: 2026-11-26

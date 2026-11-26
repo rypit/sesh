@@ -34,15 +34,14 @@ The [constitution](.specify/memory/constitution.md) is binding. In short:
 
 **Planning.** No code yet. The design is in the sesh Solutions
 Architecture document; decisions are in [`docs/decisions/`](docs/decisions/)
-(start with 0006–0008). The build follows the architecture's seven phases,
-each a feature under `specs/`. `specs/001-sesh-session/` is an earlier,
-now deferred, design for a sandboxed coding-agent "dev mode".
+and reference notes in [`docs/research/`](docs/research/). The build
+follows the architecture's seven phases, each a feature under `specs/`.
 
 ## Repository
 
 This repo is the project monorepo (code, deployment, operator skills,
 specs). It never holds household data or per-user repositories, such as
-agents' skills repos; those live on the server (ADR 0008).
+agents' skills repos; those live on the server (ADR 0003).
 
 ## Development
 
