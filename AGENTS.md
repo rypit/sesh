@@ -31,6 +31,10 @@ Hard rules:
   sentence or in a title.
 
 The design source is the sesh Solutions Architecture document (ADR 0001).
+If a change adds, removes or renames a component, or changes what talks
+to what, update the architecture diagram in the same change: follow
+`docs/architecture/README.md` (the document's widget, `diagram.jsx` and
+`docs/architecture.svg` stay identical).
 Commands are defined by the first feature's plan; expect `make check`
 (fmt, clippy, unit tests, cargo-deny) and a stack test target using
 Compose with a stub model server.

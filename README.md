@@ -18,6 +18,17 @@ anything with side effects waits for a person's yes.
 - **Local-first**: models run on the home server (oMLX on Apple
   Silicon); household data stays there.
 
+## Architecture
+
+<p align="center">
+  <img src="docs/architecture.svg" alt="sesh architecture: household users reach Hermes agents through Open WebUI or Telegram; agents reach Google, search, weather and maps, Paperless-ngx, a sandboxed browser and Mem0 only through the Code Mode gateway, which uses Infisical for secrets, an append-only audit log, and ntfy for approvals; inference runs on oMLX" width="760">
+</p>
+
+Agents are untrusted; the gateway is their only way out. Approvals and
+one-time links go from the gateway to people through ntfy, never through
+an agent. The diagram is generated from the Solutions Architecture
+document; see [`docs/architecture/`](docs/architecture/) to update it.
+
 ## Guarantees
 
 The [constitution](.specify/memory/constitution.md) is binding. In short:
