@@ -102,7 +102,9 @@ maintenance bill.
 ### IX. Swappable inference
 
 Clients call model aliases (e.g. `agent-main`), never engines, so the
-engine behind an alias can change without client changes.
+engine behind an alias can change without client changes. sesh works with
+any inference server that speaks the OpenAI-compatible API and depends on
+no particular engine (ADR 0005).
 
 *Rationale*: local models and engines change faster than the platform.
 
@@ -117,11 +119,12 @@ must update this constitution in the same change.
 
 ## Additional Constraints
 
-- **Platform**: the server is a Mac on Apple Silicon (built on an M5 Max
-  MacBook Pro; long-term on a Mac mini or Studio, 64 GB target, peak
-  about 45–50 GB). Only the inference engine runs on bare metal (Metal);
-  everything else runs in containers, and work that touches untrusted
-  web content runs in sbx microVMs.
+- **Platform**: the reference server is a Mac on Apple Silicon (built on
+  an M5 Max MacBook Pro; long-term on a Mac mini or Studio, 64 GB target,
+  peak about 45–50 GB). The inference server is the operator's choice and
+  may run on bare metal when it needs the GPU; everything sesh runs is in
+  containers, and work that touches untrusted web content runs in sbx
+  microVMs.
 - **Languages**: code sesh writes for the **trusted plane** (the gateway,
   the admin CLI, shared types) is **Rust** (stable, toolchain pinned,
   `unsafe` forbidden). Code that runs **inside an untrusted runtime** uses
@@ -156,11 +159,11 @@ must update this constitution in the same change.
 - Three test tiers:
   - **unit**: hermetic, with each adopted component faked at its module.
     Runs in CI.
-  - **stack**: the Compose stack with a stub model server in place of the
-    inference engine; runs the isolation and approval negative tests.
-    Runs in CI where containers are available.
-  - **reference**: on the reference Mac, for what needs Metal or sbx
-    (model quality, browser sessions).
+  - **stack**: the Compose stack with a stub or small CPU model server in
+    place of a real inference server; runs the isolation and approval
+    negative tests. Runs in CI where containers are available.
+  - **reference**: on the reference Mac, for what needs a real model or
+    sbx (model quality, browser sessions).
 - Decisions that change a principle, a component boundary, or the threat
   model are recorded as ADRs in `docs/decisions/`.
 
@@ -177,4 +180,4 @@ updates any affected checks and templates. Versioning:
 
 All reviews check compliance with this constitution.
 
-**Version**: 1.1.0 | **Ratified**: 2026-11-26 | **Last Amended**: 2026-11-26
+**Version**: 1.2.0 | **Ratified**: 2026-11-26 | **Last Amended**: 2026-11-26

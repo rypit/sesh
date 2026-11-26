@@ -26,7 +26,8 @@ sesh is the platform that document describes:
   (ADR 0004).
 - **Resources** behind the gateway: Google (OAuth), Mem0, Paperless-ngx,
   SearXNG, Kiwix, weather and maps, and a browser in sbx microVMs.
-- **Inference**: oMLX on bare metal behind model aliases; no cloud models.
+- **Inference**: any OpenAI-compatible server the operator runs on the
+  home network, behind model aliases; no cloud models (ADR 0005).
 - **Operator mode**: the sesh admin CLI and Claude Code operator skills.
 - Built in the document's seven phases, one Spec Kit feature each.
 
