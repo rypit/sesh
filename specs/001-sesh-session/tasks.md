@@ -2,6 +2,12 @@
 description: "Task list for feature 001: sandboxed agent sessions for any terminal harness"
 ---
 
+> **Deferred (dev mode).** Since constitution 2.0.0 and ADR 0006, sesh is
+> a household agent platform; this feature, a sandbox for terminal coding
+> agents, is parked as a possible later "dev mode". It is kept for
+> reference and is not being implemented. Its sbx research (research.md)
+> still informs the browser phase.
+
 # Tasks: Sandboxed agent sessions for any terminal harness
 
 **Input**: Design documents from `specs/001-sesh-session/`: plan.md,

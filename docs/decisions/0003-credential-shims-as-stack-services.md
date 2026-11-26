@@ -1,6 +1,6 @@
 # 0003. Credential shims are launchd stack services in a separate binary
 
-- **Status**: Accepted
+- **Status**: Superseded by ADR 0006 (the gateway attaches all credentials)
 - **Date**: 2026-11-19
 - **Amends**: ADR 0002 (one binary → two)
 

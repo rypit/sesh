@@ -1,10 +1,16 @@
+> **Deferred (dev mode).** Since constitution 2.0.0 and ADR 0006, sesh is
+> a household agent platform; this feature, a sandbox for terminal coding
+> agents, is parked as a possible later "dev mode". It is kept for
+> reference and is not being implemented. Its sbx research (research.md)
+> still informs the browser phase.
+
 # Feature Specification: Sandboxed agent sessions for any terminal harness
 
 **Feature Branch**: `001-sesh-session`
 
 **Created**: 2026-11-19 (rewritten 2026-11-19)
 
-**Status**: Draft
+**Status**: Deferred
 
 **Input**: User description: "An easy way to sandbox agents. A dev tool
 that makes running any terminal coding agent as easy and ergonomic as

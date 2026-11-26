@@ -1,6 +1,6 @@
 # 0004. Harness-agnostic recipes and user-declared endpoints
 
-- **Status**: Accepted
+- **Status**: Superseded by ADR 0006 (kept for deferred dev mode)
 - **Date**: 2026-11-19
 - **Supersedes**: research.md R3–R7 (Splash, oMLX, pi as the harness,
   SearXNG on the host, the container runtime for host services) and the

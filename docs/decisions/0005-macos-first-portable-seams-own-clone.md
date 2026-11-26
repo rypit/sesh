@@ -1,6 +1,6 @@
 # 0005. macOS first with portable seams; sesh's own clone over `sbx --clone`
 
-- **Status**: Accepted
+- **Status**: Accepted for deferred dev mode only (ADR 0006)
 - **Date**: 2026-11-20
 - **Amends**: ADR 0003 (service manager naming), ADR 0004 (seam names);
   constitution 1.2.0 (Platform, No sesh daemon, Principle III wording)

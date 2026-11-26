@@ -1,6 +1,6 @@
 # 0001. sbx microVM sandbox with an isolated workspace
 
-- **Status**: Accepted
+- **Status**: Accepted; scope narrowed by ADR 0006 (sbx for browser sessions; isolated workspace for deferred dev mode only)
 - **Date**: 2026-11-19
 
 ## Context

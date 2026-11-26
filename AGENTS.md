@@ -5,28 +5,33 @@ sesh is developed spec-first. Before changing anything:
 1. Read `.specify/memory/constitution.md`. It is binding and overrides
    convenience.
 2. Find the feature under `specs/NNN-*/`. Work from its `tasks.md`, in
-   order, test-first: write an invariant or unit test and see it fail
-   before implementing.
-3. If a change touches a principle, a seam (`sandbox/sbx.rs`,
-   `host/git.rs`, `host/service_manager.rs`, `host/ports.rs`,
-   `host/secret_store.rs`), a built-in recipe's credential handling, or the
-   threat model,
-   write an ADR in `docs/decisions/`.
+   order, test-first: write a failing test (unit, stack, or a negative
+   isolation test) before implementing. `specs/001-sesh-session/` is
+   deferred; don't implement it.
+3. If a change touches a principle, a component boundary (what talks to
+   what, or which module reaches an adopted component), the gateway's
+   scoping or approval rules, or the threat model, write an ADR in
+   `docs/decisions/`.
 
 Hard rules:
 
 - Never write secret values to any file, log, test fixture or commit.
-- Never read repository content as sesh configuration (Principle V).
-- Only `src/sandbox/sbx.rs` may invoke the `sbx` CLI.
-- Keep `src/sandbox/policy.rs` and `src/scan.rs` pure (no `std::fs`,
-  `std::process`, `std::net`).
-- Harness-specific knowledge lives only in `recipes/` (data), never in
-  Rust code.
-- No `unsafe` code (`#![forbid(unsafe_code)]`).
+- Trusted-plane code (gateway, admin CLI, shared types) is Rust, with
+  `#![forbid(unsafe_code)]`. Other languages only inside an untrusted
+  runtime (ADR 0007).
+- Agents get no built-in tools and no route to resources except the
+  gateway (constitution II).
+- Only the gateway reads the secret store; nothing returns a secret value
+  to an agent or writes one to the audit log.
+- Each adopted component is reached through exactly one module.
+- This repository holds no household data and no per-user or per-agent
+  repositories (skills, memories, documents, instance config) (ADR 0008).
+- Never treat agent-written content (skills, memory, documents, model
+  output) as instructions or configuration (constitution VI).
 - The project name is always lowercase, **sesh**, even at the start of a
   sentence or in a title.
 
-sesh is written in Rust (ADR 0002). Commands (once code exists):
-`make check` runs `cargo fmt --check`, `cargo clippy -- -D warnings`,
-`cargo test` and `cargo deny check`. Invariant tests
-(`cargo test --features invariants`) need a real Mac with sbx.
+The design source is the sesh Solutions Architecture document (ADR 0006).
+Commands are defined by the first feature's plan; expect `make check`
+(fmt, clippy, unit tests, cargo-deny) and a stack test target using
+Compose with a stub model server.

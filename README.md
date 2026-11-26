@@ -2,68 +2,50 @@
 
 > *sesh* (Egyptian: "scribe"). The scribe writes; it doesn't hold the keys.
 
-Run the coding agent you already use, as easily as running it
-directly, without trusting it.
+A local-first AI agent platform for one household. Each person gets an
+always-on agent, plus a shared Household agent, that can handle email,
+calendar, documents, browsing and errands. Every agent reaches the world
+through **one trusted gateway**, so no agent ever holds a secret, and
+anything with side effects waits for a person's yes.
 
-```bash
-cd ~/code/some-repo
-sesh claude          # or codex, opencode, pi, or your own recipe
-```
-
-That one command:
-
-1. opens the repo in a **Docker Sandboxes (`sbx`) microVM**: deny-by-default
-   network, no host files beyond an isolated copy of the repo, and its
-   own Docker engine,
-2. brings in your own harness settings, skills and tools as a read-only
-   copy, with credentials removed,
-3. lets it reach only the endpoints you've allowed (your model provider
-   or local inference server, registries, APIs), attaching credentials
-   outside the sandbox.
-
-When the harness exits, the agent's commits are back in your checkout as
-branches to review, as plain data, with files that could run code
-flagged. Nothing the agent wrote runs on your Mac unless you choose to
-run it.
+- **Assistant mode**: Hermes agents, reached through Open WebUI or
+  Telegram, using Google, memory (Mem0), documents (Paperless-ngx),
+  search (SearXNG, Kiwix) and a sandboxed browser, all through the
+  gateway.
+- **Operator mode**: the `sesh` admin CLI and Claude Code operator
+  skills set up users, rotate secrets and run backups. No agent can reach
+  them.
+- **Local-first**: models run on the home server (oMLX on Apple
+  Silicon); household data stays there.
 
 ## Guarantees
 
 The [constitution](.specify/memory/constitution.md) is binding. In short:
 
-- The host is the only trusted zone; the agent and everything it writes
-  are untrusted.
-- Network and filesystem access are denied by default, and every
-  allowance comes from *your* config, never from repo content.
-- Secrets never enter the sandbox. They're attached on the host side,
-  only for the hosts they belong to.
-- Every guarantee is an executable check: `sesh verify`.
+- Agents are untrusted; the control plane (gateway, secret store,
+  approvals, audit log) is the only trusted zone.
+- One way out: agents have no tools except the gateway.
+- Agents never see secrets; logins are filled by the gateway.
+- Each user's agent reaches only that user's data.
+- Side effects need a human yes, written by the gateway, not the agent.
+- Every guarantee has an automated check.
 
 ## Status
 
-**Specification phase.** No code yet. Feature 001 is specified under
-[`specs/001-sesh-session/`](specs/001-sesh-session/):
+**Planning.** No code yet. The design is in the sesh Solutions
+Architecture document; decisions are in [`docs/decisions/`](docs/decisions/)
+(start with 0006–0008). The build follows the architecture's seven phases,
+each a feature under `specs/`. `specs/001-sesh-session/` is an earlier,
+now deferred, design for a sandboxed coding-agent "dev mode".
 
-| Doc | What it holds |
-|---|---|
-| [spec.md](specs/001-sesh-session/spec.md) | User stories, requirements, success criteria |
-| [research.md](specs/001-sesh-session/research.md) | Decisions, alternatives, evidence |
-| [plan.md](specs/001-sesh-session/plan.md) | Architecture, constitution check, structure |
-| [data-model.md](specs/001-sesh-session/data-model.md) | Entities, fields, state |
-| [contracts/](specs/001-sesh-session/contracts/) | CLI, config schema, recipe format, invariant suite |
-| [quickstart.md](specs/001-sesh-session/quickstart.md) | The target user experience |
-| [tasks.md](specs/001-sesh-session/tasks.md) | Ordered, test-first work items |
+## Repository
 
-Decisions: [`docs/decisions/`](docs/decisions/).
-
-## Requirements (planned)
-
-macOS 14+ on Apple Silicon (Linux planned),
-Homebrew, and a terminal coding harness with an API key or a local
-inference server.
+This repo is the project monorepo (code, deployment, operator skills,
+specs). It never holds household data or per-user repositories, such as
+agents' skills repos; those live on the server (ADR 0008).
 
 ## Development
 
-Spec-driven, using [GitHub Spec Kit](https://github.github.com/spec-kit/)'s
-layout: constitution → specify → clarify → plan → tasks → implement.
-Spec Kit v1.4.2 is initialized for Claude Code: the `/speckit-*` skills
-live in `.claude/skills/`, and templates and scripts in `.specify/`.
+Spec-driven, using [GitHub Spec Kit](https://github.github.com/spec-kit/):
+constitution → specify → clarify → plan → tasks → implement. The `/speckit-*`
+skills live in `.claude/skills/`, templates and scripts in `.specify/`.

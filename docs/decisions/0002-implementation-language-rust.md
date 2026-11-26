@@ -1,6 +1,6 @@
 # 0002. Implementation language: Rust
 
-- **Status**: Accepted
+- **Status**: Accepted; amended by ADR 0007 (Rust for the trusted plane)
 - **Date**: 2026-11-19
 - **Supersedes**: the Python 3.12 / `uv tool` choice in the constitution
   1.0.0 and research.md R8
