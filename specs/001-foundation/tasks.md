@@ -51,10 +51,10 @@ are written failing before the stack work they check.
 
 **Independent Test**: spec.md US1.
 
-- [ ] T012 [US1] Stack test harness in `crates/sesh-cli/tests/stack.rs` (`#[ignore]`): temp `SESH_DATA_DIR`, `sesh init`, `sesh up --stub`, teardown with `sesh down` and volume removal; first tests: Open WebUI health, admin sign-in via its API with the generated password, one chat to `agent-main` returns "stub reply" — written before T013 and seen failing
-- [ ] T013 [US1] Negative stack test in `crates/sesh-cli/tests/stack.rs`: every published port of every service is bound to 127.0.0.1 (from `docker compose ps`), and connecting to the host's non-loopback address on those ports fails
+- [X] T012 [US1] Stack test harness in `crates/sesh-cli/tests/stack.rs` (`#[ignore]`): temp `SESH_DATA_DIR`, `sesh init`, `sesh up --stub`, teardown with `sesh down` and volume removal; first tests: Open WebUI health, admin sign-in via its API with the generated password, one chat to `agent-main` returns "stub reply" — written before T013 and seen failing
+- [X] T013 [US1] Negative stack test in `crates/sesh-cli/tests/stack.rs`: every published port of every service is bound to 127.0.0.1 (from `docker compose ps`), and connecting to the host's non-loopback address on those ports fails
 - [X] T014 [US1] `sesh up` / `sesh down` in `crates/sesh-cli/src/up.rs` per contracts/cli.md: re-render config, start postgres, redis, litellm, wait for health, start open-webui, wait for health; `--stub` points the inference setting at `http://stub-llm:8000/v1` with alias `agent-main = stub-model`
-- [ ] T015 [US1] Stack test: with the stub stopped, a chat returns an error promptly and works again after restarting the stub, in `crates/sesh-cli/tests/stack.rs`
+- [X] T015 [US1] Stack test: with the stub stopped, a chat returns an error promptly and works again after restarting the stub, in `crates/sesh-cli/tests/stack.rs`
 
 **Checkpoint**: chat works end to end against the stub; ports are loopback-only.
 
@@ -66,8 +66,8 @@ are written failing before the stack work they check.
 
 **Independent Test**: spec.md US2.
 
-- [ ] T016 [US2] Negative stack tests in `crates/sesh-cli/tests/stack.rs`: the admin creates a non-admin user; that user's model list is exactly `["agent-main"]`; the user creates a chat; the admin's API request for that chat is refused; memory endpoints are disabled — written first, seen failing
-- [ ] T017 [US2] Open WebUI environment in `deploy/compose.yaml` per research.md R1 and contracts/stack.md (persistent config off, memories off, admin chat access off, sign-up off, task model, Ollama off, Postgres, Redis, offline and telemetry settings, `BYPASS_MODEL_ACCESS_CONTROL=True`) until T016 passes
+- [X] T016 [US2] Negative stack tests in `crates/sesh-cli/tests/stack.rs`: the admin creates a non-admin user; that user's model list is exactly `["agent-main"]`; the user creates a chat; the admin's API request for that chat is refused; memory endpoints are disabled — written first, seen failing
+- [X] T017 [US2] Open WebUI environment in `deploy/compose.yaml` per research.md R1 and contracts/stack.md (persistent config off, memories off, admin chat access off, sign-up off, task model, Ollama off, Postgres, Redis, offline and telemetry settings, `BYPASS_MODEL_ACCESS_CONTROL=True`) until T016 passes
 
 ---
 
@@ -77,8 +77,8 @@ are written failing before the stack work they check.
 
 **Independent Test**: spec.md US3.
 
-- [ ] T018 [US3] Negative stack tests in `crates/sesh-cli/tests/stack.rs`: with Open WebUI's router key, `stub-raw-2` and `openai/stub-model` are refused; with no key, 401; switching `agent-main` to `stub-raw-2` via `sesh init --model stub-raw-2` and `sesh up` changes only `litellm.yaml` and restarts only `litellm`
-- [ ] T019 [US3] Restricted client key in `crates/sesh-cli/src/up.rs`: on first run, create a LiteLLM virtual key limited to the configured aliases using the master key, store it as `WEBUI_ROUTER_KEY` in `secrets.env` (data-model.md Secrets), pass it to Open WebUI; if T018 shows `openai/<model>` still accepted, record that in `specs/001-foundation/research.md` R2 and keep the test as a documented known risk
+- [X] T018 [US3] Negative stack tests in `crates/sesh-cli/tests/stack.rs`: with Open WebUI's router key, `stub-raw-2` and `openai/stub-model` are refused; with no key, 401; switching `agent-main` to `stub-raw-2` via `sesh init --model stub-raw-2` and `sesh up` changes only `litellm.yaml` and restarts only `litellm`
+- [X] T019 [US3] Restricted client key in `crates/sesh-cli/src/up.rs`: on first run, create a LiteLLM virtual key limited to the configured aliases using the master key, store it as `WEBUI_ROUTER_KEY` in `secrets.env` (data-model.md Secrets), pass it to Open WebUI; if T018 shows `openai/<model>` still accepted, record that in `specs/001-foundation/research.md` R2 and keep the test as a documented known risk
 - [X] T020 [US3] `sesh up` restarts only the services whose config changed (rendered `litellm.yaml` hash) in `crates/sesh-cli/src/up.rs`
 
 ---
@@ -91,7 +91,7 @@ are written failing before the stack work they check.
 
 - [X] T021 [P] [US4] Seam `crates/sesh-cli/src/host/tailscale.rs`: trait + implementation of `tailscale serve status --json`, returning whether the Open WebUI port is served; fake for tests
 - [X] T022 [US4] Unit tests with fakes, then `crates/sesh-cli/src/doctor.rs` per contracts/cli.md checks and data-model.md Doctor check (`Doctor check.id`, `Doctor check.status`, `Doctor check.detail`, `Doctor check.fix`): `alias-answers`, `alias-tools`, `ports-loopback`, `services-healthy`, `tailscale-serve` (warn only); text and `--json` output; exit codes
-- [ ] T023 [US4] Stack tests in `crates/sesh-cli/tests/stack.rs`: healthy stack → exit 0; stub stopped → `alias-answers` fails; a port overridden to `0.0.0.0` → `ports-loopback` fails naming the service; stub run with tool calls disabled (`STUB_TOOLS=off`) → `alias-tools` fails; completes in under 30 s (SC-005)
+- [X] T023 [US4] Stack tests in `crates/sesh-cli/tests/stack.rs`: healthy stack → exit 0; stub stopped → `alias-answers` fails; a port overridden to `0.0.0.0` → `ports-loopback` fails naming the service; stub run with tool calls disabled (`STUB_TOOLS=off`) → `alias-tools` fails; completes in under 30 s (SC-005)
 
 ---
 
@@ -102,15 +102,15 @@ are written failing before the stack work they check.
 **Independent Test**: spec.md US5.
 
 - [X] T024 [US5] `.github/workflows/ci.yml`: job `check` (`make check`) and job `stack` (build the stub image, `make stack-test`, upload `docker compose logs` on failure); remove `.github/workflows/docs.yml`, now covered by `make check`
-- [ ] T025 [US5] Pin images by digest in `deploy/compose.yaml` once CI resolves them, and record the digests in `specs/001-foundation/contracts/stack.md`
+- [X] T025 [US5] Pin images by digest in `deploy/compose.yaml` once CI resolves them, and record the digests in `specs/001-foundation/contracts/stack.md`
 
 ---
 
 ## Phase 8: Polish
 
 - [X] T026 [P] Update `README.md` (getting started with the stub, `sesh init/up/doctor`) and `AGENTS.md` (commands now defined: `make check`, `make stack-test`)
-- [ ] T027 [P] Add a Tailscale exposure note and the inference-switching steps to `specs/001-foundation/quickstart.md` as validated
-- [ ] T028 Run `specs/001-foundation/quickstart.md` "Without a real model" end to end in CI and record SC-002, SC-003, SC-005, SC-006 results in `specs/001-foundation/research.md`
+- [X] T027 [P] Add a Tailscale exposure note and the inference-switching steps to `specs/001-foundation/quickstart.md` as validated
+- [X] T028 Run `specs/001-foundation/quickstart.md` "Without a real model" end to end in CI and record SC-002, SC-003, SC-005, SC-006 results in `specs/001-foundation/research.md`
 
 ---
 

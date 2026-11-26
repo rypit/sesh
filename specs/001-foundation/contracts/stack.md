@@ -20,3 +20,12 @@ Open WebUI environment (research.md R1): `ENABLE_PERSISTENT_CONFIG=False`,
 
 Volumes: `postgres-data`, `redis-data`, `open-webui-data`. Network: one
 internal bridge network; only the two published ports reach the host.
+
+Image digests (multi-architecture index, resolved 2026-11-26):
+
+| Image | Digest |
+|---|---|
+| `pgvector/pgvector:0.8.7-pg16` | `sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f` |
+| `redis:7.4-alpine` | `sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe` |
+| `ghcr.io/berriai/litellm:v1.111.0` | `sha256:ce00096d012719d58c52cecfa373f7c6256dd1b0ff08f6fa607e10e9628f1f46` |
+| `ghcr.io/open-webui/open-webui:v0.13.5` | `sha256:e0dc5a8bf5c71cadf339d1e7b9408b357da75fb2854f82cad57a1609fadf2a22` |

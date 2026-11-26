@@ -136,3 +136,31 @@ Docker Hub rate-limits anonymous pulls and the GitHub registry's blob host
 is not reachable from the cloud build environment, so stack tests run in
 GitHub Actions. Images are pinned by tag in this phase; pinning by digest
 is a task once CI can resolve them.
+
+## R9. Results (CI, 2026-11-26)
+
+GitHub Actions run 45872942578 on commit 461e312: `make check` passed in
+42 s; the stack job passed in 6 min 48 s including image pulls, the stack
+test itself in 5 min 38 s (SC-006: under 15 minutes).
+
+The single stack test (`crates/sesh-cli/tests/stack.rs`) verified, against
+the stub model server:
+
+- Open WebUI's `/health` works as its health check (R1).
+- The admin signs in and chats with `agent-main` (US1).
+- Every published port is on loopback and the host's LAN address refuses
+  them (FR-002, SC-002).
+- A non-admin sees exactly `["agent-main"]` (SC-003); the admin can't read
+  the user's chat; the memories API is disabled (FR-005).
+- With Open WebUI's restricted router key, `stub-raw-2` **and
+  `openai/stub-model`** are refused, and no key gets 401 (FR-003). The
+  virtual key closes the gap R2 found with the master key.
+- Switching `agent-main` to another model restarts only `litellm`; Open
+  WebUI's container is unchanged (SC-004).
+- With the stub stopped, chat fails and `sesh doctor` fails
+  `alias-answers`; restarting the stub recovers. With tool calls off,
+  `alias-tools` fails. A port published on `0.0.0.0` fails
+  `ports-loopback`. Doctor ran in under 30 s (SC-005).
+
+Not yet verified: SC-001 (first token within 5 s) needs a real inference
+server; image digests are not pinned yet (T025).

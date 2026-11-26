@@ -5,12 +5,13 @@
 #   SESH_DATA_DIR, SESH_WEBUI_PORT, SESH_ROUTER_PORT, SESH_INFERENCE_API_KEY
 # Each container receives only the variables listed for it.
 # Only open-webui and litellm publish ports, both on loopback.
+# Images are pinned by tag and multi-arch index digest; upgrade deliberately.
 
 name: sesh
 
 services:
   postgres:
-    image: pgvector/pgvector:0.8.7-pg16
+    image: pgvector/pgvector:0.8.7-pg16@sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f
     environment:
       POSTGRES_USER: sesh
       POSTGRES_DB: sesh
@@ -26,7 +27,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7.4-alpine
+    image: redis:7.4-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?run sesh init}
     command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
@@ -40,7 +41,7 @@ services:
     restart: unless-stopped
 
   litellm:
-    image: ghcr.io/berriai/litellm:v1.111.0
+    image: ghcr.io/berriai/litellm:v1.111.0@sha256:ce00096d012719d58c52cecfa373f7c6256dd1b0ff08f6fa607e10e9628f1f46
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?run sesh init}
@@ -65,7 +66,7 @@ services:
     restart: unless-stopped
 
   open-webui:
-    image: ghcr.io/open-webui/open-webui:v0.13.5
+    image: ghcr.io/open-webui/open-webui:v0.13.5@sha256:e0dc5a8bf5c71cadf339d1e7b9408b357da75fb2854f82cad57a1609fadf2a22
     environment:
       # Environment always wins over values stored in Open WebUI's database.
       ENABLE_PERSISTENT_CONFIG: "False"

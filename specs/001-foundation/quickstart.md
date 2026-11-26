@@ -27,6 +27,10 @@ sesh doctor
 tailscale serve --bg 3000
 ```
 
+`tailscale serve` exposes Open WebUI over HTTPS on your tailnet only; the
+stack itself stays on loopback. This step is manual and is not yet
+verified by CI (it needs a real tailnet).
+
 Expect (US1–US4):
 - From your phone on the tailnet, open the Tailscale HTTPS address, sign
   in, chat with `agent-main`.
