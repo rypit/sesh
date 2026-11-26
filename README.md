@@ -48,7 +48,9 @@ The [constitution](.specify/memory/constitution.md) is binding. In short:
 [`specs/001-foundation/`](specs/001-foundation/). The design is in the sesh Solutions
 Architecture document; decisions are in [`docs/decisions/`](docs/decisions/)
 and reference notes in [`docs/research/`](docs/research/). The build
-follows the architecture's seven phases, each a feature under `specs/`.
+follows the architecture's eight phases (foundation, gateway core, model
+evals, one agent, secrets and approvals, memory and documents, browser,
+household), each a feature under `specs/`.
 
 ## Try it
 

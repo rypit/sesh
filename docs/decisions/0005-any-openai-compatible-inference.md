@@ -16,9 +16,10 @@ Paperless-AI, Mem0) should not need changes when it changes.
   with tool calling, and model listing). No component names an engine.
 - Every client calls a **model alias** (`agent-main`, and later others),
   configured once with the inference server's base URL.
-- If the chosen server can't serve the alias names itself, a small
-  router maps them: LiteLLM, already in the design as optional, becomes
-  the standard way to do that, and adds per-agent keys and failover.
+- **LiteLLM is always present** as the alias router, whatever the
+  server: it serves only the aliases, refuses raw model names, and gives
+  each client its own key limited to the aliases it may use (Open WebUI
+  now, each agent later). Clients never get its master key.
 - The inference server stays on the home network (Principle VII). sesh
   assumes no particular server; none is installed or configured by
   default beyond the alias's base URL.
@@ -33,6 +34,10 @@ Paperless-AI, Mem0) should not need changes when it changes.
   sesh cares about already speaks the OpenAI-compatible API.
 
 ## Consequences
+
+- One extra container (about 0.5 GB of memory) and a `litellm` database
+  in the shared Postgres. LiteLLM is a large dependency, pinned by image
+  digest and upgraded deliberately.
 
 - Development and CI use a stub OpenAI-compatible server, or a small
   model on CPU, in the Compose stack; only model-quality checks need a
