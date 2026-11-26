@@ -29,6 +29,10 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - name: Build the stub model server image
         run: docker build -f deploy/stub.Dockerfile -t sesh-stub-llm:dev .
+      - name: Build the gateway image
+        run: docker build -f deploy/gateway.Dockerfile -t sesh-gateway:dev .
+      - name: Build the executor image
+        run: docker build -f deploy/executor.Dockerfile -t sesh-executor:dev .
       - name: Stack tests
         run: make stack-test
       - name: Stack logs

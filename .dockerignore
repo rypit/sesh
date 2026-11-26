@@ -1,0 +1,4 @@
+target/
+.git/
+executor/node_modules/
+executor/dist/

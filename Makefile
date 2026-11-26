@@ -27,7 +27,7 @@ compose-config:
 	mkdir -p target/compose-check
 	touch target/compose-check/litellm.yaml
 	printf '%s\n' POSTGRES_PASSWORD=x REDIS_PASSWORD=x LITELLM_MASTER_KEY=x WEBUI_SECRET_KEY=x \
-	  WEBUI_ADMIN_EMAIL=x WEBUI_ADMIN_PASSWORD=x > target/compose-check/secrets.env
+	  WEBUI_ADMIN_EMAIL=x WEBUI_ADMIN_PASSWORD=x GATEWAY_DB_PASSWORD=x SEARXNG_SECRET=x > target/compose-check/secrets.env
 	SESH_DATA_DIR=$(CURDIR)/target/compose-check SESH_WEBUI_PORT=3000 SESH_ROUTER_PORT=4000 \
 	  docker compose --env-file target/compose-check/secrets.env $(COMPOSE_FILES) config -q
 

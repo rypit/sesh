@@ -77,6 +77,7 @@ pub fn run(
 ) -> Vec<Check> {
     let mut checks = alias_checks(config, secrets, http);
     checks.extend(stack_checks(config, agents, compose));
+    checks.push(gateway_check(http));
     checks.push(audit_check(compose));
     checks.push(match tailscale.serves_port(config.ports.webui) {
         Ok(Some(true)) => Check::pass("tailscale-serve", "Open WebUI is served on the tailnet"),
@@ -235,6 +236,31 @@ fn short(v: &Value) -> String {
     }
 }
 
+/// The gateway answers on loopback and refuses a request without a token.
+fn gateway_check(http: &dyn Http) -> Check {
+    let port = std::env::var("SESH_GATEWAY_PORT").unwrap_or_else(|_| "7000".into());
+    let url = format!("http://127.0.0.1:{port}/mcp");
+    match http.post(&url, None, &serde_json::json!({})) {
+        Ok(r) if r.status == 401 => Check::pass(
+            "gateway-healthy",
+            "the gateway answers and requires a token",
+        ),
+        Ok(r) => Check::fail(
+            "gateway-healthy",
+            format!(
+                "the gateway answered {} to a request without a token",
+                r.status
+            ),
+            "check `docker compose -p sesh logs gateway`",
+        ),
+        Err(e) => Check::fail(
+            "gateway-healthy",
+            format!("can't reach the gateway: {e}"),
+            "run `sesh up`",
+        ),
+    }
+}
+
 /// Warns when an agent had many refusals in the last hour (FR-016).
 fn audit_check(compose: &dyn Compose) -> Check {
     let sql = format!(
@@ -371,7 +397,9 @@ mod tests {
             if method == "GET" {
                 return (200, json!({"data": [{"id": "agent-main"}]}));
             }
-            let _ = url;
+            if url.ends_with("/mcp") {
+                return (401, json!(null));
+            }
             if body.unwrap().get("tools").is_some() && tools {
                 (
                     200,

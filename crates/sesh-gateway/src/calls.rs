@@ -153,11 +153,13 @@ pub mod tests {
     }
 
     fn settings_with(base: &str) -> GatewaySettings {
-        let mut s = GatewaySettings::default();
-        s.home = Some(Home {
-            latitude: 59.9,
-            longitude: 10.7,
-        });
+        let mut s = GatewaySettings {
+            home: Some(Home {
+                latitude: 59.9,
+                longitude: 10.7,
+            }),
+            ..Default::default()
+        };
         s.upstreams.open_meteo = base.into();
         s.upstreams.searxng = base.into();
         s

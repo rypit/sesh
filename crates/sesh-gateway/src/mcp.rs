@@ -78,7 +78,7 @@ pub fn search(connectors: &[ConnectorDescriptor], query: &str) -> Value {
             }
         }
     }
-    hits.sort_by(|a, b| b.0.cmp(&a.0));
+    hits.sort_by_key(|h| std::cmp::Reverse(h.0));
     Value::Array(hits.into_iter().map(|(_, v)| v).collect())
 }
 
@@ -168,11 +168,27 @@ impl Tools {
                 json!({"status": "timeout",
                 "error": format!("the script ran past its {} s deadline and was stopped", gw.settings.deadline_secs)}),
             ),
-            Outcome::ApprovalUnavailable => (
-                true,
-                json!({"status": "approval_unavailable",
+            Outcome::ApprovalUnavailable => {
+                // The executor paused before forwarding the call, so /call
+                // never saw it; record the refusal here (FR-008, FR-010).
+                let _ = gw
+                    .audit
+                    .write(&crate::audit::Entry {
+                        agent: agent.name.clone(),
+                        execution: Some(execution.clone()),
+                        connector: None,
+                        method: None,
+                        args_summary: json!({}),
+                        outcome: "refused",
+                        reason: Some("approval required; approvals are unavailable".into()),
+                    })
+                    .await;
+                (
+                    true,
+                    json!({"status": "approval_unavailable",
                 "error": "the script called a method that needs approval, and approvals aren't available yet"}),
-            ),
+                )
+            }
         };
         let out = format!("{UNTRUSTED_HEADER}\n{body}");
         (is_error, cap_text(out, gw.settings.max_result_bytes))

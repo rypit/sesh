@@ -7,3 +7,7 @@ services:
     environment:
       STUB_TOOLS: ${STUB_TOOLS:-on}
     restart: unless-stopped
+  # The test-only approval-gated connector, for negative tests.
+  gateway:
+    environment:
+      SESH_GATEWAY_TEST_CONNECTORS: "1"

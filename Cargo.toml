@@ -25,7 +25,7 @@ anyhow = "1"
 axum = "0.8"
 reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
 rmcp = { version = "3.12", default-features = false, features = ["server", "transport-streamable-http-server"] }
-sesh-core = { path = "crates/sesh-core" }
+sesh-core = { path = "crates/sesh-core", version = "0.1.0" }
 sha2 = "0.11"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "sync", "signal"] }
 tokio-postgres = "0.7"

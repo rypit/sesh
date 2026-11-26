@@ -38,5 +38,6 @@ to what, update the architecture diagram in the same change: follow
 Commands: `make check` runs fmt, clippy, unit tests, cargo-deny, the
 architecture-diagram check, Compose validation and the instance-data
 guard. `make stack-test` starts the stack with the stub model server and
-runs the stack tests (needs Docker and the `sesh-stub-llm:dev` image:
-`docker build -f deploy/stub.Dockerfile -t sesh-stub-llm:dev .`).
+runs the stack tests (needs Docker and the dev images:
+`docker build -f deploy/<name>.Dockerfile -t sesh-<name>:dev .` for
+`stub` (tagged `sesh-stub-llm:dev`), `gateway` and `executor`).
