@@ -22,6 +22,11 @@ RUN npm run build \
  && cp "$(node -p 'require.resolve("@cloudflare/workerd-linux-" + (process.arch === "x64" ? "64" : "arm64") + "/bin/workerd")')" /workerd
 
 FROM debian:trixie-slim
+# workerd refuses to start without a system CA store, even though the
+# executor has no route to the internet.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 COPY --from=bundle /workerd /usr/local/bin/workerd
 COPY --from=supervisor /sesh-executor-supervisor /usr/local/bin/sesh-executor-supervisor
 COPY --from=bundle /src/dist /opt/sesh-executor/dist
