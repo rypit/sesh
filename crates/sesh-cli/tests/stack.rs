@@ -87,6 +87,15 @@ impl Stack {
 
 impl Drop for Stack {
     fn drop(&mut self) {
+        // The stack is gone once this returns, so show its logs on failure.
+        if std::thread::panicking() {
+            let out = self.compose(&[], &[], &["logs", "--no-color", "--tail", "100"]);
+            eprintln!(
+                "---- stack logs ----\n{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
         let _ = self.compose(&[], &[], &["down", "-v", "--remove-orphans"]);
     }
 }

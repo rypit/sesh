@@ -12,9 +12,10 @@
 
 #![forbid(unsafe_code)]
 
+use std::ffi::OsString;
 use std::io::Read;
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
@@ -54,6 +55,20 @@ fn deadline_of(body: &[u8]) -> Duration {
     Duration::from_millis(ms) + GRACE
 }
 
+/// workerd's command line. The config embeds `host.js` by absolute path,
+/// and Cap'n Proto resolves absolute `embed`/`import` paths against the
+/// import path rather than the filesystem, so `/` must be on it (without
+/// it workerd exits at start with "Couldn't read file for embed").
+fn workerd_args(config: &Path) -> Vec<OsString> {
+    vec![
+        "serve".into(),
+        config.as_os_str().to_owned(),
+        "--experimental".into(),
+        "--import-path".into(),
+        "/".into(),
+    ]
+}
+
 struct Workerd {
     bin: String,
     config: PathBuf,
@@ -63,9 +78,7 @@ struct Workerd {
 impl Workerd {
     fn start(&mut self) {
         let child = Command::new(&self.bin)
-            .arg("serve")
-            .arg(&self.config)
-            .arg("--experimental")
+            .args(workerd_args(&self.config))
             .spawn()
             .expect("start workerd");
         self.child = Some(child);
@@ -184,6 +197,20 @@ mod tests {
             "address = \"gateway:7001\", path = \"/var/lib/x\", embed \"/opt/e/dist/host.js\""
         );
         assert!(render(t, "gw\"), (x", "/d", "/e").is_err());
+    }
+
+    #[test]
+    fn workerd_can_resolve_the_absolute_embed_path() {
+        // Cap'n Proto looks up an absolute `embed` path (the rendered
+        // `@DIST@/host.js`) in the import path, not the filesystem root.
+        let args = workerd_args(Path::new("/var/lib/x/workerd.capnp"));
+        let args: Vec<_> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(args[..2], ["serve", "/var/lib/x/workerd.capnp"]);
+        assert!(
+            args.windows(2).any(|w| w == ["--import-path", "/"]),
+            "{args:?}"
+        );
+        assert!(args.contains(&"--experimental"));
     }
 
     #[test]
