@@ -3,7 +3,8 @@
 //! (specs/003-model-evals/tasks.md T009–T024), 004
 //! (specs/004-secrets-approvals/tasks.md T007–T017), 005
 //! (specs/005-google-paperless/tasks.md), 006 (specs/006-rss-feeds/tasks.md)
-//! and 007 (specs/007-service-isolation/tasks.md).
+//! 007 (specs/007-service-isolation/tasks.md) and 008
+//! (specs/008-network-isolation/tasks.md).
 //!
 //! They start the real stack with the stub model server, so they need
 //! Docker and the `sesh-stub-llm:dev`, `sesh-gateway:dev` and
@@ -3009,141 +3010,366 @@ const DB_ROLES: [(&str, &str, &str, &str); 6] = [
     ("miniflux", "miniflux", "miniflux", "MINIFLUX_DB_PASSWORD"),
 ];
 
+/// The agent `network_stack` adds; its executor's network joins the gateway.
+const NET_AGENT: &str = "alice";
+
+impl Stack {
+    /// Whether `docker network inspect sesh_<name>` finds the network.
+    fn network_exists(&self, name: &str) -> bool {
+        Command::new("docker")
+            .args(["network", "inspect", &format!("sesh_{name}")])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    }
+
+    /// The doctor's `network-layout` check: (status, detail).
+    fn network_layout_check(&self) -> (String, String) {
+        let (_, checks) = self.doctor();
+        let check = checks
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "network-layout")
+            .unwrap_or_else(|| panic!("no network-layout check: {checks}"))
+            .clone();
+        (
+            check["status"].as_str().unwrap_or_default().to_string(),
+            check["detail"].as_str().unwrap_or_default().to_string(),
+        )
+    }
+
+    /// FR-001 to FR-008: every service is on exactly its networks, and
+    /// `sesh_default` is gone.
+    fn assert_network_layout(&self, when: &str) {
+        for s in layout::services(true) {
+            let mut want: Vec<String> = layout::networks_of(s, true)
+                .iter()
+                .map(|n| format!("sesh_{n}"))
+                .collect();
+            if s == "gateway" {
+                want.push(format!("sesh_exec-{NET_AGENT}"));
+            }
+            want.sort();
+            let mut got: Vec<String> = self
+                .networks_of(s)
+                .as_object()
+                .unwrap_or_else(|| panic!("{when}: {s} has no networks"))
+                .keys()
+                .cloned()
+                .collect();
+            got.sort();
+            assert_eq!(got, want, "{when}: FR-002..008: {s}'s networks");
+        }
+        assert!(
+            !self.network_exists("default"),
+            "{when}: FR-001: sesh_default exists"
+        );
+    }
+
+    /// FR-014, SC-001: the reachability matrix, probed by every address.
+    fn assert_reachability(&self, when: &str) {
+        let executor = format!("executor-{NET_AGENT}");
+        let mut sources: Vec<&str> = layout::services(true);
+        sources.push(&executor);
+        let addrs: std::collections::BTreeMap<&str, Vec<String>> =
+            sources.iter().map(|s| (*s, self.addresses_of(s))).collect();
+        let mut wrong = vec![];
+        for from in &sources {
+            let mut targets = vec![];
+            let mut expect = vec![];
+            for (to, port) in layout::LISTENS {
+                if to == from || !addrs.contains_key(to) {
+                    continue;
+                }
+                let want = if *from == executor {
+                    *to == "gateway" && *port == 7001
+                } else {
+                    layout::reachable(from, to, *port, true)
+                };
+                for a in &addrs[to] {
+                    targets.push((a.clone(), *port));
+                    expect.push((*to, *port, want));
+                }
+            }
+            let got = self.probe_many(from, &targets);
+            // A destination counts as reachable if any of its addresses is.
+            let mut seen: std::collections::BTreeMap<(&str, u16), (bool, bool)> =
+                Default::default();
+            for ((to, port, want), ok) in expect.into_iter().zip(got) {
+                let e = seen.entry((to, port)).or_insert((want, false));
+                e.1 |= ok;
+            }
+            for ((to, port), (want, ok)) in seen {
+                if want != ok {
+                    wrong.push(format!(
+                        "{from} -> {to}:{port}: expected {}, got {}",
+                        if want { "open" } else { "closed" },
+                        if ok { "open" } else { "closed" }
+                    ));
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "{when}: FR-014: reachability differs from the layout:\n{}",
+            wrong.join("\n")
+        );
+    }
+
+    /// FR-018 to FR-020, SC-007: each database login only from its own
+    /// network, the superuser never over the network, and the active rules
+    /// are the networks' actual ranges.
+    fn assert_db_logins(&self, when: &str) {
+        let pg_pw = self.secret("POSTGRES_PASSWORD");
+        for (role, db, svc, key) in DB_ROLES {
+            let pw = self.secret(key);
+            let (ok, err) = self.psql_from(svc, role, db, &pw);
+            assert!(ok, "{when}: {role} can't log in from {svc}: {err}");
+            for (_, _, other, _) in DB_ROLES.iter().filter(|(_, _, o, _)| *o != svc) {
+                let (ok, err) = self.psql_from(other, role, db, &pw);
+                assert!(!ok, "{when}: FR-018: {role} logged in from {other}");
+                assert!(
+                    err.contains("pg_hba.conf"),
+                    "{when}: refused by the login rules, not something else: {err}"
+                );
+            }
+            let (ok, err) = self.psql_from(svc, "sesh", "sesh", &pg_pw);
+            assert!(
+                !ok && err.contains("pg_hba.conf"),
+                "{when}: FR-019: the superuser logged in from {svc}: {err}"
+            );
+        }
+        let rules = self.sql("SELECT coalesce(database[1], '') || ' ' || coalesce(user_name[1], '') || ' ' || coalesce(address, '') || '/' || coalesce(netmask, '') FROM pg_hba_file_rules WHERE type = 'host' AND auth_method = 'scram-sha-256' ORDER BY 1");
+        for line in rules.lines() {
+            assert!(
+                DB_ROLES
+                    .iter()
+                    .any(|(role, db, _, _)| line.starts_with(&format!("{db} {role} "))),
+                "{when}: FR-020: a network rule for no service login: {line}"
+            );
+        }
+        for (role, db, _, _) in DB_ROLES {
+            let (_, _, net) = layout::DB_LOGINS
+                .iter()
+                .find(|(r, _, _)| *r == role)
+                .unwrap();
+            let subnet = String::from_utf8_lossy(
+                &Command::new("docker")
+                    .args([
+                        "network",
+                        "inspect",
+                        "-f",
+                        "{{range .IPAM.Config}}{{.Subnet}} {{end}}",
+                        &format!("sesh_{net}"),
+                    ])
+                    .output()
+                    .unwrap()
+                    .stdout,
+            )
+            .trim()
+            .to_string();
+            let prefix = subnet.split('/').next().unwrap();
+            assert!(
+                rules
+                    .lines()
+                    .any(|l| l.starts_with(&format!("{db} {role} {prefix}/"))),
+                "{when}: FR-020: no rule for {role} on {subnet}: {rules}"
+            );
+        }
+        let last = self.sql("SELECT type || ' ' || auth_method FROM pg_hba_file_rules ORDER BY line_number DESC LIMIT 1");
+        assert_eq!(
+            last, "host reject",
+            "{when}: the last rule rejects everything else"
+        );
+    }
+}
+
+/// The services that were on the shared `default` network before feature
+/// 008 (`tests/fixtures/pre-008.compose.yaml`).
+const PRE_008_DEFAULT: [&str; 8] = [
+    "postgres",
+    "litellm",
+    "open-webui",
+    "gateway",
+    "infisical",
+    "ntfy",
+    "paperless",
+    "stub-llm",
+];
+
 #[test]
 #[ignore = "needs Docker and the sesh images; run with `make stack-test`"]
 fn network_stack() {
     let dir = std::env::temp_dir().join(format!("sesh-network-stack-{}", std::process::id()));
     let stack = Stack { dir };
-    stack.sesh_ok(&["init", "--stub"]);
-    stack.sesh_ok(&["agent", "add", "alice", "--connectors", "search"]);
-    stack.sesh_ok(&["up"]);
+    let cred = format!("cred-{}-network", std::process::id());
+    let cred_hash = sha256_hex(&cred);
+    let stub_env = [("STUB_TESTCRED_SHA256", cred_hash.as_str())];
+    let up = |what: &str| {
+        let out = stack.sesh_env(&stub_env, &["up"]);
+        assert!(
+            out.status.success(),
+            "{what}: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    stack.sesh_ok(&["init", "--stub", "--admin-email", "admin@sesh.test"]);
+    stack.sesh_ok(&["agent", "add", NET_AGENT, "--connectors", "search,testcred"]);
+    up("a fresh install");
 
-    // US1 (FR-001 to FR-008): every service is on exactly its networks.
-    for s in layout::services(true) {
-        let mut want: Vec<String> = layout::networks_of(s, true)
-            .iter()
-            .map(|n| format!("sesh_{n}"))
-            .collect();
-        if s == "gateway" {
-            want.push("sesh_exec-alice".into());
-        }
-        want.sort();
-        let mut got: Vec<String> = stack
-            .networks_of(s)
-            .as_object()
-            .unwrap_or_else(|| panic!("{s} has no networks"))
-            .keys()
-            .cloned()
-            .collect();
-        got.sort();
-        assert_eq!(got, want, "FR-002..008: {s}'s networks");
-    }
-    let default = Command::new("docker")
-        .args(["network", "inspect", "sesh_default"])
-        .output()
-        .unwrap();
-    assert!(!default.status.success(), "FR-001: sesh_default exists");
+    // US1 on a fresh install.
+    stack.assert_network_layout("fresh install");
+    stack.assert_reachability("fresh install");
+    stack.assert_db_logins("fresh install");
+    let (status, detail) = stack.network_layout_check();
+    assert_eq!(status, "pass", "fresh install: {detail}");
 
-    // US1 (FR-014, SC-001): the reachability matrix, by every address.
-    let addrs: std::collections::BTreeMap<&str, Vec<String>> = layout::services(true)
-        .into_iter()
-        .chain(["executor-alice"])
-        .map(|s| (s, stack.addresses_of(s)))
-        .collect();
-    let mut sources: Vec<&str> = layout::services(true);
-    sources.push("executor-alice");
-    let mut wrong = vec![];
-    for from in sources {
-        let mut targets = vec![];
-        let mut expect = vec![];
-        for (to, port) in layout::LISTENS {
-            if *to == from || !addrs.contains_key(to) {
-                continue;
-            }
-            let want = if from == "executor-alice" {
-                *to == "gateway" && *port == 7001
-            } else {
-                layout::reachable(from, to, *port, true)
-            };
-            for a in &addrs[to] {
-                targets.push((a.clone(), *port));
-                expect.push((*to, *port, want));
-            }
-        }
-        let got = stack.probe_many(from, &targets);
-        // A destination counts as reachable if any of its addresses is.
-        let mut seen: std::collections::BTreeMap<(&str, u16), (bool, bool)> = Default::default();
-        for ((to, port, want), ok) in expect.into_iter().zip(got) {
-            let e = seen.entry((to, port)).or_insert((want, false));
-            e.1 |= ok;
-        }
-        for ((to, port), (want, ok)) in seen {
-            if want != ok {
-                wrong.push(format!(
-                    "{from} -> {to}:{port}: expected {}, got {}",
-                    if want { "open" } else { "closed" },
-                    if ok { "open" } else { "closed" }
-                ));
-            }
-        }
-    }
+    // US5 (FR-013, T019): a container attached to an extra network by hand fails
+    // the doctor, which names the service and the network; detaching it
+    // passes again.
+    let webui = stack.container("open-webui");
+    let attach = |verb: &str| {
+        let out = Command::new("docker")
+            .args(["network", verb, "sesh_secrets", &webui])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "docker network {verb}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    attach("connect");
+    let (status, detail) = stack.network_layout_check();
+    assert_eq!(status, "fail", "US5: the drift isn't reported: {detail}");
     assert!(
-        wrong.is_empty(),
-        "FR-014: reachability differs from the layout:\n{}",
-        wrong.join("\n")
+        detail.contains("open-webui") && detail.contains("secrets"),
+        "US5: the detail names the service and the network: {detail}"
+    );
+    attach("disconnect");
+    let (status, detail) = stack.network_layout_check();
+    assert_eq!(status, "pass", "US5: after disconnecting: {detail}");
+
+    // US3 (T015): back to how an install from before feature 008 ran: the
+    // services that were on the shared `default` network back on it, and
+    // Postgres letting every login in from anywhere (the image's default
+    // rule). The rules go first: on `default`, a service reaches Postgres
+    // from its `default` address, which the current rules refuse, so the
+    // pre-008 stack can't start under them. The recreated Postgres reads
+    // the file from its mounted directory.
+    std::fs::write(
+        stack.dir.join("postgres-conf/pg_hba.conf"),
+        "local all all trust\nhost all all all scram-sha-256\n",
+    )
+    .unwrap();
+    stack.sql_in("sesh", "SELECT pg_reload_conf()");
+    let out = stack.compose(
+        &[&fixture("pre-008.compose.yaml")],
+        &stub_env,
+        &["up", "-d", "--wait"],
+    );
+    assert!(
+        out.status.success(),
+        "the pre-008 stack didn't start: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for s in PRE_008_DEFAULT {
+        assert!(
+            stack.networks_of(s).get("sesh_default").is_some(),
+            "pre-008: {s} isn't on sesh_default"
+        );
+    }
+    let (status, _) = stack.network_layout_check();
+    assert_eq!(status, "fail", "the doctor passed on the pre-008 layout");
+
+    // Data made in the pre-008 state: an Open WebUI user, a router key, a
+    // stored credential, a Paperless tag.
+    let admin = signin("admin@sesh.test", &stack.secret("WEBUI_ADMIN_PASSWORD"));
+    let (s, body) = call(
+        "POST",
+        &format!("{WEBUI}/api/v1/auths/add"),
+        Some(&admin),
+        Some(json!({"name": "Before", "email": "before@sesh.test",
+            "password": "before-password-1", "role": "user"})),
+    );
+    assert_eq!(s, 200, "creating a user failed: {body}");
+    let (s, body) = call(
+        "POST",
+        &format!("{ROUTER}/key/generate"),
+        Some(&stack.secret("LITELLM_MASTER_KEY")),
+        Some(json!({"key_alias": "network-before", "models": ["agent-main"]})),
+    );
+    assert_eq!(s, 200, "creating a router key failed: {body}");
+    let before_key = body["key"].as_str().expect("a key").to_string();
+    assert_eq!(chat("agent-main", &before_key).0, 200);
+    stack.fill_credential("testcred", "TOKEN", &cred);
+    let mut agent = Mcp::connect(&stack.token(NET_AGENT)).expect("the agent connects");
+    let out = agent.execute("async () => await testcred.check({})");
+    assert!(
+        out.contains("\"ok\":true"),
+        "the pre-008 secret store: {out}"
+    );
+    let (ok, out) = stack.paperless_api(
+        "-H 'Content-Type: application/json' -d '{\"name\":\"network-before\"}' http://127.0.0.1:8000/api/tags/",
+    );
+    assert!(ok, "creating a Paperless tag failed: {out}");
+
+    // US3 (FR-012): the upgrade is `sesh up` alone. Compose recreates
+    // every container whose networks changed, so none is left on
+    // sesh_default and `sesh up` removes it.
+    let printed = up("the upgrade");
+    assert!(
+        printed.contains("removed the old shared network sesh_default"),
+        "FR-012: {printed}"
+    );
+    assert!(
+        !printed.contains("still used by"),
+        "FR-012: a container stayed on sesh_default: {printed}"
+    );
+    assert!(
+        printed.contains("database login rules updated"),
+        "R10: the permissive login rules are replaced: {printed}"
     );
 
-    // US1 (FR-018, FR-019, SC-007): each database login only from its own
-    // network; the superuser never over the network.
-    let pg_pw = stack.secret("POSTGRES_PASSWORD");
-    for (role, db, svc, key) in DB_ROLES {
-        let pw = stack.secret(key);
-        let (ok, err) = stack.psql_from(svc, role, db, &pw);
-        assert!(ok, "{role} can't log in from {svc}: {err}");
-        for (_, _, other, _) in DB_ROLES.iter().filter(|(_, _, o, _)| *o != svc) {
-            let (ok, err) = stack.psql_from(other, role, db, &pw);
-            assert!(!ok, "FR-018: {role} logged in from {other}");
-            assert!(
-                err.contains("pg_hba.conf"),
-                "refused by the login rules, not something else: {err}"
-            );
-        }
-        let (ok, err) = stack.psql_from(svc, "sesh", "sesh", &pg_pw);
+    // The data is still there.
+    signin("before@sesh.test", "before-password-1");
+    assert_eq!(
+        chat("agent-main", &before_key).0,
+        200,
+        "the earlier router key"
+    );
+    let mut agent = Mcp::connect(&stack.token(NET_AGENT)).expect("the agent connects");
+    let out = agent.execute("async () => await testcred.check({})");
+    assert!(out.contains("\"ok\":true"), "the stored credential: {out}");
+    let (ok, out) =
+        stack.paperless_api("'http://127.0.0.1:8000/api/tags/?name__iexact=network-before'");
+    assert!(
+        ok && out.contains("network-before"),
+        "the earlier tag: {out}"
+    );
+
+    // And the layout, reachability and login rules are the new ones.
+    stack.assert_network_layout("after the upgrade");
+    stack.assert_reachability("after the upgrade");
+    stack.assert_db_logins("after the upgrade");
+    let (status, detail) = stack.network_layout_check();
+    assert_eq!(status, "pass", "after the upgrade: {detail}");
+
+    // FR-012: a second `sesh up` prints nothing new about networks or
+    // login rules.
+    let again = up("a second run");
+    for news in ["sesh_default", "network", "login rules", "warning:"] {
         assert!(
-            !ok && err.contains("pg_hba.conf"),
-            "FR-019: the superuser logged in from {svc}: {err}"
-        );
-    }
-    // FR-020: the active rules are the networks' actual ranges.
-    let rules = stack.sql("SELECT coalesce(database[1], '') || ' ' || coalesce(user_name[1], '') || ' ' || coalesce(address, '') || '/' || coalesce(netmask, '') FROM pg_hba_file_rules WHERE type = 'host' AND auth_method = 'scram-sha-256' ORDER BY 1");
-    for (role, db, _, _) in DB_ROLES {
-        let (_, _, net) = layout::DB_LOGINS
-            .iter()
-            .find(|(r, _, _)| *r == role)
-            .unwrap();
-        let subnet = String::from_utf8_lossy(
-            &Command::new("docker")
-                .args([
-                    "network",
-                    "inspect",
-                    "-f",
-                    "{{range .IPAM.Config}}{{.Subnet}} {{end}}",
-                    &format!("sesh_{net}"),
-                ])
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .trim()
-        .to_string();
-        let prefix = subnet.split('/').next().unwrap();
-        assert!(
-            rules
+            !again
                 .lines()
-                .any(|l| l.starts_with(&format!("{db} {role} {prefix}/"))),
-            "FR-020: no rule for {role} on {subnet}: {rules}"
+                .filter(|l| !l.starts_with("stack is up"))
+                .any(|l| l.contains(news)),
+            "FR-012: the second run printed {news:?}: {again}"
         );
     }
-    let last = stack.sql("SELECT type || ' ' || auth_method FROM pg_hba_file_rules ORDER BY line_number DESC LIMIT 1");
-    assert_eq!(last, "host reject", "the last rule rejects everything else");
+    stack.assert_network_layout("after a second run");
 }
