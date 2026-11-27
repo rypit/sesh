@@ -23,6 +23,15 @@ pub fn router(gw: Arc<Gateway>) -> Router {
         .route("/form/{id}", get(form_page).post(form_submit))
         .route("/admin/forms", post(admin_form))
         .route("/admin/credentials", get(admin_credentials))
+        .route("/admin/google/consent", post(google_consent))
+        .route("/admin/google/disconnect", post(google_disconnect))
+        .route("/admin/google/status", get(google_status))
+        .route("/admin/paperless", get(paperless_status))
+        .route(
+            "/google/start/{id}",
+            get(google_start_page).post(google_start),
+        )
+        .route("/google/callback", get(google_callback))
         .route("/health", get(|| async { "ok" }))
         .layer(axum::middleware::from_fn_with_state(
             gw.clone(),
@@ -314,6 +323,28 @@ async fn form_submit(
     msg(StatusCode::OK, "Saved. You can close this page.")
 }
 
+/// Credentials the operator may fill: each connector's, plus the Google
+/// OAuth client's (specs/005 research.md R3). The Google ones are listed
+/// only once an agent uses a Google connector, unless `all`.
+fn declared_credentials(gw: &Gateway, all: bool) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = gw
+        .connectors
+        .iter()
+        .flat_map(|c| c.credentials.iter().map(|n| (c.name.clone(), n.clone())))
+        .collect();
+    let uses_google = gw.agents.all().iter().any(|a| {
+        a.connectors
+            .iter()
+            .any(|c| ["mail", "calendar", "contacts"].contains(&c.as_str()))
+    });
+    if all || uses_google {
+        for n in ["CLIENT_ID", "CLIENT_SECRET"] {
+            out.push(("google".into(), n.into()));
+        }
+    }
+    out
+}
+
 fn admin_ok(gw: &Gateway, h: &HeaderMap) -> bool {
     match (&gw.admin_token, bearer(h)) {
         (Some(want), Some(got)) => approvals::ct_eq(want, got),
@@ -331,10 +362,9 @@ async fn admin_form(
     }
     let connector = b["connector"].as_str().unwrap_or("");
     let name = b["name"].as_str().unwrap_or("");
-    let declared = gw
-        .connectors
+    let declared = declared_credentials(&gw, true)
         .iter()
-        .any(|c| c.name == connector && c.credentials.iter().any(|n| n == name));
+        .any(|(c, n)| c == connector && n == name);
     if !declared {
         return (
             StatusCode::NOT_FOUND,
@@ -374,17 +404,237 @@ async fn admin_credentials(State(gw): State<Arc<Gateway>>, headers: HeaderMap) -
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let mut out = vec![];
-    for c in &gw.connectors {
-        for n in &c.credentials {
-            let state = match gw.secrets.get(&sesh_core::credential_key(&c.name, n)).await {
-                Ok(Some(_)) => "set",
-                Ok(None) => "missing",
-                Err(_) => "unavailable",
-            };
-            out.push(json!({"connector": c.name, "name": n, "state": state}));
-        }
+    for (c, n) in declared_credentials(&gw, false) {
+        let state = match gw.secrets.get(&sesh_core::credential_key(&c, &n)).await {
+            Ok(Some(_)) => "set",
+            Ok(None) => "missing",
+            Err(_) => "unavailable",
+        };
+        out.push(json!({"connector": c, "name": n, "state": state}));
     }
     Json(Value::Array(out)).into_response()
+}
+
+fn known_owner(gw: &Gateway, owner: &str) -> bool {
+    owner == sesh_core::HOUSEHOLD || gw.users.get(owner).is_some()
+}
+
+fn redirect_uri(gw: &Gateway) -> String {
+    format!(
+        "{}/google/callback",
+        gw.settings.approvals_base_url.trim_end_matches('/')
+    )
+}
+
+/// `sesh google connect`: a one-time consent link for an owner (specs/005
+/// research.md R3).
+async fn google_consent(
+    State(gw): State<Arc<Gateway>>,
+    headers: HeaderMap,
+    Json(b): Json<Value>,
+) -> Response {
+    if !admin_ok(&gw, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let owner = b["owner"].as_str().unwrap_or("");
+    if !known_owner(&gw, owner) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "no such user"})),
+        )
+            .into_response();
+    }
+    let (id, secret) = gw.google.new_consent(owner);
+    audit(
+        &gw,
+        "operator",
+        Some("google"),
+        None,
+        "allowed",
+        format!("google.consent requested for {owner}"),
+    )
+    .await;
+    let base = gw.settings.approvals_base_url.trim_end_matches('/');
+    Json(json!({"url": format!("{base}/google/start/{id}#{secret}"), "redirect_uri": redirect_uri(&gw)}))
+        .into_response()
+}
+
+async fn google_start_page() -> Response {
+    page(
+        "Connect Google to sesh",
+        "<p>sesh will ask Google for read access to your mail, calendar and contacts, and to draft mail. \
+Sending mail and adding events always ask you first.</p>\
+<button id=go>Continue to Google</button><script>\
+document.getElementById('go').onclick = async () => {\
+ const r = await fetch(location.pathname, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({secret: location.hash.slice(1)})});\
+ const t = await r.json().catch(() => ({}));\
+ if (t.redirect) location.href = t.redirect; else document.getElementById('result').textContent = t.message || ('Error ' + r.status);\
+};</script>",
+    )
+    .into_response()
+}
+
+async fn google_start(
+    State(gw): State<Arc<Gateway>>,
+    Path(id): Path<String>,
+    Json(b): Json<Value>,
+) -> Response {
+    let secret = b["secret"].as_str().unwrap_or("");
+    match gw
+        .google
+        .start(
+            &gw.settings.upstreams,
+            &gw.secrets,
+            &id,
+            secret,
+            &redirect_uri(&gw),
+        )
+        .await
+    {
+        Ok((url, _owner)) => Json(json!({"redirect": url})).into_response(),
+        Err(m) => {
+            audit(
+                &gw,
+                "operator",
+                Some("google"),
+                None,
+                "refused",
+                format!("google.consent refused: {m}"),
+            )
+            .await;
+            msg(StatusCode::FORBIDDEN, &m)
+        }
+    }
+}
+
+async fn google_callback(
+    State(gw): State<Arc<Gateway>>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let state = q.get("state").map(String::as_str).unwrap_or("");
+    let Some(code) = q.get("code") else {
+        let why = q.get("error").map(String::as_str).unwrap_or("no code");
+        return (
+            StatusCode::BAD_REQUEST,
+            page(
+                "Google wasn't connected",
+                &format!("<p>{}</p>", escape(why)),
+            ),
+        )
+            .into_response();
+    };
+    match gw
+        .google
+        .finish(
+            &gw.settings.upstreams,
+            &gw.secrets,
+            state,
+            code,
+            &redirect_uri(&gw),
+        )
+        .await
+    {
+        Ok((owner, scopes)) => {
+            audit(
+                &gw,
+                "operator",
+                Some("google"),
+                None,
+                "allowed",
+                format!("google.connected {owner} ({})", scopes.len()),
+            )
+            .await;
+            page(
+                "Google is connected",
+                &format!(
+                    "<p>sesh can now use Google for <b>{}</b>. You can close this page.</p>",
+                    escape(&owner)
+                ),
+            )
+            .into_response()
+        }
+        Err(m) => {
+            audit(
+                &gw,
+                "operator",
+                Some("google"),
+                None,
+                "refused",
+                format!("google.connect refused: {m}"),
+            )
+            .await;
+            (
+                StatusCode::FORBIDDEN,
+                page("Google wasn't connected", &format!("<p>{}</p>", escape(&m))),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn google_disconnect(
+    State(gw): State<Arc<Gateway>>,
+    headers: HeaderMap,
+    Json(b): Json<Value>,
+) -> Response {
+    if !admin_ok(&gw, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let owner = b["owner"].as_str().unwrap_or("");
+    if !known_owner(&gw, owner) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "no such user"})),
+        )
+            .into_response();
+    }
+    if gw
+        .google
+        .disconnect(&gw.settings.upstreams, &gw.secrets, owner)
+        .await
+        .is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    audit(
+        &gw,
+        "operator",
+        Some("google"),
+        None,
+        "allowed",
+        format!("google.disconnected {owner}"),
+    )
+    .await;
+    Json(json!({"owner": owner, "state": "removed"})).into_response()
+}
+
+async fn google_status(State(gw): State<Arc<Gateway>>, headers: HeaderMap) -> Response {
+    if !admin_ok(&gw, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let mut owners = vec![sesh_core::HOUSEHOLD.to_string()];
+    owners.extend(gw.users.all().into_iter().map(|u| u.name));
+    let mut out = vec![];
+    for o in owners {
+        let state = gw
+            .google
+            .status(&gw.secrets, &o)
+            .await
+            .unwrap_or_else(|_| "unavailable".into());
+        out.push(json!({"owner": o, "state": state}));
+    }
+    Json(Value::Array(out)).into_response()
+}
+
+async fn paperless_status(State(gw): State<Arc<Gateway>>, headers: HeaderMap) -> Response {
+    if !admin_ok(&gw, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let base = gw.settings.upstreams.paperless.trim_end_matches('/');
+    match gw.paperless.check(base).await {
+        Ok(()) => Json(json!({"state": "ok"})).into_response(),
+        Err(m) => Json(json!({"state": "unavailable", "message": m})).into_response(),
+    }
 }
 
 #[cfg(test)]
@@ -492,6 +742,7 @@ mod tests {
         let gw = Arc::new(gateway(Audit::memory(), GatewaySettings::default()));
         let ask = approvals::Ask {
             agent: "alice",
+            topic: "t",
             connector: "testgate",
             method: "act",
             description: "A side effect.",
@@ -547,5 +798,139 @@ mod tests {
                 .any(|x| x.reason.as_deref() == Some(&format!("approval {} approved", r.id)))
         );
         assert!(!format!("{e:?}").contains(&secret));
+    }
+
+    async fn fake_google() -> String {
+        use axum::extract::Form;
+        let app = Router::new()
+            .route(
+                "/token",
+                post(|Form(f): Form<std::collections::HashMap<String, String>>| async move {
+                    if f.get("code").map(String::as_str) == Some("good-code")
+                        && f.get("code_verifier").is_some_and(|v| !v.is_empty())
+                    {
+                        Json(json!({"access_token": "at-1", "expires_in": 3600, "refresh_token": "rt-secret-1",
+                            "scope": "https://www.googleapis.com/auth/gmail.readonly"}))
+                        .into_response()
+                    } else {
+                        (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_grant"}))).into_response()
+                    }
+                }),
+            )
+            .route("/revoke", post(|| async { "" }));
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, app).await });
+        url
+    }
+
+    #[tokio::test]
+    async fn consent_stores_the_grant_once_and_disconnect_removes_it() {
+        let g = fake_google().await;
+        let mut settings = GatewaySettings::default();
+        settings.upstreams.google_auth = format!("{g}/auth");
+        settings.upstreams.google_token = format!("{g}/token");
+        settings.upstreams.google_revoke = format!("{g}/revoke");
+        let gw = Arc::new(gateway(Audit::memory(), settings));
+        gw.secrets.put("GOOGLE__CLIENT_ID", "cid").await.unwrap();
+        gw.secrets
+            .put("GOOGLE__CLIENT_SECRET", "csec")
+            .await
+            .unwrap();
+        let url = serve(gw.clone()).await;
+        let http = reqwest::Client::new();
+        let r = http
+            .post(format!("{url}/admin/google/consent"))
+            .bearer_auth("admin-token")
+            .json(&json!({"owner": "nobody"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 404, "only known owners");
+        let r: Value = http
+            .post(format!("{url}/admin/google/consent"))
+            .bearer_auth("admin-token")
+            .json(&json!({"owner": "household"}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let link = r["url"].as_str().unwrap();
+        let (path, secret) = link
+            .trim_start_matches("http://127.0.0.1:7002")
+            .split_once('#')
+            .unwrap();
+        let start = |s: &str| {
+            http.post(format!("{url}{path}"))
+                .json(&json!({"secret": s}))
+                .send()
+        };
+        assert_eq!(start("wrong").await.unwrap().status(), 403);
+        let v: Value = start(secret).await.unwrap().json().await.unwrap();
+        let auth = v["redirect"].as_str().unwrap();
+        assert!(
+            auth.starts_with(&format!("{g}/auth?")) && auth.contains("code_challenge_method=S256")
+        );
+        assert_eq!(start(secret).await.unwrap().status(), 403, "one use");
+        let state = auth.split("state=").nth(1).unwrap().replace("%2E", ".");
+        let cb = http
+            .get(format!("{url}/google/callback"))
+            .query(&[("state", state.as_str()), ("code", "good-code")])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(cb.status(), 200);
+        assert!(!cb.text().await.unwrap().contains("rt-secret-1"));
+        assert_eq!(
+            gw.secrets
+                .get(&crate::google::refresh_key("household"))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("rt-secret-1")
+        );
+        let again = http
+            .get(format!("{url}/google/callback"))
+            .query(&[("state", state.as_str()), ("code", "good-code")])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(again.status(), 403, "the state works once");
+        let st: Value = http
+            .get(format!("{url}/admin/google/status"))
+            .bearer_auth("admin-token")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(st[0]["state"], "connected");
+        let d = http
+            .post(format!("{url}/admin/google/disconnect"))
+            .bearer_auth("admin-token")
+            .json(&json!({"owner": "household"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(d.status(), 200);
+        assert_eq!(
+            gw.secrets
+                .get(&crate::google::refresh_key("household"))
+                .await
+                .unwrap(),
+            None
+        );
+        let e = format!("{:?}", gw.audit.entries());
+        for want in [
+            "google.consent requested for household",
+            "google.connected household",
+            "google.disconnected household",
+        ] {
+            assert!(e.contains(want), "{want}");
+        }
+        assert!(!e.contains("rt-secret-1") && !e.contains(secret) && !e.contains("at-1"));
     }
 }

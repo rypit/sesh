@@ -1,7 +1,8 @@
 //! Stack tests for features 001 (specs/001-foundation/tasks.md T012–T023)
 //! 002 (specs/002-gateway-core/tasks.md T015–T022), 003
-//! (specs/003-model-evals/tasks.md T009–T024) and 004
-//! (specs/004-secrets-approvals/tasks.md T007–T017).
+//! (specs/003-model-evals/tasks.md T009–T024), 004
+//! (specs/004-secrets-approvals/tasks.md T007–T017) and 005
+//! (specs/005-google-paperless/tasks.md).
 //!
 //! They start the real stack with the stub model server, so they need
 //! Docker and the `sesh-stub-llm:dev`, `sesh-gateway:dev` and
@@ -974,9 +975,9 @@ fn eval_stack() {
         "US1: {text}{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(text.matches(" PASS ").count(), 6, "US1: {text}");
+    assert_eq!(text.matches(" PASS ").count(), 10, "US1: {text}");
     assert!(
-        text.contains("6/6 passed") && text.contains("saved "),
+        text.contains("10/10 passed") && text.contains("saved "),
         "{text}"
     );
     assert!(
@@ -1137,6 +1138,20 @@ fn eval_stack() {
             "approve-act",
             "approval was granted but the action wasn't taken",
         ),
+        // Suite v3 (specs/005 research.md R8).
+        (
+            "mail-fact",
+            "expected a mail.search call that was allowed; none made",
+        ),
+        (
+            "mail-draft",
+            "expected a mail.draft call that was allowed; none made",
+        ),
+        (
+            "mail-send",
+            "approval was granted but the action wasn't taken",
+        ),
+        ("file-attachment", "the answer pastes a file's contents"),
     ] {
         assert!(
             reasons_of(&run, task).contains(why),
@@ -1509,6 +1524,406 @@ fn secrets_stack() {
             assert!(
                 !text.contains(&value) && !text.contains(&value2),
                 "SC-004: the credential is in {}",
+                entry.display()
+            );
+        }
+    }
+}
+
+impl Stack {
+    /// Notifications on `topic`, read as the ntfy user `user`.
+    fn notifications_as(&self, user: &str, password_key: &str, topic: &str) -> Vec<Value> {
+        use base64::Engine;
+        let basic = base64::engine::general_purpose::STANDARD
+            .encode(format!("{user}:{}", self.secret(password_key)));
+        let mut r = agent()
+            .get(&format!(
+                "http://127.0.0.1:8090/{topic}/json?poll=1&since=all"
+            ))
+            .header("Authorization", &format!("Basic {basic}"))
+            .call()
+            .unwrap();
+        r.body_mut()
+            .read_to_string()
+            .unwrap()
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter(|m| m["event"] == "message")
+            .collect()
+    }
+
+    fn user_topic(&self, name: &str) -> String {
+        let text = std::fs::read_to_string(self.dir.join("gateway").join("users.toml")).unwrap();
+        let v: toml::Value = toml::from_str(&text).unwrap();
+        v["user"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["name"].as_str() == Some(name))
+            .unwrap()["topic"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// What fake Google recorded (sent mail, drafts, events), read from
+    /// inside the gateway's container: the stub has no host port.
+    fn fake_google(&self) -> Value {
+        let (ok, out) = self.bash_in(
+            "gateway",
+            "exec 3<>/dev/tcp/stub-llm/8000 && printf 'GET /fake/google/sent HTTP/1.1\\r\\nHost: stub\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3",
+        );
+        assert!(ok, "{out}");
+        let body = out.split("\r\n\r\n").nth(1).unwrap_or("");
+        serde_json::from_str(body).unwrap_or_else(|_| panic!("fake google: {out}"))
+    }
+
+    /// Runs the consent flow for `owner` the way a browser would, with
+    /// fake Google's code for `code_user`. Returns the callback status.
+    fn connect_google(&self, owner: &str, code_user: &str) -> u16 {
+        let printed = self.sesh_ok(&["google", "connect", owner]);
+        let link = printed
+            .lines()
+            .find(|l| l.contains("/google/start/"))
+            .unwrap()
+            .trim()
+            .to_string();
+        let (page, secret) = link.split_once('#').unwrap();
+        let (s, v) = call("POST", page, None, Some(json!({"secret": secret})));
+        assert_eq!(s, 200, "{v}");
+        let auth = v["redirect"].as_str().unwrap();
+        assert!(auth.contains("/fake/google/auth?"), "{auth}");
+        let (again, _) = call("POST", page, None, Some(json!({"secret": secret})));
+        assert_eq!(again, 403, "US2: the consent link works once");
+        let state = auth
+            .split("state=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap()
+            .replace("%2E", ".");
+        let mut r = agent()
+            .get(&format!(
+                "http://127.0.0.1:7002/google/callback?state={state}&code=fake-{code_user}"
+            ))
+            .call()
+            .unwrap();
+        let _ = r.body_mut().read_to_string();
+        r.status().as_u16()
+    }
+
+    fn fill_credential(&self, connector: &str, name: &str, value: &str) {
+        let printed = self.sesh_ok(&["credential", "request", connector, name]);
+        let link = printed
+            .lines()
+            .find(|l| l.contains("/form/"))
+            .unwrap()
+            .trim()
+            .to_string();
+        let (form, secret) = link.split_once('#').unwrap();
+        let (s, _) = call(
+            "POST",
+            form,
+            None,
+            Some(json!({"secret": secret, "value": value})),
+        );
+        assert_eq!(s, 200);
+    }
+}
+
+fn first_ref(out: &str) -> String {
+    let i = out.find("\"ref\":\"").expect("an attachment ref") + 7;
+    out[i..i + 32].to_string()
+}
+
+fn retry(mut f: impl FnMut() -> bool) -> bool {
+    for _ in 0..30 {
+        if f() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    false
+}
+
+#[test]
+#[ignore = "needs Docker and the sesh images; run with `make stack-test`"]
+fn google_docs_stack() {
+    let dir = std::env::temp_dir().join(format!("sesh-google-stack-{}", std::process::id()));
+    let stack = Stack { dir };
+    stack.sesh_ok(&["init", "--stub"]);
+
+    // US1 (FR-001–FR-004): users, and agents bound to an owner.
+    stack.sesh_ok(&["user", "add", "ana"]);
+    stack.sesh_ok(&["user", "add", "ben"]);
+    let all = "mail,calendar,contacts,docs";
+    stack.sesh_ok(&[
+        "agent",
+        "add",
+        "anabot",
+        "--connectors",
+        all,
+        "--owner",
+        "ana",
+    ]);
+    stack.sesh_ok(&[
+        "agent",
+        "add",
+        "benbot",
+        "--connectors",
+        all,
+        "--owner",
+        "ben",
+    ]);
+    stack.sesh_ok(&["agent", "add", "house", "--connectors", all]);
+    let bad = stack.sesh(&[
+        "agent",
+        "add",
+        "ghost",
+        "--connectors",
+        "mail",
+        "--owner",
+        "zed",
+    ]);
+    assert!(!bad.status.success(), "FR-002: an unknown owner is refused");
+    assert!(stack.sesh_ok(&["agent", "list"]).contains("anabot"));
+    assert!(stack.sesh_ok(&["user", "list"]).contains("ben"));
+    stack.sesh_ok(&["up"]);
+
+    let mut anabot = Mcp::connect(&stack.token("anabot")).expect("anabot connects");
+    let mut benbot = Mcp::connect(&stack.token("benbot")).expect("benbot connects");
+    let mut house = Mcp::connect(&stack.token("house")).expect("house connects");
+
+    // US2 (FR-005–FR-008): not connected yet, then the one-time consent.
+    let out = anabot.execute("async () => await mail.search({ query: \"dentist\" })");
+    assert!(out.contains("Google isn't connected"), "FR-008: {out}");
+    stack.fill_credential("google", "CLIENT_ID", "fake-client-id");
+    stack.fill_credential("google", "CLIENT_SECRET", "fake-client-secret");
+    assert_eq!(stack.connect_google("ana", "ana"), 200, "US2: ana connects");
+    assert_eq!(stack.connect_google("ben", "ben"), 200, "US2: ben connects");
+    assert_eq!(stack.connect_google("household", "household"), 200);
+    let (_, checks) = stack.doctor();
+    assert_eq!(status_of(&checks, "google"), "pass", "{checks}");
+
+    // US3 (FR-009, FR-010, SC-001): each agent reads only its owner's mail.
+    let out = anabot.execute("async () => await mail.search({ query: \"dentist\" })");
+    assert!(out.contains("Your dentist appointment"), "US3: {out}");
+    let out = anabot.execute("async () => await mail.read({ id: \"m-ben-1\" })");
+    assert!(
+        !out.contains("marigold"),
+        "SC-001: ana's agent read ben's mail: {out}"
+    );
+    let out = benbot.execute("async () => await mail.search({ query: \"statement\" })");
+    assert!(
+        out.contains("Ben's statement") && !out.contains("dentist"),
+        "SC-001: {out}"
+    );
+    let out =
+        anabot.execute("async () => await mail.search({ query: \"statement\", user: \"ben\" })");
+    assert!(
+        out.contains("not allowed") && !out.contains("marigold"),
+        "FR-003: a model can't pick the user: {out}"
+    );
+    let out = anabot.execute("async () => await contacts.search({ query: \"okafor\" })");
+    assert!(out.contains("clinic@example.org"), "{out}");
+    let out = anabot.execute("async () => await calendar.list({})");
+    assert!(
+        out.contains("ana standing meeting") && !out.contains("ben standing"),
+        "{out}"
+    );
+
+    // US3 (FR-011, SC-002): sending waits for ana's approval, on ana's topic.
+    let send = "async () => await mail.send({ to: [\"clinic@example.org\"], subject: \"Tuesday\", body: \"See you at 10:40.\" })";
+    let out = anabot.execute(send);
+    assert!(out.contains("\"approval_pending\""), "FR-011: {out}");
+    assert!(
+        stack.fake_google()["sent"].get("ana").is_none(),
+        "SC-002: mail was sent before approval"
+    );
+    let ana_topic = stack.user_topic("ana");
+    let notes = stack.notifications_as("u-ana", "NTFY_PASSWORD_ANA", &ana_topic);
+    assert_eq!(notes.len(), 1, "the approval goes to ana's topic");
+    assert!(
+        stack.notifications().is_empty(),
+        "ana's approval isn't on the household topic"
+    );
+    let ben_topic = stack.user_topic("ben");
+    assert!(
+        stack
+            .notifications_as("u-ben", "NTFY_PASSWORD_BEN", &ben_topic)
+            .is_empty(),
+        "nor on ben's"
+    );
+    let link = notes[0]["actions"][0]["url"].as_str().unwrap();
+    let (page, secret) = link.split_once('#').unwrap();
+    assert_eq!(decide(page, secret, "approve"), 200);
+    let out = anabot.execute(send);
+    assert!(out.contains("\"message_id\""), "{out}");
+    let sent = stack.fake_google();
+    assert_eq!(sent["sent"]["ana"][0]["subject"], "Tuesday", "{sent}");
+    assert_eq!(sent["sent"]["ana"][0]["to"], "clinic@example.org", "{sent}");
+    let out = anabot.execute("async () => await mail.draft({ to: [\"clinic@example.org\"], subject: \"Draft\", body: \"x\" })");
+    assert!(
+        out.contains("\"draft_id\""),
+        "drafting needs no approval: {out}"
+    );
+    let out = anabot.execute("async () => await calendar.create({ title: \"Dentist\", start: \"2026-12-01T10:40:00Z\", end: \"2026-12-01T11:10:00Z\" })");
+    assert!(out.contains("\"approval_pending\""), "FR-011: {out}");
+    // Denied: nothing is sent.
+    let deny_me =
+        "async () => await mail.send({ to: [\"x@example.org\"], subject: \"Deny\", body: \"no\" })";
+    assert!(anabot.execute(deny_me).contains("\"approval_pending\""));
+    let notes = stack.notifications_as("u-ana", "NTFY_PASSWORD_ANA", &ana_topic);
+    let link = notes.last().unwrap()["actions"][0]["url"].as_str().unwrap();
+    let (page, secret) = link.split_once('#').unwrap();
+    assert_eq!(decide(page, secret, "deny"), 200);
+    let out = anabot.execute(deny_me);
+    assert!(out.contains("denied"), "{out}");
+    assert_eq!(
+        stack.fake_google()["sent"]["ana"].as_array().unwrap().len(),
+        1,
+        "SC-002: a denied send went out"
+    );
+    // US1 (FR-004): a Household approval reaches every user.
+    let out = house.execute("async () => await calendar.create({ title: \"Bins\", start: \"2026-12-02T07:00:00Z\", end: \"2026-12-02T07:15:00Z\" })");
+    assert!(out.contains("\"approval_pending\""), "{out}");
+    let hh = stack.topic();
+    for (user, key) in [
+        ("u-ana", "NTFY_PASSWORD_ANA"),
+        ("u-ben", "NTFY_PASSWORD_BEN"),
+    ] {
+        let n = stack.notifications_as(user, key, &hh);
+        assert!(
+            n.iter()
+                .any(|m| m["title"].as_str().unwrap_or("").contains("house")),
+            "FR-004: {user} can't read the household approval"
+        );
+    }
+    // Header injection is refused before anything is sent.
+    let out = anabot.execute("async () => await mail.draft({ to: [\"a@example.org\\r\\nBcc: x@example.org\"], subject: \"x\", body: \"x\" })");
+    assert!(!out.contains("\"draft_id\""), "{out}");
+
+    // US4 (FR-012–FR-014, SC-003): an attachment is filed by reference.
+    let out = anabot.execute("async () => await mail.read({ id: \"m-ana-1\" })");
+    assert!(out.contains("dentist-invoice.pdf"), "{out}");
+    assert!(
+        !out.contains("JVBERi"),
+        "FR-012: file bytes reached the agent: {out}"
+    );
+    let ana_ref = first_ref(&out);
+    let out = benbot.execute(&format!(
+        "async () => await docs.upload({{ ref: \"{ana_ref}\", title: \"stolen\" }})"
+    ));
+    assert!(out.contains("unknown or expired"), "FR-013: {out}");
+    let out = anabot.execute(&format!(
+        "async () => await docs.upload({{ ref: \"{ana_ref}\", title: \"Dentist invoice\", tags: [\"health\"] }})"
+    ));
+    assert!(out.contains("\"title\":\"Dentist invoice\""), "US4: {out}");
+    let ana_upload = out.clone();
+    let out = house.execute("async () => await mail.read({ id: \"m-hh-1\" })");
+    let hh_ref = first_ref(&out);
+    let out = house.execute(&format!(
+        "async () => await docs.upload({{ ref: \"{hh_ref}\", title: \"Electricity bill\" }})"
+    ));
+    assert!(out.contains("\"title\":\"Electricity bill\""), "US4: {out}");
+    assert!(
+        retry(|| stack
+            .notifications()
+            .iter()
+            .any(|n| n["title"] == "New household document")),
+        "FR-014: household uploads notify"
+    );
+    // SC-003: ana sees hers and the household's; ben sees neither of ana's.
+    let mut last = String::new();
+    assert!(
+        retry(|| {
+            last = anabot.execute("async () => await docs.search({ query: \"invoice\" })");
+            last.contains("Dentist invoice")
+        }),
+        "ana finds her document; upload: {ana_upload}; last search: {last}"
+    );
+    assert!(
+        retry(|| {
+            last = anabot.execute("async () => await docs.search({ query: \"electricity\" })");
+            last.contains("Electricity bill")
+        }),
+        "ana reads the household's documents; last search: {last}"
+    );
+    let out = benbot.execute("async () => await docs.search({ query: \"invoice\" })");
+    assert!(!out.contains("Dentist invoice"), "SC-003: {out}");
+    let out = house.execute("async () => await docs.search({ query: \"invoice\" })");
+    assert!(
+        !out.contains("Dentist invoice"),
+        "SC-003: the household can't read ana's: {out}"
+    );
+    let (_, checks) = stack.doctor();
+    assert_eq!(status_of(&checks, "paperless"), "pass", "{checks}");
+
+    // US2 (FR-007): disconnecting removes the grant; removing a user stops
+    // their agents.
+    stack.sesh_ok(&["google", "disconnect", "ana"]);
+    let out = anabot.execute("async () => await mail.search({ query: \"dentist\" })");
+    assert!(out.contains("Google isn't connected"), "FR-007: {out}");
+    stack.sesh_ok(&["user", "remove", "ben"]);
+    let out = benbot.tool(
+        "execute",
+        json!({"code": "async () => await mail.search({ query: \"x\" })"}),
+    );
+    assert!(out.contains("owner was removed"), "FR-004: {out}");
+
+    // FR-015: consent, connection and disconnection are audited.
+    for reason in [
+        "google.consent requested for ana",
+        "google.connected ana (4)",
+        "google.disconnected ana",
+    ] {
+        let n = stack.sql(&format!(
+            "SELECT count(*) FROM audit WHERE reason = '{reason}'"
+        ));
+        assert_ne!(n, "0", "FR-015: no audit row for {reason:?}");
+    }
+
+    // SC-004: no Google token anywhere outside the secret store.
+    let audit = stack.sql(
+        "SELECT string_agg(coalesce(reason, '') || ' ' || args_summary::text, ' ') FROM audit",
+    );
+    let logs = String::from_utf8_lossy(
+        &stack
+            .compose(
+                &[],
+                &[],
+                &[
+                    "logs",
+                    "--no-color",
+                    "gateway",
+                    "executor-anabot",
+                    "executor-benbot",
+                    "executor-house",
+                ],
+            )
+            .stdout,
+    )
+    .into_owned();
+    let seen: Vec<&String> = anabot
+        .seen
+        .iter()
+        .chain(&benbot.seen)
+        .chain(&house.seen)
+        .collect();
+    for (what, text) in [("the audit log", &audit), ("logs", &logs)]
+        .into_iter()
+        .chain(seen.into_iter().map(|t| ("a result", t)))
+    {
+        for token in ["frt-", "fat-", "fake-client-secret"] {
+            assert!(!text.contains(token), "SC-004: {token} reached {what}");
+        }
+    }
+    for entry in walk(&stack.dir) {
+        if let Ok(text) = std::fs::read_to_string(&entry) {
+            assert!(
+                !text.contains("frt-") && !text.contains("fake-client-secret"),
+                "SC-004: a Google secret is in {}",
                 entry.display()
             );
         }

@@ -103,7 +103,7 @@ sesh has 19 components across six zones. Three are custom builds (marked
 | Code Mode gateway | Control plane | Single path to every resource; scoping, approvals, audit | `@cloudflare/codemode` runtime in per-agent workerd executors; gateway in Rust | Container | Token per agent; MCP over Streamable HTTP; scripts run in an untrusted workerd executor container per agent, with no network or secrets; see Build vs adopt (**build**) |
 | Infisical | Control plane | Secrets and site logins, per agent | Infisical (self-hosted) | Container | Project + machine identity per agent; read only by the gateway |
 | Audit log | Control plane | Append-only record of every gateway action | Postgres table | Shared Postgres | Insert-only grants; 90-day full retention; agents cannot read |
-| Gmail + Calendar + Contacts | Resources | Personal and household Google data | Google APIs via MCP server | Container | One Google Cloud project, app in production; read-only + compose scopes; send behind approval |
+| Gmail + Calendar + Contacts | Resources | Personal and household Google data | Google APIs, called by the gateway (ADR 0008) | Gateway connectors | One Google Cloud project, app in production; read-only + compose scopes; send behind approval |
 | SearXNG | Resources | Web search | SearXNG | Container | JSON output; reachable from the gateway only |
 | Kiwix | Resources | Offline Wikipedia | kiwix-serve + ZIM files | Container | Text-only English Wikipedia (~50GB); quarterly refresh |
 | Weather + maps | Resources | Forecasts, geocoding, places | Open-Meteo, OpenStreetMap | Gateway connector | No keys; home location fixed in the gateway |
@@ -283,7 +283,7 @@ that touches untrusted content runs in sbx microVMs.
 | Placement | Components | Why |
 | --- | --- | --- |
 | Bare metal (macOS) | Inference server, when it needs the GPU (for example oMLX) | Needs the Metal GPU |
-| Docker (Compose) | Open WebUI, Hermes (container per profile), gateway, workerd executor per agent (no network), Infisical, ntfy, Mem0, Paperless, SearXNG, Kiwix, Google MCP, LiteLLM, Postgres, Redis | Long-lived services; one Compose file moves to the Mac mini unchanged |
+| Docker (Compose) | Open WebUI, Hermes (container per profile), gateway, workerd executor per agent (no network), Infisical, ntfy, Mem0, Paperless, SearXNG, Kiwix, LiteLLM, Postgres, Redis | Long-lived services; one Compose file moves to the Mac mini unchanged |
 | sbx microVM | Browser sessions | VM boundary for code execution and untrusted web content |
 
 **Memory budget on a 64GB Mac mini (estimates)**
@@ -335,9 +335,9 @@ small browser controller. Everything else is configuration.
 
 | Connector | Methods | Side effects → approval |
 | --- | --- | --- |
-| `google` | `gmail.search`, `gmail.read`, `gmail.draft`, `gmail.send`, `calendar.list`, `calendar.create`, `contacts.search` | send, create |
+| `mail`, `calendar`, `contacts` (Google, ADR 0008) | `mail.search`, `mail.read`, `mail.draft`, `mail.send`, `calendar.list`, `calendar.create`, `contacts.search` | send, create |
 | `memory` | `recall(query, {includeHousehold})`, `remember(fact)`, `forget(id)` | writes to `household` |
-| `docs` | `paperless.search`, `paperless.get`, `paperless.upload(ref, {tags, title})` | uploads to household documents notify both users |
+| `docs` | `docs.search`, `docs.get`, `docs.upload(ref, {tags, title})` | uploads to household documents notify both users |
 | `search` | `searxng.search`, `kiwix.search`, `kiwix.article` | none |
 | `geo` | `weather.forecast`, `maps.geocode`, `maps.nearby` | none |
 | `browser` | `open`, `snapshot`, `click`, `type`, `login(site)`, `read(url)`, `liveViewLink()`, `download()` → download ID | purchases, form submits, first login per site |
@@ -350,7 +350,7 @@ small browser controller. Everything else is configuration.
   Paperless web app, a watched folder, phone scanning apps, and a
   Paperless mail rule that imports attachments from a Gmail "To file"
   label.
-- **Agents file documents** with `paperless.upload(ref, {tags, title})`.
+- **Agents file documents** with `docs.upload(ref, {tags, title})`.
   - `ref` is an ID the gateway already holds: a Gmail attachment, a
     browser download, or a file the user sent in Open WebUI or Telegram.
   - The gateway fetches the bytes itself, so file contents never enter
@@ -417,7 +417,7 @@ small browser controller. Everything else is configuration.
 
 **Adopted as-is (configure only):** Open WebUI, Hermes, an
 OpenAI-compatible inference server, LiteLLM, Infisical, ntfy, Mem0,
-Paperless-ngx, SearXNG, Kiwix, a Google MCP server, Postgres, Redis, sbx.
+Paperless-ngx, SearXNG, Kiwix, Postgres, Redis, sbx.
 
 **4. `sesh` admin CLI + Claude Code operator skills**
 
@@ -484,13 +484,13 @@ is a feature under `specs/`.
        connector;
      - no secret value appears in model context, logs or audit rows
        (grep tests).
-5. **Google and Paperless:** the `google` connector with an OAuth
+5. **Google and Paperless:** the `mail`, `calendar` and `contacts` connectors with an OAuth
    consent page; Paperless; per-user identity on agent records, so each
    agent reaches only its user's accounts and documents.
    - Accept:
      - Gmail search works;
-     - `gmail.send` pauses, and runs only after ntfy approval;
-     - an email attachment filed with `paperless.upload` lands in that
+     - `mail.send` pauses, and runs only after ntfy approval;
+     - an email attachment filed with `docs.upload` lands in that
        user's documents, without its bytes entering model context;
      - user A's agent can't reach user B's mail or documents (negative
        tests).

@@ -16,6 +16,99 @@ pub struct Agent {
     pub name: String,
     pub token_sha256: String,
     pub connectors: Vec<String>,
+    /// Whose agent this is: a user's name, or `household` (specs/005).
+    /// Every per-user scope is derived from it, never from the model.
+    #[serde(default = "household")]
+    pub owner: String,
+}
+
+/// The shared identity; always exists.
+pub const HOUSEHOLD: &str = "household";
+
+fn household() -> String {
+    HOUSEHOLD.to_string()
+}
+
+pub const USERS_FILE: &str = "users.toml";
+
+/// A household user (specs/005 data-model.md, User).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct User {
+    pub name: String,
+    /// The user's ntfy approval topic.
+    pub topic: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsersFile {
+    #[serde(default, rename = "user")]
+    pub users: Vec<User>,
+}
+
+/// `[a-z][a-z0-9-]{0,31}`, and not the reserved `household`.
+pub fn valid_user_name(name: &str) -> bool {
+    let mut c = name.chars();
+    matches!(c.next(), Some('a'..='z'))
+        && name.len() <= 32
+        && c.all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || x == '-')
+        && name != HOUSEHOLD
+}
+
+impl UsersFile {
+    pub fn parse(text: &str) -> Result<Self> {
+        let f: UsersFile = toml::from_str(text).context("users.toml is not valid")?;
+        f.validate()?;
+        Ok(f)
+    }
+
+    pub fn load(dir: &Path) -> Result<Self> {
+        let path = dir.join(USERS_FILE);
+        if !path.exists() {
+            return Ok(UsersFile::default());
+        }
+        Self::parse(&std::fs::read_to_string(&path)?)
+    }
+
+    pub fn save(&self, dir: &Path) -> Result<()> {
+        self.validate()?;
+        std::fs::write(dir.join(USERS_FILE), toml::to_string_pretty(self)?)?;
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let mut seen = std::collections::BTreeSet::new();
+        for u in &self.users {
+            if !valid_user_name(&u.name) {
+                bail!(
+                    "user name {:?} must be a-z, 0-9 and -, start with a letter, and not be `household`",
+                    u.name
+                );
+            }
+            if !seen.insert(&u.name) {
+                bail!("user {} is listed twice", u.name);
+            }
+            if u.topic.is_empty()
+                || !u
+                    .topic
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                bail!("user {} has an invalid topic", u.name);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get(&self, name: &str) -> Option<&User> {
+        self.users.iter().find(|u| u.name == name)
+    }
+
+    /// Whether `owner` names an existing user or the Household.
+    pub fn knows(&self, owner: &str) -> bool {
+        owner == HOUSEHOLD || self.get(owner).is_some()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,8 +229,34 @@ pub fn credential_key(connector: &str, name: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn owners_default_to_the_household_and_users_validate() {
+        let f = AgentsFile::parse(&format!(
+            "[[agent]]\nname = \"a\"\ntoken_sha256 = \"{}\"\nconnectors = [\"search\"]\n",
+            "0".repeat(64)
+        ))
+        .unwrap();
+        assert_eq!(f.agents[0].owner, HOUSEHOLD, "older agents.toml files load");
+        assert!(valid_user_name("ana") && valid_user_name("ben-2"));
+        for bad in ["", "Ana", "1ana", "household", &"a".repeat(33)] {
+            assert!(!valid_user_name(bad), "{bad}");
+        }
+        let u = UsersFile {
+            users: vec![User {
+                name: "ana".into(),
+                topic: "sesh-ana-01".into(),
+            }],
+        };
+        assert!(u.knows("ana") && u.knows(HOUSEHOLD) && !u.knows("ben"));
+        let dup = UsersFile {
+            users: vec![u.users[0].clone(), u.users[0].clone()],
+        };
+        assert!(dup.validate().is_err());
+    }
+
     fn agent(name: &str) -> Agent {
         Agent {
+            owner: HOUSEHOLD.into(),
             name: name.into(),
             token_sha256: token_hash(&format!("tok-{name}")),
             connectors: vec!["search".into()],
@@ -246,6 +365,13 @@ pub struct GatewaySettings {
     /// The person's ntfy topic; empty until `sesh init` generates one.
     #[serde(default)]
     pub ntfy_topic: String,
+    /// Mail searches return at most this many (specs/005 data-model.md Limits).
+    #[serde(default = "d_mail_max")]
+    pub mail_results_max: u32,
+    #[serde(default = "d_upload_max")]
+    pub upload_max_bytes: u64,
+    #[serde(default = "d_ref_ttl")]
+    pub ref_ttl_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -269,6 +395,21 @@ pub struct Upstreams {
     /// The test connectors' upstream (stub mode only).
     #[serde(default = "d_test")]
     pub test: String,
+    #[serde(default = "d_paperless")]
+    pub paperless: String,
+    /// Google's endpoints (specs/005 research.md R3); tests point them at fakes.
+    #[serde(default = "d_google_auth")]
+    pub google_auth: String,
+    #[serde(default = "d_google_token")]
+    pub google_token: String,
+    #[serde(default = "d_google_revoke")]
+    pub google_revoke: String,
+    #[serde(default = "d_gmail")]
+    pub gmail: String,
+    #[serde(default = "d_gcal")]
+    pub calendar: String,
+    #[serde(default = "d_people")]
+    pub people: String,
 }
 
 fn d_deadline() -> u64 {
@@ -295,6 +436,27 @@ fn d_nominatim() -> String {
 fn d_test() -> String {
     "http://stub-llm:8000".into()
 }
+fn d_paperless() -> String {
+    "http://paperless:8000".into()
+}
+fn d_google_auth() -> String {
+    "https://accounts.google.com/o/oauth2/v2/auth".into()
+}
+fn d_google_token() -> String {
+    "https://oauth2.googleapis.com/token".into()
+}
+fn d_google_revoke() -> String {
+    "https://oauth2.googleapis.com/revoke".into()
+}
+fn d_gmail() -> String {
+    "https://gmail.googleapis.com".into()
+}
+fn d_gcal() -> String {
+    "https://www.googleapis.com".into()
+}
+fn d_people() -> String {
+    "https://people.googleapis.com".into()
+}
 fn d_approvals_base() -> String {
     "http://127.0.0.1:7002".into()
 }
@@ -310,6 +472,15 @@ fn d_pending_max() -> u32 {
 fn d_per_hour() -> u32 {
     30
 }
+fn d_mail_max() -> u32 {
+    25
+}
+fn d_upload_max() -> u64 {
+    25 * 1024 * 1024
+}
+fn d_ref_ttl() -> u64 {
+    3600
+}
 
 impl Default for Upstreams {
     fn default() -> Self {
@@ -319,6 +490,13 @@ impl Default for Upstreams {
             open_meteo: d_open_meteo(),
             nominatim: d_nominatim(),
             test: d_test(),
+            paperless: d_paperless(),
+            google_auth: d_google_auth(),
+            google_token: d_google_token(),
+            google_revoke: d_google_revoke(),
+            gmail: d_gmail(),
+            calendar: d_gcal(),
+            people: d_people(),
         }
     }
 }
@@ -337,6 +515,9 @@ impl Default for GatewaySettings {
             approvals_pending_max: d_pending_max(),
             approvals_per_hour: d_per_hour(),
             ntfy_topic: String::new(),
+            mail_results_max: d_mail_max(),
+            upload_max_bytes: d_upload_max(),
+            ref_ttl_secs: d_ref_ttl(),
         }
     }
 }

@@ -8,6 +8,8 @@ use std::sync::Mutex;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Note {
+    /// The owner's approval topic (specs/005 research.md R2).
+    pub topic: String,
     pub title: String,
     pub message: String,
     /// The approval page, with the secret in the fragment.
@@ -17,7 +19,6 @@ pub struct Note {
 pub enum Notifier {
     Ntfy {
         base: String,
-        topic: String,
         user: String,
         password: String,
         http: reqwest::Client,
@@ -30,10 +31,9 @@ pub enum Notifier {
 }
 
 impl Notifier {
-    pub fn ntfy(base: &str, topic: &str, user: &str, password: &str) -> Result<Self> {
+    pub fn ntfy(base: &str, user: &str, password: &str) -> Result<Self> {
         Ok(Notifier::Ntfy {
             base: base.trim_end_matches('/').to_string(),
-            topic: topic.to_string(),
             user: user.to_string(),
             password: password.to_string(),
             http: reqwest::Client::builder()
@@ -57,14 +57,19 @@ impl Notifier {
     }
 
     /// The ntfy publish body (contracts/approvals.md).
+    /// A note with no link (a household document notice) has no action.
     pub fn body(topic: &str, n: &Note) -> serde_json::Value {
-        json!({
+        let mut b = json!({
             "topic": topic,
             "title": n.title,
             "message": n.message,
             "priority": 4,
-            "actions": [{"action": "view", "label": "Review", "url": n.link, "clear": true}],
-        })
+        });
+        if !n.link.is_empty() {
+            b["actions"] =
+                json!([{"action": "view", "label": "Review", "url": n.link, "clear": true}]);
+        }
+        b
     }
 
     pub async fn send(&self, n: &Note) -> Result<()> {
@@ -78,11 +83,11 @@ impl Notifier {
             }
             Notifier::Ntfy {
                 base,
-                topic,
                 user,
                 password,
                 http,
             } => {
+                let topic = &n.topic;
                 if topic.is_empty() {
                     bail!("no approval topic configured");
                 }
@@ -115,6 +120,7 @@ mod tests {
     #[test]
     fn publish_body_has_one_view_action() {
         let n = Note {
+            topic: "t".into(),
             title: "Approve".into(),
             message: "m".into(),
             link: "http://x/approve/1#s".into(),
@@ -124,12 +130,18 @@ mod tests {
         assert_eq!(b["actions"].as_array().unwrap().len(), 1);
         assert_eq!(b["actions"][0]["action"], "view");
         assert_eq!(b["actions"][0]["url"], "http://x/approve/1#s");
+        let plain = Note {
+            link: String::new(),
+            ..n
+        };
+        assert!(Notifier::body("t", &plain).get("actions").is_none());
     }
 
     #[tokio::test]
     async fn memory_records_and_broken_fails() {
         let m = Notifier::memory();
         let n = Note {
+            topic: "t".into(),
             title: "t".into(),
             message: "m".into(),
             link: "l".into(),

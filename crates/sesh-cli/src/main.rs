@@ -8,6 +8,7 @@ mod config;
 mod credential;
 mod doctor;
 mod eval;
+mod google;
 mod host;
 mod infisical;
 mod init;
@@ -15,6 +16,7 @@ mod ntfy;
 mod render;
 mod secrets;
 mod up;
+mod user;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -85,6 +87,16 @@ enum Command {
         #[command(subcommand)]
         command: CredentialCommand,
     },
+    /// Connect or disconnect a user's (or the Household's) Google account.
+    Google {
+        #[command(subcommand)]
+        command: GoogleCommand,
+    },
+    /// Manage household users (each has their own approval topic).
+    User {
+        #[command(subcommand)]
+        command: UserCommand,
+    },
     /// Manage the agents the gateway accepts.
     Agent {
         #[command(subcommand)]
@@ -100,6 +112,24 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum GoogleCommand {
+    /// Print a one-time consent link for a user, or household.
+    Connect { owner: String },
+    /// Revoke and remove the grant.
+    Disconnect { owner: String },
+}
+
+#[derive(Subcommand)]
+enum UserCommand {
+    /// Add a user and their approval topic.
+    Add { name: String },
+    /// Remove a user; their agents stop working.
+    Remove { name: String },
+    /// List users.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -131,9 +161,12 @@ enum AgentCommand {
     /// Add an agent and generate its token (never printed).
     Add {
         name: String,
-        /// Connectors the agent may use, comma-separated (search, geo).
+        /// Connectors the agent may use, comma-separated (search, geo, mail, calendar, contacts, docs).
         #[arg(long, value_delimiter = ',', required = true)]
         connectors: Vec<String>,
+        /// Whose agent this is: a user (`sesh user add`), or household.
+        #[arg(long, default_value = "household")]
+        owner: String,
     },
     /// Remove an agent; its token stops working at once.
     Remove { name: String },
@@ -253,10 +286,34 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 println!("{line}");
             }
         }
-        Command::Agent { command } => match command {
-            AgentCommand::Add { name, connectors } => {
-                println!("{}", agent::add(&dir, &name, &connectors)?)
+        Command::Google { command } => {
+            let http = UreqHttp::new(Duration::from_secs(30));
+            let lines = match command {
+                GoogleCommand::Connect { owner } => google::connect(&dir, &http, &owner)?,
+                GoogleCommand::Disconnect { owner } => {
+                    vec![google::disconnect(&dir, &http, &owner)?]
+                }
+            };
+            for line in lines {
+                println!("{line}");
             }
+        }
+        Command::User { command } => {
+            let lines = match command {
+                UserCommand::Add { name } => user::add(&dir, &name)?,
+                UserCommand::Remove { name } => vec![user::remove(&dir, &name)?],
+                UserCommand::List => user::list(&dir)?,
+            };
+            for line in lines {
+                println!("{line}");
+            }
+        }
+        Command::Agent { command } => match command {
+            AgentCommand::Add {
+                name,
+                connectors,
+                owner,
+            } => println!("{}", agent::add(&dir, &name, &connectors, &owner)?),
             AgentCommand::Remove { name } => println!("{}", agent::remove(&dir, &name)?),
             AgentCommand::List => {
                 for line in agent::list(&dir)? {

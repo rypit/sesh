@@ -33,6 +33,13 @@ services:
       SESH_NTFY_URL: http://ntfy-eval:80
       SESH_NTFY_USER: sesh-gateway
       SESH_NTFY_PASSWORD: ${SESH_EVAL_NTFY_GATEWAY_PASSWORD:-}
+      # Mail and documents (specs/005 research.md R8): an in-process secret
+      # store, filled by `sesh eval` through the one-time form and fake
+      # Google's consent; the fakes stand in for Google and Paperless.
+      SESH_SECRET_STORE: memory
+      SESH_GATEWAY_ADMIN_TOKEN: ${SESH_EVAL_ADMIN_TOKEN:-}
+      SESH_PAPERLESS_USER: eval
+      SESH_PAPERLESS_PASSWORD: eval
     volumes:
       - ${SESH_EVAL_DIR:?}/gateway:/etc/sesh:ro
       - ${SESH_EVAL_DIR:?}/audit:/var/log/sesh-eval

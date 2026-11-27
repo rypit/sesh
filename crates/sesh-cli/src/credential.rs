@@ -13,7 +13,7 @@ pub fn admin_url() -> String {
     format!("http://127.0.0.1:{port}/admin")
 }
 
-fn admin_token(dir: &Path) -> Result<String> {
+pub fn admin_token(dir: &Path) -> Result<String> {
     Secrets::load(dir)?
         .get("SESH_GATEWAY_ADMIN_TOKEN")
         .map(str::to_string)

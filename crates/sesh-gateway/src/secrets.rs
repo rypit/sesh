@@ -154,6 +154,40 @@ impl SecretStore {
         }
     }
 
+    /// Deletes a credential; deleting one that isn't set is not an error.
+    pub async fn delete(&self, key: &str) -> Result<()> {
+        match self {
+            SecretStore::None => Ok(()),
+            SecretStore::Memory { values, broken } => {
+                if *broken {
+                    bail!("credential store unavailable");
+                }
+                values.lock().expect("lock").remove(key);
+                Ok(())
+            }
+            SecretStore::Infisical {
+                url,
+                project_id,
+                environment,
+                http,
+                ..
+            } => {
+                let tok = self.access_token(false).await?;
+                let r = http
+                    .delete(format!("{url}/api/v4/secrets/{key}"))
+                    .bearer_auth(&tok)
+                    .json(&json!({"projectId": project_id, "environment": environment, "secretPath": "/", "type": "shared"}))
+                    .send()
+                    .await
+                    .context("credential store unavailable")?;
+                if !(r.status().is_success() || r.status().as_u16() == 404) {
+                    bail!("credential store refused to delete ({})", r.status());
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// Creates or replaces a credential.
     pub async fn put(&self, key: &str, value: &str) -> Result<()> {
         match self {

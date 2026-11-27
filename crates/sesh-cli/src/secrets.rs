@@ -13,7 +13,7 @@ use std::path::Path;
 pub const FILE_NAME: &str = "secrets.env";
 
 /// Values `sesh init` generates when missing.
-pub const GENERATED: [&str; 14] = [
+pub const GENERATED: [&str; 16] = [
     "POSTGRES_PASSWORD",
     "GATEWAY_DB_PASSWORD",
     "SEARXNG_SECRET",
@@ -29,6 +29,9 @@ pub const GENERATED: [&str; 14] = [
     "NTFY_GATEWAY_PASSWORD",
     "NTFY_PERSON_PASSWORD",
     "SESH_GATEWAY_ADMIN_TOKEN",
+    // Feature 005: Paperless-ngx (the gateway signs in as its admin).
+    "PAPERLESS_ADMIN_PASSWORD",
+    "PAPERLESS_SECRET_KEY",
 ];
 
 /// Set by `sesh up` when it bootstraps Infisical (specs/004 research.md R5).
@@ -106,6 +109,10 @@ impl Secrets {
 
     pub fn get(&self, key: &str) -> Option<&str> {
         self.values.get(key).map(String::as_str)
+    }
+
+    pub fn remove(&mut self, key: &str) {
+        self.values.remove(key);
     }
 
     pub fn set(&mut self, key: &str, value: &str) {

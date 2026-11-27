@@ -12,15 +12,18 @@ pub mod calls;
 pub mod capability;
 pub mod connectors;
 pub mod executor;
+pub mod google;
 pub mod listen;
 pub mod mcp;
 pub mod notify;
+pub mod owners;
 pub mod pages;
 pub mod redact;
+pub mod refs;
 pub mod schema;
 pub mod secrets;
 
-use sesh_core::{Agent, AgentsFile, ConnectorDescriptor, GatewaySettings};
+use sesh_core::{Agent, AgentsFile, ConnectorDescriptor, GatewaySettings, User, UsersFile};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
@@ -69,10 +72,59 @@ impl Agents {
     pub fn get(&self, name: &str) -> Option<Agent> {
         self.current().get(name).cloned()
     }
+
+    pub fn all(&self) -> Vec<Agent> {
+        self.current().agents
+    }
+}
+
+/// Reloads `users.toml` when it changes (specs/005); fails closed.
+pub struct Users {
+    path: Option<PathBuf>,
+    cached: Mutex<(Option<SystemTime>, UsersFile)>,
+}
+
+impl Users {
+    pub fn from_file(path: PathBuf) -> Self {
+        Users {
+            path: Some(path),
+            cached: Mutex::new((None, UsersFile::default())),
+        }
+    }
+
+    pub fn fixed(file: UsersFile) -> Self {
+        Users {
+            path: None,
+            cached: Mutex::new((None, file)),
+        }
+    }
+
+    pub fn get(&self, name: &str) -> Option<User> {
+        self.current().get(name).cloned()
+    }
+
+    pub fn all(&self) -> Vec<User> {
+        self.current().users
+    }
+
+    fn current(&self) -> UsersFile {
+        let mut c = self.cached.lock().expect("lock");
+        if let Some(path) = &self.path {
+            let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+            if mtime != c.0 {
+                match std::fs::read_to_string(path).map(|t| UsersFile::parse(&t)) {
+                    Ok(Ok(f)) => *c = (mtime, f),
+                    _ => *c = (mtime, UsersFile::default()),
+                }
+            }
+        }
+        c.1.clone()
+    }
 }
 
 pub struct Gateway {
     pub agents: Agents,
+    pub users: Users,
     pub settings: GatewaySettings,
     pub connectors: Vec<ConnectorDescriptor>,
     pub caps: capability::Capabilities,
@@ -86,6 +138,9 @@ pub struct Gateway {
     pub secrets: secrets::SecretStore,
     /// The operator's token for `/admin/*` on the approvals listener.
     pub admin_token: Option<String>,
+    pub google: google::Google,
+    pub refs: refs::Refs,
+    pub paperless: connectors::docs::Paperless,
     /// Approvals a running execution is waiting for, by execution id.
     pub pending: Mutex<std::collections::HashMap<String, Vec<approvals::Request>>>,
 }

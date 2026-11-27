@@ -69,6 +69,10 @@ pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Rep
         let Some(agent) = gw.agents.get(&grant.agent) else {
             break 'checks Err(refused(&mut entry, 403, "agent no longer exists"));
         };
+        let scope = match crate::owners::scope(gw, &agent) {
+            Ok(s) => s,
+            Err(why) => break 'checks Err(refused(&mut entry, 403, &why)),
+        };
         if !agent.connectors.contains(&connector) {
             break 'checks Err(refused(
                 &mut entry,
@@ -114,6 +118,7 @@ pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Rep
         if desc.requires_approval {
             let ask = Ask {
                 agent: &grant.agent,
+                topic: &scope.topic,
                 connector: &connector,
                 method: &method,
                 description: &desc.description,
@@ -143,7 +148,22 @@ pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Rep
                 Gate::Refused(why) => break 'checks Err(refused(&mut entry, 403, &why)),
             }
         }
-        match gw.upstream.call(&connector, &method, &args, &creds).await {
+        let result = match connector.as_str() {
+            "mail" | "calendar" | "contacts" => {
+                crate::connectors::google::call(
+                    gw,
+                    &scope,
+                    &grant.agent,
+                    &connector,
+                    &method,
+                    &args,
+                )
+                .await
+            }
+            "docs" => crate::connectors::docs::call(gw, &scope, &grant.agent, &method, &args).await,
+            _ => gw.upstream.call(&connector, &method, &args, &creds).await,
+        };
+        match result {
             Ok(v) => {
                 entry.outcome = "allowed";
                 let mut notes = vec![];
@@ -152,6 +172,9 @@ pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Rep
                 }
                 for name in creds.keys() {
                     notes.push(format!("credential {connector}/{name}"));
+                }
+                if ["mail", "calendar", "contacts", "docs"].contains(&connector.as_str()) {
+                    notes.push(format!("owner {}", scope.owner));
                 }
                 entry.reason = (!notes.is_empty()).then(|| notes.join("; "));
                 Ok(v)
@@ -189,6 +212,7 @@ pub mod tests {
 
     pub fn gateway(audit: Audit, settings: GatewaySettings) -> Gateway {
         let agent = |n: &str, c: &[&str]| Agent {
+            owner: sesh_core::HOUSEHOLD.into(),
             name: n.into(),
             token_sha256: token_hash(&format!("tok-{n}")),
             connectors: c.iter().map(|s| s.to_string()).collect(),
@@ -205,11 +229,15 @@ pub mod tests {
             audit,
             upstream: Upstream::new(settings.clone()).unwrap(),
             settings,
+            users: crate::Users::fixed(Default::default()),
             executor_url: "http://executor-{agent}:8000".into(),
             approvals: crate::approvals::Store::memory(),
             notifier: crate::notify::Notifier::memory(),
             secrets: crate::secrets::SecretStore::memory(),
             admin_token: Some("admin-token".into()),
+            google: Default::default(),
+            refs: Default::default(),
+            paperless: crate::connectors::docs::Paperless::new("", ""),
             pending: Default::default(),
         }
     }

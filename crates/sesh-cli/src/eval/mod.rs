@@ -29,7 +29,7 @@ pub const EVAL_APPROVALS_PORT: u16 = 7102;
 pub const EVAL_NTFY_PORT: u16 = 7190;
 pub const EVAL_TOPIC: &str = "sesh-eval-approvals";
 pub const EVAL_AGENT: &str = "eval";
-pub const EVAL_CONNECTORS: [&str; 3] = ["search", "geo", "testgate"];
+pub const EVAL_CONNECTORS: [&str; 5] = ["search", "geo", "testgate", "mail", "docs"];
 const FAKES: &str = "http://fakes:8000";
 
 /// A missing prerequisite: exit code 3 (contracts/cli.md).
@@ -102,8 +102,19 @@ pub fn eval_gateway(config: &Config) -> GatewaySettings {
         &mut g.upstreams.open_meteo,
         &mut g.upstreams.nominatim,
         &mut g.upstreams.test,
+        &mut g.upstreams.paperless,
     ] {
         *u = FAKES.into();
+    }
+    g.upstreams.google_auth = format!("{FAKES}/fake/google/auth");
+    g.upstreams.google_token = format!("{FAKES}/fake/google/token");
+    g.upstreams.google_revoke = format!("{FAKES}/fake/google/revoke");
+    for u in [
+        &mut g.upstreams.gmail,
+        &mut g.upstreams.calendar,
+        &mut g.upstreams.people,
+    ] {
+        *u = format!("{FAKES}/fake/google");
     }
     g.ntfy_topic = EVAL_TOPIC.into();
     g.approvals_base_url = format!("http://127.0.0.1:{EVAL_APPROVALS_PORT}");
@@ -119,6 +130,7 @@ pub struct Prepared {
     pub audit: PathBuf,
     pub ntfy_gateway_pw: String,
     pub ntfy_person_pw: String,
+    pub admin_token: String,
 }
 
 /// Writes the run's files; only the token's hash reaches the gateway
@@ -139,6 +151,7 @@ pub fn prepare(dir: &Path, config: &Config, token: &str) -> Result<Prepared> {
     mode(&adir, 0o777)?;
     AgentsFile {
         agents: vec![Agent {
+            owner: sesh_core::HOUSEHOLD.into(),
             name: EVAL_AGENT.into(),
             token_sha256: token_hash(token),
             connectors: EVAL_CONNECTORS.iter().map(|c| c.to_string()).collect(),
@@ -155,13 +168,23 @@ pub fn prepare(dir: &Path, config: &Config, token: &str) -> Result<Prepared> {
     std::fs::write(rdir.join("compose.yaml"), EVAL_COMPOSE)?;
     std::fs::write(rdir.join("empty.env"), "")?;
     let (gw_pw, person_pw) = (secrets::random_token()?, secrets::random_token()?);
-    crate::ntfy::write_config(&rdir, EVAL_TOPIC, &gw_pw, &person_pw)?;
+    crate::ntfy::write_config(
+        &rdir,
+        &[EVAL_TOPIC.to_string()],
+        &gw_pw,
+        &[crate::ntfy::Reader {
+            user: crate::ntfy::PERSON_USER.into(),
+            password: person_pw.clone(),
+            topics: vec![EVAL_TOPIC.into()],
+        }],
+    )?;
     std::fs::rename(rdir.join(crate::ntfy::FILE), rdir.join("ntfy-server.yml"))?;
     mode(&rdir.join("ntfy-server.yml"), 0o644)?;
     Ok(Prepared {
         audit: adir.join("audit.jsonl"),
         ntfy_gateway_pw: gw_pw,
         ntfy_person_pw: person_pw,
+        admin_token: secrets::random_token()?,
     })
 }
 
@@ -244,13 +267,67 @@ impl Approver {
 }
 
 pub fn eval_compose(dir: &Path) -> DockerCompose {
-    eval_compose_with(dir, "")
+    eval_compose_with(dir, "", "")
+}
+
+/// Connects the eval agent's owner (the Household) to fake Google through
+/// the real flow: the client credentials by one-time form, then the
+/// consent link, with fake Google's code (specs/005 research.md R8).
+pub fn connect_fake_google(http: &dyn Http, admin_token: &str) -> Result<()> {
+    let base = format!("http://127.0.0.1:{EVAL_APPROVALS_PORT}");
+    let link = |r: crate::host::http::Reply, what: &str| -> Result<(String, String)> {
+        let url = r.body["url"]
+            .as_str()
+            .with_context(|| format!("no {what} link from the eval gateway ({})", r.status))?;
+        let (page, secret) = url.split_once('#').context("a link without a secret")?;
+        Ok((page.to_string(), secret.to_string()))
+    };
+    for (name, value) in [
+        ("CLIENT_ID", "eval-client"),
+        ("CLIENT_SECRET", "eval-client-secret"),
+    ] {
+        let r = http.post(
+            &format!("{base}/admin/forms"),
+            Some(admin_token),
+            &json!({"connector": "google", "name": name}),
+        )?;
+        let (page, secret) = link(r, "form")?;
+        let r = http.post(&page, None, &json!({"secret": secret, "value": value}))?;
+        if r.status != 200 {
+            bail!("filling the eval's {name} failed ({})", r.status);
+        }
+    }
+    let r = http.post(
+        &format!("{base}/admin/google/consent"),
+        Some(admin_token),
+        &json!({"owner": sesh_core::HOUSEHOLD}),
+    )?;
+    let (page, secret) = link(r, "consent")?;
+    let r = http.post(&page, None, &json!({"secret": secret}))?;
+    let auth = r.body["redirect"]
+        .as_str()
+        .with_context(|| format!("no consent redirect ({})", r.status))?;
+    let state = auth
+        .split("state=")
+        .nth(1)
+        .and_then(|s| s.split('&').next())
+        .context("no state in the consent redirect")?
+        .replace("%2E", ".");
+    let r = http.get(
+        &format!("{base}/google/callback?state={state}&code=fake-household"),
+        None,
+    )?;
+    if r.status != 200 {
+        bail!("fake Google consent failed ({})", r.status);
+    }
+    Ok(())
 }
 
 /// The eval project, with the eval gateway's ntfy password for `up`.
-pub fn eval_compose_with(dir: &Path, ntfy_gateway_pw: &str) -> DockerCompose {
+pub fn eval_compose_with(dir: &Path, ntfy_gateway_pw: &str, admin_token: &str) -> DockerCompose {
     let rdir = run_dir(dir);
     let mut vars = vec![
+        ("SESH_EVAL_ADMIN_TOKEN".to_string(), admin_token.to_string()),
         (
             "SESH_EVAL_NTFY_GATEWAY_PASSWORD".to_string(),
             ntfy_gateway_pw.to_string(),
@@ -338,17 +415,17 @@ impl Drop for Teardown<'_> {
 fn result_line(r: &TaskResult) -> String {
     if r.passed {
         format!(
-            "{:<10} PASS  {} calls  {} turns  {:.1}s",
+            "{:<16} PASS  {} calls  {} turns  {:.1}s",
             r.task, r.tool_calls, r.turns, r.seconds
         )
     } else {
         let mut s = format!(
-            "{:<10} FAIL  {}",
+            "{:<16} FAIL  {}",
             r.task,
             r.reasons.first().cloned().unwrap_or_default()
         );
         for more in r.reasons.iter().skip(1) {
-            s.push_str(&format!("\n{:<16}{more}", ""));
+            s.push_str(&format!("\n{:<22}{more}", ""));
         }
         s
     }
@@ -412,12 +489,13 @@ pub fn run(dir: &Path, opts: &Options) -> Result<bool> {
     let token = secrets::random_token()?;
     let prepared = prepare(dir, &config, &token)?;
     let audit = prepared.audit.clone();
-    let compose = eval_compose_with(dir, &prepared.ntfy_gateway_pw);
+    let compose = eval_compose_with(dir, &prepared.ntfy_gateway_pw, &prepared.admin_token);
     let approver = Approver::new(&prepared.ntfy_person_pw);
     let mut redact = secrets.values();
     redact.push(token.clone());
     redact.push(prepared.ntfy_gateway_pw.clone());
     redact.push(prepared.ntfy_person_pw.clone());
+    redact.push(prepared.admin_token.clone());
 
     let started = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -470,6 +548,7 @@ pub fn run(dir: &Path, opts: &Options) -> Result<bool> {
     compose
         .up(&[])
         .context("can't start the eval gateway (are the sesh images built?)")?;
+    connect_fake_google(&http, &prepared.admin_token)?;
     let mcp = HttpMcp::connect(
         &format!("http://127.0.0.1:{EVAL_PORT}/mcp"),
         &token,
@@ -559,12 +638,23 @@ mod tests {
         assert!(!agents.contains(token) && agents.contains(&token_hash(token)));
         let file = AgentsFile::parse(&agents).unwrap();
         assert_eq!(file.agents[0].name, EVAL_AGENT);
-        assert_eq!(file.agents[0].connectors, vec!["search", "geo", "testgate"]);
+        assert_eq!(file.agents[0].connectors, EVAL_CONNECTORS.to_vec());
         let g: GatewaySettings =
             toml::from_str(&std::fs::read_to_string(rdir.join("gateway/gateway.toml")).unwrap())
                 .unwrap();
         assert_eq!(g.upstreams.searxng, FAKES);
         assert_eq!(g.upstreams.open_meteo, FAKES);
+        // specs/005: Google and Paperless are the fakes too; nothing real.
+        assert_eq!(g.upstreams.paperless, FAKES);
+        for u in [
+            &g.upstreams.google_token,
+            &g.upstreams.gmail,
+            &g.upstreams.calendar,
+            &g.upstreams.people,
+            &g.upstreams.google_revoke,
+        ] {
+            assert!(u.starts_with(FAKES), "{u}");
+        }
         assert!(g.home.is_some());
         assert_eq!(audit, rdir.join("audit/audit.jsonl"));
         assert!(rdir.join("compose.yaml").exists());
@@ -671,9 +761,12 @@ mod tests {
             calls: vec![],
             answer: String::new(),
         };
-        assert_eq!(result_line(&r), "web-fact   PASS  2 calls  3 turns  4.1s");
+        assert_eq!(
+            result_line(&r),
+            "web-fact         PASS  2 calls  3 turns  4.1s"
+        );
         r.passed = false;
         r.reasons = vec!["expected a geo.forecast call that was allowed; none made".into()];
-        assert!(result_line(&r).starts_with("web-fact   FAIL  expected a geo.forecast"));
+        assert!(result_line(&r).starts_with("web-fact         FAIL  expected a geo.forecast"));
     }
 }

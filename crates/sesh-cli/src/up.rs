@@ -90,6 +90,17 @@ pub fn effective_gateway(config: &Config) -> GatewaySettings {
         ] {
             *u = STUB_UPSTREAM.into();
         }
+        // Fake Google (specs/005 research.md R7); Paperless stays real.
+        g.upstreams.google_auth = format!("{STUB_UPSTREAM}/fake/google/auth");
+        g.upstreams.google_token = format!("{STUB_UPSTREAM}/fake/google/token");
+        g.upstreams.google_revoke = format!("{STUB_UPSTREAM}/fake/google/revoke");
+        for u in [
+            &mut g.upstreams.gmail,
+            &mut g.upstreams.calendar,
+            &mut g.upstreams.people,
+        ] {
+            *u = format!("{STUB_UPSTREAM}/fake/google");
+        }
         g.home.get_or_insert(Home {
             latitude: 59.91,
             longitude: 10.75,
@@ -166,16 +177,39 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
     let rendered = render::litellm_config(&config);
     std::fs::write(dir.join(render::FILE_NAME), &rendered)?;
     write_compose_files(dir, &config)?;
-    // The approval channel's users and access (specs/004 research.md R3).
+    // The approval channels (specs/004 R3, specs/005 R2): the Household's
+    // topic, read by `person` and every user, and each user's own.
+    let users = crate::user::load(dir)?;
+    let hh = config.gateway.ntfy_topic.clone();
+    let mut topics = vec![hh.clone()];
+    let mut readers = vec![crate::ntfy::Reader {
+        user: crate::ntfy::PERSON_USER.into(),
+        password: secrets
+            .get("NTFY_PERSON_PASSWORD")
+            .context("NTFY_PERSON_PASSWORD missing; run `sesh init`")?
+            .to_string(),
+        topics: vec![hh.clone()],
+    }];
+    for u in &users.users {
+        topics.push(u.topic.clone());
+        readers.push(crate::ntfy::Reader {
+            user: crate::ntfy::reader_name(&u.name),
+            password: secrets
+                .get(&crate::user::password_key(&u.name))
+                .with_context(|| {
+                    format!("no ntfy password for {}; run `sesh user add` again", u.name)
+                })?
+                .to_string(),
+            topics: vec![u.topic.clone(), hh.clone()],
+        });
+    }
     let ntfy_changed = crate::ntfy::write_config(
         &dir.join("compose"),
-        &config.gateway.ntfy_topic,
+        &topics,
         secrets
             .get("NTFY_GATEWAY_PASSWORD")
             .context("NTFY_GATEWAY_PASSWORD missing; run `sesh init`")?,
-        secrets
-            .get("NTFY_PERSON_PASSWORD")
-            .context("NTFY_PERSON_PASSWORD missing; run `sesh init`")?,
+        &readers,
     )?;
     let gateway_toml = std::fs::read_to_string(agent::gateway_dir(dir).join("gateway.toml"))?;
     let agents = agent::load(dir)?;
@@ -198,6 +232,7 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
         "searxng",
         "infisical",
         "ntfy",
+        "paperless",
         "gateway",
     ];
     base.extend(executors.iter().map(String::as_str));
@@ -350,7 +385,7 @@ mod tests {
     #[test]
     fn first_up_migrates_then_starts_services_and_webui_last() {
         let dir = ready("first");
-        crate::agent::add(&dir, "alice", &["search".into()]).unwrap();
+        crate::agent::add(&dir, "alice", &["search".into()], "household").unwrap();
         let compose = FakeCompose::default();
         run(&dir, &compose, &router()).unwrap();
         assert_eq!(
@@ -358,7 +393,7 @@ mod tests {
             vec![
                 "up postgres",
                 "sql sesh",
-                "up redis litellm searxng infisical ntfy gateway executor-alice stub-llm",
+                "up redis litellm searxng infisical ntfy paperless gateway executor-alice stub-llm",
                 "restart gateway",
                 "up open-webui"
             ]
@@ -422,6 +457,7 @@ mod tests {
         let mut f = AgentsFile::default();
         for n in ["alice", "bob"] {
             f.agents.push(sesh_core::Agent {
+                owner: sesh_core::HOUSEHOLD.into(),
                 name: n.into(),
                 token_sha256: "0".repeat(64),
                 connectors: vec!["search".into()],

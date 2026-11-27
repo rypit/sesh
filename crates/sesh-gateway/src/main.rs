@@ -19,6 +19,8 @@
 //! - `SESH_INFISICAL_URL`, `SESH_INFISICAL_CLIENT_ID`,
 //!   `SESH_INFISICAL_CLIENT_SECRET`, `SESH_INFISICAL_PROJECT_ID`: the secret store
 //! - `SESH_GATEWAY_ADMIN_TOKEN`: the operator's token for `/admin/*`
+//! - `SESH_SECRET_STORE=memory`: an in-process secret store (the eval
+//!   project only; never the household stack)
 
 #![forbid(unsafe_code)]
 
@@ -85,7 +87,6 @@ async fn main() -> anyhow::Result<()> {
     let notifier = match env("SESH_NTFY_URL") {
         Some(url) => notify::Notifier::ntfy(
             &url,
-            &settings.ntfy_topic,
             &env("SESH_NTFY_USER").unwrap_or_default(),
             &env("SESH_NTFY_PASSWORD").unwrap_or_default(),
         )?,
@@ -101,6 +102,11 @@ async fn main() -> anyhow::Result<()> {
         (Some(u), Some(id), Some(sec), Some(p)) => {
             secrets::SecretStore::infisical(&u, &id, &sec, &p)?
         }
+        // The eval project only (specs/005 research.md R8): an in-process
+        // store, gone when the short-lived eval gateway stops.
+        _ if env("SESH_SECRET_STORE").as_deref() == Some("memory") => {
+            secrets::SecretStore::memory()
+        }
         _ => secrets::SecretStore::None,
     };
     let audit = match audit_url.as_deref() {
@@ -108,8 +114,14 @@ async fn main() -> anyhow::Result<()> {
         Some(url) if url.starts_with("file:") => Audit::file(&url["file:".len()..])?,
         Some(url) => Audit::postgres(url.to_string()),
     };
+    let users = sesh_gateway::Users::from_file(
+        env("SESH_USERS_FILE")
+            .unwrap_or_else(|| "/etc/sesh/users.toml".into())
+            .into(),
+    );
     let gw = Arc::new(Gateway {
         agents,
+        users,
         connectors: connectors::all(env("SESH_GATEWAY_TEST_CONNECTORS").as_deref() == Some("1")),
         caps: Default::default(),
         audit,
@@ -118,6 +130,12 @@ async fn main() -> anyhow::Result<()> {
         secrets,
         admin_token: env("SESH_GATEWAY_ADMIN_TOKEN"),
         pending: Default::default(),
+        google: Default::default(),
+        refs: Default::default(),
+        paperless: sesh_gateway::connectors::docs::Paperless::new(
+            &env("SESH_PAPERLESS_USER").unwrap_or_default(),
+            &env("SESH_PAPERLESS_PASSWORD").unwrap_or_default(),
+        ),
         upstream: connectors::Upstream::new(settings.clone())?,
         settings,
         executor_url: env("SESH_EXECUTOR_URL")

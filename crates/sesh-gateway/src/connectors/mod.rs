@@ -1,7 +1,9 @@
 //! Connector registry: descriptors (what agents and the executor see) and
 //! dispatch to each upstream. One module per upstream family.
 
+pub mod docs;
 pub mod geo;
+pub mod google;
 pub mod search;
 
 use serde_json::{Value, json};
@@ -11,7 +13,11 @@ use std::time::Duration;
 
 const ARTICLE_CAP: usize = 20_000;
 
-fn method(description: &str, input: Value, requires_approval: bool) -> (String, MethodDescriptor) {
+pub(crate) fn method(
+    description: &str,
+    input: Value,
+    requires_approval: bool,
+) -> (String, MethodDescriptor) {
     (
         String::new(),
         MethodDescriptor {
@@ -22,7 +28,7 @@ fn method(description: &str, input: Value, requires_approval: bool) -> (String, 
     )
 }
 
-fn connector(
+pub(crate) fn connector(
     name: &str,
     instructions: &str,
     methods: Vec<(&str, (String, MethodDescriptor))>,
@@ -110,6 +116,8 @@ pub fn all(test_connectors: bool) -> Vec<ConnectorDescriptor> {
             ],
         ),
     ];
+    out.extend(google::descriptors());
+    out.push(docs::descriptor());
     if test_connectors {
         out.push(connector(
             "testgate",

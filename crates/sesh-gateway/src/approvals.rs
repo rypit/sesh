@@ -492,6 +492,8 @@ pub enum Gate {
 
 pub struct Ask<'a> {
     pub agent: &'a str,
+    /// Where the person is asked: the agent's owner's topic.
+    pub topic: &'a str,
     pub connector: &'a str,
     pub method: &'a str,
     pub description: &'a str,
@@ -576,6 +578,7 @@ pub async fn gate(
         return Gate::Refused("approvals unavailable; nothing was run".into());
     }
     let note = Note {
+        topic: ask.topic.to_string(),
         title: format!("Approve: {} wants to run {call}", ask.agent),
         message: r.shown_text.clone(),
         link: format!(
@@ -658,6 +661,7 @@ mod tests {
     fn ask<'a>(agent: &'a str, args: &'a Value) -> Ask<'a> {
         Ask {
             agent,
+            topic: "sesh-approvals-test",
             connector: "testgate",
             method: "act",
             description: "A side effect that needs approval.",

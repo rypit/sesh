@@ -23,7 +23,7 @@ all = { level = "warn", priority = -1 }
 [workspace.dependencies]
 anyhow = "1"
 axum = "0.8"
-reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls", "form", "multipart"] }
 rmcp = { version = "3.12", default-features = false, features = ["server", "transport-streamable-http-server"] }
 sesh-core = { path = "crates/sesh-core", version = "0.1.0" }
 sha2 = "0.11"
