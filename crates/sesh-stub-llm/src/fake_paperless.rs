@@ -109,7 +109,7 @@ impl Fake {
             ("GET", "/api/tasks/") => match q.get("task_id").and_then(|t| self.tasks.get(t)) {
                 Some(id) => (
                     200,
-                    json!([{"status": "SUCCESS", "related_document": id.to_string()}]),
+                    json!([{"task_id": q.get("task_id"), "status": "SUCCESS", "related_document": id.to_string()}]),
                 ),
                 None => (200, json!([])),
             },

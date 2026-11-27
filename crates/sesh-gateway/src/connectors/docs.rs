@@ -313,6 +313,7 @@ impl Paperless {
         polls: u32,
     ) -> Result<Option<u64>, String> {
         let task = task.to_string();
+        let mut seen = String::new();
         for _ in 0..polls {
             let t = self
                 .req(
@@ -323,17 +324,25 @@ impl Paperless {
                     None,
                 )
                 .await?;
-            let t = if t.is_array() {
-                t[0].clone()
-            } else {
-                t["results"][0].clone()
-            };
-            match t["status"].as_str() {
-                Some("SUCCESS") => {
-                    let id = t["related_document"]
-                        .as_u64()
-                        .or(t["related_document"].as_str().and_then(|s| s.parse().ok()))
-                        .ok_or("the document service gave no document id")?;
+            // For the log if this never finishes: the status words only.
+            seen = t
+                .as_array()
+                .or(t["results"].as_array())
+                .map(|a| {
+                    a.iter()
+                        .map(|x| {
+                            format!(
+                                "{}:{}",
+                                x["task_id"].as_str() == Some(task.as_str()),
+                                x["status"].as_str().unwrap_or("?")
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .unwrap_or_else(|| "no list".into());
+            match task_state(&t, &task) {
+                TaskState::Done(id) => {
                     self.req(
                         base,
                         reqwest::Method::PATCH,
@@ -344,21 +353,81 @@ impl Paperless {
                     .await?;
                     return Ok(Some(id));
                 }
-                Some("FAILURE") => {
+                TaskState::Failed(why) => {
                     return Err(format!(
-                        "the document service couldn't process the file: {}",
-                        t["result"]
-                            .as_str()
-                            .unwrap_or("")
-                            .chars()
-                            .take(200)
-                            .collect::<String>()
+                        "the document service couldn't process the file: {why}"
                     ));
                 }
-                _ => tokio::time::sleep(Duration::from_millis(500)).await,
+                TaskState::Waiting => tokio::time::sleep(Duration::from_millis(500)).await,
             }
         }
+        tracing::warn!(polls, seen = %seen.chars().take(200).collect::<String>(), "a document is still being consumed");
         Ok(None)
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum TaskState {
+    Waiting,
+    Done(u64),
+    Failed(String),
+}
+
+/// Reads Paperless's task list for `task`. Versions differ: the list may
+/// be bare or paged, the status upper or lower case, and the new document
+/// in `related_document` or only in `result` (`{'document_id': 1}`, or
+/// "... New document id 1 created"). An entry for another task is ignored.
+fn task_state(list: &Value, task: &str) -> TaskState {
+    let items = list
+        .as_array()
+        .or(list["results"].as_array())
+        .cloned()
+        .unwrap_or_default();
+    let Some(t) = items
+        .iter()
+        .find(|t| t["task_id"].as_str() == Some(task))
+        .or(if items.len() == 1 && items[0]["task_id"].is_null() {
+            items.first()
+        } else {
+            None
+        })
+    else {
+        return TaskState::Waiting;
+    };
+    let digits_after = |s: &str, key: &str| -> Option<u64> {
+        let at = s.find(key)? + key.len();
+        let rest: String = s[at..]
+            .chars()
+            .skip_while(|c| !c.is_ascii_digit())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        rest.parse().ok()
+    };
+    let result = match &t["result"] {
+        Value::String(x) => x.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    };
+    match t["status"]
+        .as_str()
+        .unwrap_or("")
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "SUCCESS" => {
+            let id = t["related_document"]
+                .as_u64()
+                .or(t["related_document"].as_str().and_then(|x| x.parse().ok()))
+                .or(t["result"]["document_id"].as_u64())
+                .or(digits_after(&result, "document_id"))
+                .or(digits_after(&result, "document id"));
+            match id {
+                Some(id) => TaskState::Done(id),
+                None => TaskState::Failed("it finished but gave no document id".into()),
+            }
+        }
+        "FAILURE" | "REVOKED" => TaskState::Failed(result.chars().take(200).collect()),
+        _ => TaskState::Waiting,
     }
 }
 
@@ -679,6 +748,56 @@ mod tests {
             .unwrap_err(),
             "file type not allowed"
         );
+    }
+
+    #[test]
+    fn task_state_reads_each_paperless_shape() {
+        let t = "abc";
+        assert_eq!(task_state(&json!([]), t), TaskState::Waiting);
+        assert_eq!(
+            task_state(&json!([{"task_id": "abc", "status": "STARTED"}]), t),
+            TaskState::Waiting
+        );
+        assert_eq!(
+            task_state(
+                &json!([{"task_id": "abc", "status": "SUCCESS", "related_document": "7"}]),
+                t
+            ),
+            TaskState::Done(7)
+        );
+        assert_eq!(
+            task_state(
+                &json!({"results": [{"task_id": "abc", "status": "success", "result": {"document_id": 8}}]}),
+                t
+            ),
+            TaskState::Done(8)
+        );
+        assert_eq!(
+            task_state(
+                &json!([{"task_id": "abc", "status": "SUCCESS", "result": "{'document_id': 9}"}]),
+                t
+            ),
+            TaskState::Done(9)
+        );
+        assert_eq!(
+            task_state(
+                &json!([{"task_id": "abc", "status": "SUCCESS", "result": "Success. New document id 10 created"}]),
+                t
+            ),
+            TaskState::Done(10)
+        );
+        // Another task's entry (a filter Paperless ignored) is not ours.
+        assert_eq!(
+            task_state(
+                &json!([{"task_id": "zzz", "status": "SUCCESS", "related_document": 1}]),
+                t
+            ),
+            TaskState::Waiting
+        );
+        assert!(matches!(
+            task_state(&json!([{"task_id": "abc", "status": "FAILURE", "result": "bad pdf"}]), t),
+            TaskState::Failed(w) if w == "bad pdf"
+        ));
     }
 
     #[test]
