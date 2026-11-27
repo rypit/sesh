@@ -80,7 +80,7 @@ checks.
 ## Phase 8: Polish
 
 - [x] T019 [P] README status line and roadmap; AGENTS.md commands
-- [ ] T020 Record CI results in `specs/006-rss-feeds/research.md`
+- [x] T020 Record CI results in `specs/006-rss-feeds/research.md`
 
 ## Dependencies
 

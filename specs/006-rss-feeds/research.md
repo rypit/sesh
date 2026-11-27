@@ -175,3 +175,38 @@
   feed publishers, reached only through the feed service.
 - The diagram's resource box for feeds names Miniflux; the catalog and
   connector table gain `feeds`.
+
+## CI results (T020)
+
+Run 46039082308 (commit 4ab7e09) passed every job: `check`, `images`,
+and the stack tests `foundation_stack`, `gateway_stack`, `eval_stack`
+(suite v4, 12 of 12 with the pass script), `secrets_stack`,
+`google_docs_stack` and `feeds_stack` (the real Miniflux image, the
+stub as publisher, no internet).
+
+The runs before it, and what each taught:
+- **46028846784:**
+  - The eval gateway had no `SESH_MINIFLUX_*` settings.
+  - Adding the first feed failed with a bare "unavailable". The gateway
+    now says how a feed-service call failed (timeout, connection or
+    status), never where.
+- **46032608419**, with Miniflux at debug level in stub mode:
+  - Miniflux created the feed in under a second, then, inside the same
+    request, fetched the site's icon from the feed's site link. That
+    hung with CI's internet blocked. Miniflux has no option to skip
+    icons, so the fake feeds' site links point at the stub, and the
+    CLI waits longer than the gateway (45 s, against 35 s).
+  - On a real install an add waits for the feed and its site's icon:
+    usually a second or two, at most Miniflux's 20 s timeout.
+  - `eval_stack` still expected suite v3's 10 tasks.
+- **46035943945:**
+  - Every `feeds_stack` check passed except "publishes no port":
+    `docker compose port` prints a placeholder for an unpublished port.
+    The test now reads the container's port bindings.
+
+Also verified in CI:
+- Miniflux's own Postgres login reaches only its database.
+- Miniflux's network namespace reaches its database (the positive
+  control) but not the gateway's executor port or Postgres on
+  `default`.
+- Executors can't reach Miniflux.
