@@ -1719,6 +1719,12 @@ fn google_docs_stack() {
         out.contains("Ben's statement") && !out.contains("dentist"),
         "SC-001: {out}"
     );
+    let out =
+        anabot.execute("async () => await mail.search({ query: \"statement\", user: \"ben\" })");
+    assert!(
+        out.contains("not allowed") && !out.contains("marigold"),
+        "FR-003: a model can't pick the user: {out}"
+    );
     let out = anabot.execute("async () => await contacts.search({ query: \"okafor\" })");
     assert!(out.contains("clinic@example.org"), "{out}");
     let out = anabot.execute("async () => await calendar.list({})");
@@ -1764,6 +1770,36 @@ fn google_docs_stack() {
     );
     let out = anabot.execute("async () => await calendar.create({ title: \"Dentist\", start: \"2026-12-01T10:40:00Z\", end: \"2026-12-01T11:10:00Z\" })");
     assert!(out.contains("\"approval_pending\""), "FR-011: {out}");
+    // Denied: nothing is sent.
+    let deny_me =
+        "async () => await mail.send({ to: [\"x@example.org\"], subject: \"Deny\", body: \"no\" })";
+    assert!(anabot.execute(deny_me).contains("\"approval_pending\""));
+    let notes = stack.notifications_as("u-ana", "NTFY_PASSWORD_ANA", &ana_topic);
+    let link = notes.last().unwrap()["actions"][0]["url"].as_str().unwrap();
+    let (page, secret) = link.split_once('#').unwrap();
+    assert_eq!(decide(page, secret, "deny"), 200);
+    let out = anabot.execute(deny_me);
+    assert!(out.contains("denied"), "{out}");
+    assert_eq!(
+        stack.fake_google()["sent"]["ana"].as_array().unwrap().len(),
+        1,
+        "SC-002: a denied send went out"
+    );
+    // US1 (FR-004): a Household approval reaches every user.
+    let out = house.execute("async () => await calendar.create({ title: \"Bins\", start: \"2026-12-02T07:00:00Z\", end: \"2026-12-02T07:15:00Z\" })");
+    assert!(out.contains("\"approval_pending\""), "{out}");
+    let hh = stack.topic();
+    for (user, key) in [
+        ("u-ana", "NTFY_PASSWORD_ANA"),
+        ("u-ben", "NTFY_PASSWORD_BEN"),
+    ] {
+        let n = stack.notifications_as(user, key, &hh);
+        assert!(
+            n.iter()
+                .any(|m| m["title"].as_str().unwrap_or("").contains("house")),
+            "FR-004: {user} can't read the household approval"
+        );
+    }
     // Header injection is refused before anything is sent.
     let out = anabot.execute("async () => await mail.draft({ to: [\"a@example.org\\r\\nBcc: x@example.org\"], subject: \"x\", body: \"x\" })");
     assert!(!out.contains("\"draft_id\""), "{out}");

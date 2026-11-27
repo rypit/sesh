@@ -761,7 +761,10 @@ mod tests {
             calls: vec![],
             answer: String::new(),
         };
-        assert_eq!(result_line(&r), "web-fact         PASS  2 calls  3 turns  4.1s");
+        assert_eq!(
+            result_line(&r),
+            "web-fact         PASS  2 calls  3 turns  4.1s"
+        );
         r.passed = false;
         r.reasons = vec!["expected a geo.forecast call that was allowed; none made".into()];
         assert!(result_line(&r).starts_with("web-fact         FAIL  expected a geo.forecast"));

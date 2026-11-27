@@ -178,3 +178,38 @@ consent flow, and the fake Paperless.
   gateway, so its components don't change. The architecture document's
   catalog row for Google ("Google APIs via MCP server") changes to
   "Google APIs, called by the gateway".
+
+## Build decisions (where the build differs from the plan above)
+
+- **No new tables.** A Google connection's scopes and state live next to
+  its grant in the secret store (`USER_<NAME>__GOOGLE__SCOPES`,
+  `__STATE`), and consent links live in gateway memory; T002's tables
+  were not needed. A restart forgets open consent links, which only
+  means asking for a new one.
+- **Approval text** uses the gateway's generic template (the agent, the
+  method, and the quoted arguments, so recipients and subject show).
+- **Uploads within the deadline.** An execution has 30 s. `docs.upload`
+  waits up to 20 s for Paperless to consume the file; past that it
+  answers `processing` and a background task gives the document its
+  owner. Until then the document belongs to the gateway's admin
+  account, which no agent's scope includes: invisible, never misfiled.
+  The Household notification is sent when Paperless accepts the file.
+- **Upload types:** PDF and images only; Office files need Tika and
+  Gotenberg, which sesh doesn't run.
+- **Paperless networking:** `paperless` is on the internal `docs`
+  network with the gateway, and on `default` for Postgres and Redis.
+- **Doctor `paperless` warns** rather than fails: Paperless takes a
+  minute or two to start, and its absence isn't a safety problem.
+- **The Google OAuth client** (`GOOGLE__CLIENT_ID`, `__CLIENT_SECRET`) is
+  filled through the feature 004 one-time form, as a `google`
+  pseudo-connector; `sesh credential list` shows it once an agent uses a
+  Google connector.
+- **The eval gateway** gets an in-process secret store
+  (`SESH_SECRET_STORE=memory`, never used by the household stack) and a
+  per-run admin token. `sesh eval` fills the fake client credentials
+  through the real form and connects the Household through the real
+  consent flow with fake Google's code. Suite v3 adds two scoring
+  rules: `forbidden` calls, and `pasted` file text.
+- **The fake consent:** tests read the `state` from the authorization
+  URL and call the callback with `code=fake-<user>` themselves (the stub
+  has no host port, so a browser redirect isn't simulated).

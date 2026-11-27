@@ -16,31 +16,31 @@ they check.
 
 ## Phase 1: Setup
 
-- [ ] T001 Compose in `deploy/compose.yaml`:
+- [x] T001 Compose in `deploy/compose.yaml`:
   - `paperless` (`paperlessngx/paperless-ngx:3.5.1`, pinned by digest; database `paperless`, Redis database 2, generated admin credentials, OCR language `eng`, media volume);
   - an internal `docs` network shared only with the gateway;
   - the gateway environment for Paperless and the Google base URLs.
 
   Plus the `paperless` database in `deploy/postgres/gateway.sql`, and dummy values in `Makefile` for `compose-config`.
-- [ ] T002 [P] `deploy/postgres/gateway.sql`: tables `google_connections` and `google_consents` per data-model.md (`Google connection.state` CHECK, `Consent link.secret_sha256`, `Consent link.expires_at`); `sesh_gateway` gets INSERT, SELECT and UPDATE; consents can also be deleted (the PKCE verifier is short-lived)
-- [ ] T003 [P] Review `docs/decisions/0008-owners-google-paperless.md`, and the architecture-catalog change already made in `docs/architecture/solutions-architecture.md`
+- [x] T002 [P] *(Superseded: no tables; see research.md "Build decisions".)* `deploy/postgres/gateway.sql`: tables `google_connections` and `google_consents` per data-model.md (`Google connection.state` CHECK, `Consent link.secret_sha256`, `Consent link.expires_at`); `sesh_gateway` gets INSERT, SELECT and UPDATE; consents can also be deleted (the PKCE verifier is short-lived)
+- [x] T003 [P] Review `docs/decisions/0008-owners-google-paperless.md`, and the architecture-catalog change already made in `docs/architecture/solutions-architecture.md`
 
 ---
 
 ## Phase 2: Foundational
 
-- [ ] T004 [P] Unit tests, then in `crates/sesh-core/src/lib.rs`:
+- [x] T004 [P] Unit tests, then in `crates/sesh-core/src/lib.rs`:
   - `Agent.owner`, defaulting to `household` and validated against the users;
   - `User` and `UsersFile` per data-model.md (`User.name`, `User.topic`);
   - `GatewaySettings` gains the Google URLs and limits per data-model.md Limits (`Limits.mail_results_max`, `Limits.upload_max_bytes`, `Limits.upload_types`, `Limits.ref_ttl_secs`).
-- [ ] T005 [P] Unit tests, then `crates/sesh-gateway/src/owners.rs`:
+- [x] T005 [P] Unit tests, then `crates/sesh-gateway/src/owners.rs`:
   - owner → grant key (data-model.md `Google connection`, the refresh-token key);
   - owner → Paperless owner set (personal: own plus Household; Household: own);
   - owner → approval topic.
 
   `approvals::gate` and `notify` use the owner's topic (FR-004).
-- [ ] T006 [P] Unit tests, then `crates/sesh-gateway/src/refs.rs`: issue and resolve agent-bound attachment refs per data-model.md (`Attachment reference.agent`, `Attachment reference.expires_at`)
-- [ ] T007 Unit tests, then `secrets.rs` gains `delete`, and `calls.rs` passes the call's owner to connectors (FR-003)
+- [x] T006 [P] Unit tests, then `crates/sesh-gateway/src/refs.rs`: issue and resolve agent-bound attachment refs per data-model.md (`Attachment reference.agent`, `Attachment reference.expires_at`)
+- [x] T007 Unit tests, then `secrets.rs` gains `delete`, and `calls.rs` passes the call's owner to connectors (FR-003)
 
 ---
 
@@ -50,13 +50,13 @@ they check.
 
 **Independent test**: Ana's and Ben's agents get separate approval topics; a Household approval reaches both; a removed owner's agent is refused.
 
-- [ ] T008 [US1] Stack test (written first) `google_docs_stack` in `crates/sesh-cli/tests/stack.rs`:
+- [x] T008 [US1] Stack test (written first) `google_docs_stack` in `crates/sesh-cli/tests/stack.rs`:
   - `sesh user add ana`, `sesh user add ben`, and agents with `--owner`;
   - Ana's gated `testgate.act` notifies Ana's topic only;
   - a Household agent's notifies the Household topic, readable as Ana and as Ben;
   - `sesh user list` shows both users;
   - after `sesh user remove ben`, Ben's agent is refused.
-- [ ] T009 [US1] CLI:
+- [x] T009 [US1] CLI:
   - `sesh user add|remove|list` in `crates/sesh-cli/src/user.rs`;
   - `--owner` in `agent.rs`;
   - `ntfy.rs` writes a user and access entries per user;
@@ -70,8 +70,8 @@ they check.
 
 **Independent test**: the consent link against fake Google stores the grant; it works once; disconnecting removes it.
 
-- [ ] T010 [US2] Fake Google in `crates/sesh-stub-llm/src/main.rs` per research.md R7: authorization, token, revoke, and per-grant mailboxes. With unit tests.
-- [ ] T011 [US2] Unit tests, then the `crates/sesh-gateway/src/google.rs` OAuth part:
+- [x] T010 [US2] Fake Google in `crates/sesh-stub-llm/src/main.rs` per research.md R7: authorization, token, revoke, and per-grant mailboxes. With unit tests.
+- [x] T011 [US2] Unit tests, then the `crates/sesh-gateway/src/google.rs` OAuth part:
   - the consent link (data-model.md `Consent link`);
   - PKCE and the single-use state;
   - the code exchange, and the refresh token into Infisical;
@@ -80,8 +80,8 @@ they check.
   - `invalid_grant` → revoked.
 
   Pages `/google/start/{id}` and `/google/callback`, and `/admin/google/consent` and `/admin/google/disconnect`, in `pages.rs`.
-- [ ] T012 [US2] CLI `sesh google connect|disconnect` in `crates/sesh-cli/src/google.rs`; doctor checks `google` and `paperless` (FR-016) through a gateway admin endpoint
-- [ ] T013 [US2] Stack steps in `google_docs_stack`:
+- [x] T012 [US2] CLI `sesh google connect|disconnect` in `crates/sesh-cli/src/google.rs`; doctor checks `google` and `paperless` (FR-016) through a gateway admin endpoint
+- [x] T013 [US2] Stack steps in `google_docs_stack`:
   - connect Ana through the link (the fake consent redirects straight back); the link is refused the second time;
   - `sesh user list` shows Ana connected;
   - no refresh or access token appears in outputs, logs, the audit log or the data directory;
@@ -94,9 +94,9 @@ they check.
 
 **Independent test**: search and read against fake Gmail; a draft needs no approval; a send waits, then happens once after approval.
 
-- [ ] T014 [US3] Unit tests, then the `connectors/google.rs` descriptors and dispatch per contracts/connectors.md, using `google.rs`. Attachment refs come from `refs.rs`; approval text per contracts/connectors.md.
-- [ ] T015 [US3] Fake Gmail, Calendar and People in the stub; `/fake/google/sent` counts sends
-- [ ] T016 [US3] Stack steps:
+- [x] T014 [US3] Unit tests, then the `connectors/google.rs` descriptors and dispatch per contracts/connectors.md, using `google.rs`. Attachment refs come from `refs.rs`; approval text per contracts/connectors.md.
+- [x] T015 [US3] Fake Gmail, Calendar and People in the stub; `/fake/google/sent` counts sends
+- [x] T016 [US3] Stack steps:
   - Ana's search sees only Ana's mail; Ben's sees only Ben's (FR-018);
   - an extra `user` argument is refused;
   - a draft creates nothing in sent mail;
@@ -110,14 +110,14 @@ they check.
 
 **Independent test**: with the real Paperless, Ana files an attachment by ref; Ben can't see it; a Household upload notifies.
 
-- [ ] T017 [US4] Unit tests (fake Paperless over HTTP), then `connectors/docs.rs`:
+- [x] T017 [US4] Unit tests (fake Paperless over HTTP), then `connectors/docs.rs`:
   - the admin token;
   - users created as needed;
   - owner-filtered search and get;
   - upload, then polling the task, then setting the owner;
   - type and size limits per data-model.md Limits;
   - notifying on Household uploads.
-- [ ] T018 [US4] Stack steps against the real Paperless:
+- [x] T018 [US4] Stack steps against the real Paperless:
   - Ana files a ref from her mail, and it is found by `docs.search` (within 60 s);
   - Ben can't find or get it;
   - Ben can't use Ana's ref;
@@ -131,12 +131,12 @@ they check.
 
 **Independent test**: pass script → the new tasks pass; fail script → `file-attachment` fails for pasted contents.
 
-- [ ] T019 [US5] Fake Paperless in the stub (eval only); eval project: a test user, the fake consent and fake Paperless; suite v3 tasks per research.md R8; stub scripts
-- [ ] T020 [US5] `eval_stack` expectations for suite v3 (pass all; fail reasons)
+- [x] T019 [US5] Fake Paperless in the stub (eval only); eval project: a test user, the fake consent and fake Paperless; suite v3 tasks per research.md R8; stub scripts
+- [x] T020 [US5] `eval_stack` expectations for suite v3 (pass all; fail reasons)
 
 ## Phase 8: Polish
 
-- [ ] T021 [P] README, AGENTS.md, quickstart; the Solutions Architecture phase 5 accept line, unchanged unless the build differs
+- [x] T021 [P] README, AGENTS.md, quickstart; the Solutions Architecture phase 5 accept line, unchanged unless the build differs
 - [ ] T022 Record CI results in `specs/005-google-paperless/research.md`
 
 ## Dependencies

@@ -45,9 +45,10 @@ The [constitution](.specify/memory/constitution.md) is binding. In short:
 
 ## Status
 
-**Building.** Features 001 to 003 (foundation stack, gateway core, model evals) are
-done; feature 004 (secrets and approvals,
-[`specs/004-secrets-approvals/`](specs/004-secrets-approvals/)) is in
+**Building.** Features 001 to 004 (foundation stack, gateway core, model
+evals, secrets and approvals) are done; feature 005 (Google and
+Paperless, with per-user identity,
+[`specs/005-google-paperless/`](specs/005-google-paperless/)) is in
 progress. The design is in the
 [Solutions Architecture](docs/architecture/solutions-architecture.md);
 decisions are in [`docs/decisions/`](docs/decisions/)

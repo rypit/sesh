@@ -13,31 +13,29 @@
 |---|---|
 | `owner` | a user name, or `household` (the default); must exist |
 
-## Google connection (`gateway.google_connections`; the secret is in Infisical)
+## Google connection (in the secret store; research.md "Build decisions")
 
-| Field | Notes |
+| Key | Notes |
 |---|---|
-| `user` | primary key |
-| `scopes` | the space-separated scopes Google granted |
-| `state` | `connected`, `revoked` or `removed` |
-| `connected_at`, `updated_at` | |
+| `USER_<NAME>__GOOGLE__REFRESH_TOKEN` | the grant; the only secret |
+| `USER_<NAME>__GOOGLE__SCOPES` | the space-separated scopes Google granted |
+| `USER_<NAME>__GOOGLE__STATE` | `connected`, `revoked` or `removed` |
 
-Refresh token: Infisical key `USER_<NAME>__GOOGLE__REFRESH_TOKEN`, with
-`-` in the name written as `_`.
+`<NAME>` is the owner in upper case, with `-` written as `_`; the
+Household is `USER_HOUSEHOLD`. The OAuth client is `GOOGLE__CLIENT_ID`
+and `GOOGLE__CLIENT_SECRET`, filled through the one-time credential form.
 
-## Consent link (`gateway.google_consents`)
+## Consent link (gateway memory)
 
 | Field | Notes |
 |---|---|
 | `id` | 16 random bytes, hex |
-| `user` | |
+| `owner` | |
 | `secret_sha256` | of the 32-byte link secret, in the URL fragment |
 | `state_sha256`, `pkce_verifier` | set at start; the OAuth `state` is single-use, with a 10-minute lifetime |
-| `expires_at` | 30 minutes |
-| `used_at` | set when the start page is used; the callback also sets `finished_at` |
+| link lifetime | 30 minutes; usable once |
 
-The PKCE verifier is a short-lived per-flow value, not a credential. It
-is deleted at the callback.
+A gateway restart forgets open links; the operator asks for a new one.
 
 ## Attachment reference (gateway memory)
 
@@ -54,16 +52,15 @@ is deleted at the callback.
 |---|---|
 | `mail_results_max` | 25 |
 | `upload_max_bytes` | 26_214_400 (25 MB) |
-| `upload_types` | `application/pdf`, `image/png`, `image/jpeg`, `image/tiff`, the Office Open XML document, spreadsheet and presentation types, `application/msword` |
+| upload types (fixed) | `application/pdf`, `image/png`, `image/jpeg`, `image/tiff` (Office files would need Tika and Gotenberg) |
 | `ref_ttl_secs` | 3600 |
 
 ## Audit additions
 
 | Event | `outcome` | `reason` |
 |---|---|---|
-| Consent link | `allowed` | `google.consent.request <user>` |
-| Google connected | `allowed` | `google.connected <user>` |
-| Google disconnected | `allowed` | `google.disconnected <user>` |
-| Google revoked | `refused` | `google.revoked <user>` |
-| Every Google or docs call | the call's outcome | `owner <user>` |
-| Upload | `allowed` | `docs.upload <doc id>` |
+| Consent link | `allowed` | `google.consent requested for <owner>` |
+| Consent refused (bad, used or expired link) | `refused` | `google.consent refused: …` / `google.connect refused: …` |
+| Google connected | `allowed` | `google.connected <owner> (<scope count>)` |
+| Google disconnected | `allowed` | `google.disconnected <owner>` |
+| Every mail, calendar, contacts or docs call | the call's outcome | includes `owner <owner>` |
