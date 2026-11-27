@@ -1,0 +1,24 @@
+# Test-only (specs/008-network-isolation tasks.md T015): the network layout
+# of an install from before feature 008. Every service that was on the
+# shared `default` network then goes back on it, alongside its current
+# networks (Compose merges a service's `networks` across files), so the
+# stack test can check that the new `sesh up` takes each one off it and
+# removes `sesh_default`. The Redis instances, Miniflux, SearXNG and the
+# executors were never on `default`. Never used by `sesh up`.
+services:
+  postgres:
+    networks: [default]
+  litellm:
+    networks: [default]
+  open-webui:
+    networks: [default]
+  gateway:
+    networks: [default]
+  infisical:
+    networks: [default]
+  ntfy:
+    networks: [default]
+  paperless:
+    networks: [default]
+  stub-llm:
+    networks: [default]
