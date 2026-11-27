@@ -89,6 +89,13 @@ pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Rep
         if let Err(problem) = schema::validate(&desc.input, &args) {
             break 'checks Err(refused(&mut entry, 400, &problem));
         }
+        // A request that can't be granted never reaches a person
+        // (specs/006 research.md R8).
+        if connector == "feeds"
+            && let Err(why) = crate::connectors::feeds::precheck(gw, &scope, &method, &args).await
+        {
+            break 'checks Err(refused(&mut entry, 400, &why));
+        }
         // Credentials the connector declares, read only here (FR-011).
         let mut creds = std::collections::BTreeMap::new();
         for name in &cdesc.credentials {
@@ -161,6 +168,9 @@ pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Rep
                 .await
             }
             "docs" => crate::connectors::docs::call(gw, &scope, &grant.agent, &method, &args).await,
+            "feeds" => {
+                crate::connectors::feeds::call(gw, &scope, &grant.agent, &method, &args).await
+            }
             _ => gw.upstream.call(&connector, &method, &args, &creds).await,
         };
         match result {
@@ -173,7 +183,7 @@ pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Rep
                 for name in creds.keys() {
                     notes.push(format!("credential {connector}/{name}"));
                 }
-                if ["mail", "calendar", "contacts", "docs"].contains(&connector.as_str()) {
+                if ["mail", "calendar", "contacts", "docs", "feeds"].contains(&connector.as_str()) {
                     notes.push(format!("owner {}", scope.owner));
                 }
                 entry.reason = (!notes.is_empty()).then(|| notes.join("; "));
@@ -238,6 +248,8 @@ pub mod tests {
             google: Default::default(),
             refs: Default::default(),
             paperless: crate::connectors::docs::Paperless::new("", ""),
+            feeds: crate::feeds::Store::memory(),
+            feed_cache: Default::default(),
             pending: Default::default(),
         }
     }

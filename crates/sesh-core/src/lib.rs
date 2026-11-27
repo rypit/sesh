@@ -111,6 +111,24 @@ impl UsersFile {
     }
 }
 
+/// A feed's name (specs/006 data-model.md): `[a-z0-9][a-z0-9-]{0,31}`.
+pub fn valid_feed_name(name: &str) -> bool {
+    let mut c = name.chars();
+    matches!(c.next(), Some('a'..='z' | '0'..='9'))
+        && name.len() <= 32
+        && c.all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || x == '-')
+}
+
+/// A host the feed address filter may skip in test set-ups (specs/006
+/// research.md R4): a single-label Compose service name, never a dotted
+/// name or an address.
+pub fn valid_allow_host(host: &str) -> bool {
+    let mut c = host.chars();
+    matches!(c.next(), Some('a'..='z'))
+        && host.len() <= 63
+        && c.all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || x == '-')
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentsFile {
@@ -312,6 +330,44 @@ mod tests {
     }
 
     #[test]
+    fn feed_names_and_settings() {
+        assert!(valid_feed_name("harbour") && valid_feed_name("nrk-2") && valid_feed_name("9news"));
+        for bad in ["", "-x", "News", "a b", "a.b", &"a".repeat(33)] {
+            assert!(!valid_feed_name(bad), "{bad}");
+        }
+        let s = GatewaySettings::default();
+        assert_eq!(
+            (
+                s.feeds_cache_secs,
+                s.feeds_max_bytes,
+                s.feeds_timeout_secs,
+                s.feeds_max_per_owner
+            ),
+            (900, 2 * 1024 * 1024, 10, 50)
+        );
+        assert!(s.feeds_allow_hosts.is_empty());
+        let ok = GatewaySettings {
+            feeds_allow_hosts: vec!["stub-llm".into(), "fakes".into()],
+            ..GatewaySettings::default()
+        };
+        assert!(ok.validate().is_ok());
+        for bad in ["example.org", "10.0.0.1", "::1", "Stub", "", "a_b"] {
+            let s = GatewaySettings {
+                feeds_allow_hosts: vec![bad.into()],
+                ..GatewaySettings::default()
+            };
+            assert!(s.validate().is_err(), "{bad}");
+        }
+        let bad = GatewaySettings {
+            feeds_cache_secs: 1,
+            ..GatewaySettings::default()
+        };
+        assert!(bad.validate().is_err());
+        let old: GatewaySettings = toml::from_str("deadline_secs = 30").unwrap();
+        assert_eq!(old.feeds_cache_secs, 900, "older gateway.toml files load");
+    }
+
+    #[test]
     fn approval_settings_default_and_validate() {
         let s = GatewaySettings::default();
         assert_eq!(s.approvals_base_url, "http://127.0.0.1:7002");
@@ -372,6 +428,19 @@ pub struct GatewaySettings {
     pub upload_max_bytes: u64,
     #[serde(default = "d_ref_ttl")]
     pub ref_ttl_secs: u64,
+    /// Feeds (specs/006 data-model.md, Gateway settings).
+    #[serde(default = "d_feeds_cache")]
+    pub feeds_cache_secs: u64,
+    #[serde(default = "d_feeds_bytes")]
+    pub feeds_max_bytes: usize,
+    #[serde(default = "d_feeds_timeout")]
+    pub feeds_timeout_secs: u64,
+    #[serde(default = "d_feeds_per_owner")]
+    pub feeds_max_per_owner: u32,
+    /// Compose services whose private address feeds may use: stub and
+    /// eval set-ups only, honoured only with test connectors (ADR 0009).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub feeds_allow_hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -481,6 +550,18 @@ fn d_upload_max() -> u64 {
 fn d_ref_ttl() -> u64 {
     3600
 }
+fn d_feeds_cache() -> u64 {
+    900
+}
+fn d_feeds_bytes() -> usize {
+    2 * 1024 * 1024
+}
+fn d_feeds_timeout() -> u64 {
+    10
+}
+fn d_feeds_per_owner() -> u32 {
+    50
+}
 
 impl Default for Upstreams {
     fn default() -> Self {
@@ -518,6 +599,11 @@ impl Default for GatewaySettings {
             mail_results_max: d_mail_max(),
             upload_max_bytes: d_upload_max(),
             ref_ttl_secs: d_ref_ttl(),
+            feeds_cache_secs: d_feeds_cache(),
+            feeds_max_bytes: d_feeds_bytes(),
+            feeds_timeout_secs: d_feeds_timeout(),
+            feeds_max_per_owner: d_feeds_per_owner(),
+            feeds_allow_hosts: vec![],
         }
     }
 }
@@ -558,6 +644,23 @@ impl GatewaySettings {
             && (!(-90.0..=90.0).contains(&h.latitude) || !(-180.0..=180.0).contains(&h.longitude))
         {
             bail!("gateway.home is not a valid latitude/longitude");
+        }
+        if !(60..=86_400).contains(&self.feeds_cache_secs) {
+            bail!("gateway.feeds_cache_secs must be 60 s-1 day");
+        }
+        if !(1024..=16 * 1024 * 1024).contains(&self.feeds_max_bytes) {
+            bail!("gateway.feeds_max_bytes must be 1 KiB-16 MiB");
+        }
+        if !(1..=60).contains(&self.feeds_timeout_secs) {
+            bail!("gateway.feeds_timeout_secs must be 1-60");
+        }
+        if !(1..=1000).contains(&self.feeds_max_per_owner) {
+            bail!("gateway.feeds_max_per_owner must be 1-1000");
+        }
+        if let Some(h) = self.feeds_allow_hosts.iter().find(|h| !valid_allow_host(h)) {
+            bail!(
+                "gateway.feeds_allow_hosts entry {h:?} must be a single-label service name (no dots, no addresses)"
+            );
         }
         Ok(())
     }

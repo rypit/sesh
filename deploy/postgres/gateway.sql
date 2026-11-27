@@ -77,3 +77,19 @@ CREATE TABLE IF NOT EXISTS credential_forms (
 REVOKE ALL ON approvals, credential_forms FROM PUBLIC;
 REVOKE ALL ON approvals, credential_forms FROM sesh_gateway;
 GRANT INSERT, SELECT, UPDATE ON approvals, credential_forms TO sesh_gateway;
+
+-- Feeds (specs/006 data-model.md, ADR 0009): written only by the gateway,
+-- for the operator's `sesh feed` commands and approved agent requests.
+-- No UPDATE: a feed is replaced by removing and adding it.
+CREATE TABLE IF NOT EXISTS feeds (
+  owner    text NOT NULL,
+  name     text NOT NULL,
+  url      text NOT NULL,
+  added_by text NOT NULL,
+  added_at bigint NOT NULL,
+  PRIMARY KEY (owner, name)
+);
+
+REVOKE ALL ON feeds FROM PUBLIC;
+REVOKE ALL ON feeds FROM sesh_gateway;
+GRANT SELECT, INSERT, DELETE ON feeds TO sesh_gateway;

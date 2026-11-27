@@ -114,6 +114,23 @@ async fn main() -> anyhow::Result<()> {
         Some(url) if url.starts_with("file:") => Audit::file(&url["file:".len()..])?,
         Some(url) => Audit::postgres(url.to_string()),
     };
+    // The feed address filter's test allowance (ADR 0009): honoured only
+    // with test connectors, which only stub and eval set-ups turn on.
+    let test_connectors = env("SESH_GATEWAY_TEST_CONNECTORS").as_deref() == Some("1");
+    let mut settings = settings;
+    if !settings.feeds_allow_hosts.is_empty() && !test_connectors {
+        tracing::warn!(
+            "feeds_allow_hosts is ignored: it is honoured only in stub and eval set-ups"
+        );
+    }
+    settings.feeds_allow_hosts =
+        connectors::feeds::honoured_allow_hosts(&settings.feeds_allow_hosts, test_connectors);
+    let feeds = match audit_url.as_deref() {
+        Some(url) if url.starts_with("postgres") => {
+            sesh_gateway::feeds::Store::postgres(url.to_string())
+        }
+        _ => sesh_gateway::feeds::Store::memory(),
+    };
     let users = sesh_gateway::Users::from_file(
         env("SESH_USERS_FILE")
             .unwrap_or_else(|| "/etc/sesh/users.toml".into())
@@ -122,7 +139,7 @@ async fn main() -> anyhow::Result<()> {
     let gw = Arc::new(Gateway {
         agents,
         users,
-        connectors: connectors::all(env("SESH_GATEWAY_TEST_CONNECTORS").as_deref() == Some("1")),
+        connectors: connectors::all(test_connectors),
         caps: Default::default(),
         audit,
         approvals,
@@ -132,6 +149,8 @@ async fn main() -> anyhow::Result<()> {
         pending: Default::default(),
         google: Default::default(),
         refs: Default::default(),
+        feeds,
+        feed_cache: Default::default(),
         paperless: sesh_gateway::connectors::docs::Paperless::new(
             &env("SESH_PAPERLESS_USER").unwrap_or_default(),
             &env("SESH_PAPERLESS_PASSWORD").unwrap_or_default(),
