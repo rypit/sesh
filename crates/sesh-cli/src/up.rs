@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn first_up_migrates_then_starts_services_and_webui_last() {
         let dir = ready("first");
-        crate::agent::add(&dir, "alice", &["search".into()]).unwrap();
+        crate::agent::add(&dir, "alice", &["search".into()], "household").unwrap();
         let compose = FakeCompose::default();
         run(&dir, &compose, &router()).unwrap();
         assert_eq!(
@@ -422,6 +422,7 @@ mod tests {
         let mut f = AgentsFile::default();
         for n in ["alice", "bob"] {
             f.agents.push(sesh_core::Agent {
+                owner: sesh_core::HOUSEHOLD.into(),
                 name: n.into(),
                 token_sha256: "0".repeat(64),
                 connectors: vec!["search".into()],

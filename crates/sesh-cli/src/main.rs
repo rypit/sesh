@@ -134,6 +134,9 @@ enum AgentCommand {
         /// Connectors the agent may use, comma-separated (search, geo).
         #[arg(long, value_delimiter = ',', required = true)]
         connectors: Vec<String>,
+        /// Whose agent this is: a user (`sesh user add`), or household.
+        #[arg(long, default_value = "household")]
+        owner: String,
     },
     /// Remove an agent; its token stops working at once.
     Remove { name: String },
@@ -254,9 +257,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         }
         Command::Agent { command } => match command {
-            AgentCommand::Add { name, connectors } => {
-                println!("{}", agent::add(&dir, &name, &connectors)?)
-            }
+            AgentCommand::Add {
+                name,
+                connectors,
+                owner,
+            } => println!("{}", agent::add(&dir, &name, &connectors, &owner)?),
             AgentCommand::Remove { name } => println!("{}", agent::remove(&dir, &name)?),
             AgentCommand::List => {
                 for line in agent::list(&dir)? {

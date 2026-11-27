@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 use sesh_core::{Agent, AgentsFile, token_hash, valid_agent_name};
 use std::path::{Path, PathBuf};
 
-pub const KNOWN_CONNECTORS: [&str; 2] = ["search", "geo"];
+pub const KNOWN_CONNECTORS: [&str; 6] = ["search", "geo", "mail", "calendar", "contacts", "docs"];
 /// Test-only connectors (specs/004 research.md R7), allowed in stub mode only.
 pub const TEST_CONNECTORS: [&str; 2] = ["testgate", "testcred"];
 
@@ -32,7 +32,11 @@ pub fn load(dir: &Path) -> Result<AgentsFile> {
     AgentsFile::load(&gateway_dir(dir))
 }
 
-pub fn add(dir: &Path, name: &str, connectors: &[String]) -> Result<String> {
+pub fn add(dir: &Path, name: &str, connectors: &[String], owner: &str) -> Result<String> {
+    let users = sesh_core::UsersFile::load(&gateway_dir(dir))?;
+    if !users.knows(owner) {
+        bail!("no user named {owner}; add them with `sesh user add {owner}` (or use household)");
+    }
     if !valid_agent_name(name) {
         bail!("agent names are 1-32 characters of a-z, 0-9 and - (not starting with -)");
     }
@@ -66,11 +70,12 @@ pub fn add(dir: &Path, name: &str, connectors: &[String]) -> Result<String> {
         name: name.to_string(),
         token_sha256: token_hash(&token),
         connectors: connectors.to_vec(),
+        owner: owner.to_string(),
     });
     std::fs::create_dir_all(gateway_dir(dir))?;
     file.save(&gateway_dir(dir))?;
     Ok(format!(
-        "added agent {name} ({}); token in {} (not shown). Run `sesh up` to start its executor.",
+        "added agent {name} for {owner} ({}); token in {} (not shown). Run `sesh up` to start its executor.",
         connectors.join(", "),
         path.display()
     ))
@@ -94,7 +99,7 @@ pub fn list(dir: &Path) -> Result<Vec<String>> {
     Ok(load(dir)?
         .agents
         .iter()
-        .map(|a| format!("{}  {}", a.name, a.connectors.join(",")))
+        .map(|a| format!("{}  {}  {}", a.name, a.owner, a.connectors.join(",")))
         .collect())
 }
 
@@ -121,7 +126,7 @@ mod tests {
     #[test]
     fn add_stores_only_the_hash_for_the_gateway() {
         let dir = tempdir("add");
-        let msg = add(&dir, "alice", &["search".into(), "geo".into()]).unwrap();
+        let msg = add(&dir, "alice", &["search".into(), "geo".into()], "household").unwrap();
         let token = std::fs::read_to_string(token_path(&dir, "alice")).unwrap();
         assert!(!msg.contains(&token), "the token must never be printed");
         let gw = std::fs::read_to_string(gateway_dir(&dir).join("agents.toml")).unwrap();
@@ -136,21 +141,24 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600);
         }
-        assert!(add(&dir, "alice", &["search".into()]).is_err(), "duplicate");
+        assert!(
+            add(&dir, "alice", &["search".into()], "household").is_err(),
+            "duplicate"
+        );
     }
 
     #[test]
     fn validates_names_and_connectors() {
         let dir = tempdir("val");
-        assert!(add(&dir, "Bad Name", &["search".into()]).is_err());
-        assert!(add(&dir, "bob", &[]).is_err());
-        assert!(add(&dir, "bob", &["email".into()]).is_err());
+        assert!(add(&dir, "Bad Name", &["search".into()], "household").is_err());
+        assert!(add(&dir, "bob", &[], "household").is_err());
+        assert!(add(&dir, "bob", &["email".into()], "household").is_err());
     }
 
     #[test]
     fn remove_revokes() {
         let dir = tempdir("rm");
-        add(&dir, "bob", &["search".into()]).unwrap();
+        add(&dir, "bob", &["search".into()], "household").unwrap();
         let token = std::fs::read_to_string(token_path(&dir, "bob")).unwrap();
         remove(&dir, "bob").unwrap();
         assert!(load(&dir).unwrap().by_token(&token).is_none());

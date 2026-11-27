@@ -189,6 +189,7 @@ pub mod tests {
 
     pub fn gateway(audit: Audit, settings: GatewaySettings) -> Gateway {
         let agent = |n: &str, c: &[&str]| Agent {
+            owner: sesh_core::HOUSEHOLD.into(),
             name: n.into(),
             token_sha256: token_hash(&format!("tok-{n}")),
             connectors: c.iter().map(|s| s.to_string()).collect(),

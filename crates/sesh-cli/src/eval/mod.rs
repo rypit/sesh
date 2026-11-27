@@ -139,6 +139,7 @@ pub fn prepare(dir: &Path, config: &Config, token: &str) -> Result<Prepared> {
     mode(&adir, 0o777)?;
     AgentsFile {
         agents: vec![Agent {
+            owner: sesh_core::HOUSEHOLD.into(),
             name: EVAL_AGENT.into(),
             token_sha256: token_hash(token),
             connectors: EVAL_CONNECTORS.iter().map(|c| c.to_string()).collect(),
