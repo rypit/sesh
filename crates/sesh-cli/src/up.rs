@@ -166,6 +166,17 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
     let rendered = render::litellm_config(&config);
     std::fs::write(dir.join(render::FILE_NAME), &rendered)?;
     write_compose_files(dir, &config)?;
+    // The approval channel's users and access (specs/004 research.md R3).
+    let ntfy_changed = crate::ntfy::write_config(
+        &dir.join("compose"),
+        &config.gateway.ntfy_topic,
+        secrets
+            .get("NTFY_GATEWAY_PASSWORD")
+            .context("NTFY_GATEWAY_PASSWORD missing; run `sesh init`")?,
+        secrets
+            .get("NTFY_PERSON_PASSWORD")
+            .context("NTFY_PERSON_PASSWORD missing; run `sesh init`")?,
+    )?;
     let gateway_toml = std::fs::read_to_string(agent::gateway_dir(dir).join("gateway.toml"))?;
     let agents = agent::load(dir)?;
 
@@ -181,7 +192,14 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
         .iter()
         .map(|a| format!("executor-{}", a.name))
         .collect();
-    let mut base: Vec<&str> = vec!["redis", "litellm", "searxng", "gateway"];
+    let mut base: Vec<&str> = vec![
+        "redis",
+        "litellm",
+        "searxng",
+        "infisical",
+        "ntfy",
+        "gateway",
+    ];
     base.extend(executors.iter().map(String::as_str));
     if is_stub(&config) {
         base.push("stub-llm");
@@ -191,6 +209,17 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
     }
     compose.up(&base)?;
     let cdir = dir.join("compose");
+    // The secret store: bootstrap once, then the gateway restarts with its
+    // own credentials (specs/004 research.md R5).
+    if crate::infisical::ensure(http, &mut secrets)? {
+        secrets.save(dir)?;
+        compose.restart("gateway")?;
+        report.push("set up the secret store; only the gateway can read it".into());
+    }
+    if ntfy_changed && cdir.join("gateway.applied").exists() {
+        compose.restart("ntfy")?;
+        report.push("approval channel config changed: restarted ntfy".into());
+    }
     apply_if_changed(
         compose,
         &cdir.join("litellm.applied"),
@@ -306,6 +335,9 @@ mod tests {
 
     fn router() -> FakeHttp {
         FakeHttp::new(|_, url, body| {
+            if let Some(r) = crate::infisical::tests::reply(url) {
+                return r;
+            }
             if url.ends_with("/key/generate") {
                 assert_eq!(body.unwrap()["models"], json!(["agent-main"]));
                 (200, json!({"key": "sk-client"}))
@@ -326,7 +358,8 @@ mod tests {
             vec![
                 "up postgres",
                 "sql sesh",
-                "up redis litellm searxng gateway executor-alice stub-llm",
+                "up redis litellm searxng infisical ntfy gateway executor-alice stub-llm",
+                "restart gateway",
                 "up open-webui"
             ]
         );

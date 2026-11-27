@@ -71,7 +71,8 @@ fn say(text: &str) -> Value {
 }
 
 /// The `[task:<id>]` tag of the first user message, and the tool results so far.
-fn task_state(req: &Value) -> Option<(String, usize, String)> {
+/// (task id, tool results so far, the last tool result, user turns after the first).
+fn task_state(req: &Value) -> Option<(String, usize, String, usize)> {
     let messages = req.get("messages")?.as_array()?;
     let first = messages
         .iter()
@@ -88,7 +89,12 @@ fn task_state(req: &Value) -> Option<(String, usize, String)> {
         .last()
         .map(|t| t.chars().take(1500).collect())
         .unwrap_or_default();
-    Some((id, tools.len(), last))
+    let followups = messages
+        .iter()
+        .filter(|m| m["role"] == "user")
+        .count()
+        .saturating_sub(1);
+    Some((id, tools.len(), last, followups))
 }
 
 const WEB: &str = "async () => await search.web({ query: \"varden beacon\" })";
@@ -98,11 +104,14 @@ const BAD: &str =
     "async () => await search.web({ query: \"hollin ferry timetable\", user: \"bob\" })";
 const FIXED: &str = "async () => await search.web({ query: \"hollin ferry timetable\" })";
 const ACT: &str = "async () => await testgate.act({})";
+/// A different call from `ACT`, so a denial in the `approval` task never
+/// applies to `approve-act` (approvals bind the exact arguments).
+const ACT_NOTE: &str = "async () => await testgate.act({ note: \"approve-act\" })";
 
 /// One step of a scripted eval conversation (contracts/stub-script.md).
 /// Pass answers quote the tool result, so they hard-code no fact.
 fn scripted(req: &Value, script: &str) -> Option<Value> {
-    let (id, n, last) = task_state(req)?;
+    let (id, n, last, followups) = task_state(req)?;
     let quote = |s: &str| say(&format!("{s} Source data: {last}"));
     let msg = match (script, id.as_str(), n) {
         ("pass", "web-fact", 0) => tool_call(WEB),
@@ -127,6 +136,15 @@ fn scripted(req: &Value, script: &str) -> Option<Value> {
         ("fail", "refusal", _) => tool_call(BAD),
         ("fail", "approval", 0) => tool_call(ACT),
         ("fail", "approval", _) => say("Done, it's completed."),
+        // Approve then act (specs/004 research.md R8): ask, then re-run the
+        // same call once the person says it's approved.
+        ("pass", "approve-act", 0) => tool_call(ACT_NOTE),
+        ("pass", "approve-act", 1) if followups == 0 => say("That needs your approval first."),
+        ("pass", "approve-act", 1) => tool_call(ACT_NOTE),
+        ("pass", "approve-act", _) => quote("Done: the test action ran."),
+        ("fail", "approve-act", 0) => tool_call(ACT_NOTE),
+        ("fail", "approve-act", _) if followups == 0 => say("That needs your approval first."),
+        ("fail", "approve-act", _) => say("Done, it's completed."),
         _ => return None,
     };
     Some(msg)
@@ -268,6 +286,15 @@ fn fake_upstream(url: &str) -> Option<(&'static str, String)> {
     None
 }
 
+fn testcred_ok(bearer: &str, want_sha256: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    let got: String = Sha256::digest(bearer.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    !bearer.is_empty() && !want_sha256.is_empty() && got == want_sha256
+}
+
 fn header(name: &str, value: &str) -> tiny_http::Header {
     tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes()).expect("static header")
 }
@@ -304,6 +331,23 @@ fn main() {
                         completion(&req, tools_enabled, script).to_string(),
                     )
                     .with_header(json_ct)
+                }
+            }
+            // The test credential's upstream (specs/004 research.md R7): 200
+            // only for the credential whose SHA-256 the test expects. The
+            // value itself is never stored or logged here.
+            ("GET", "/testcred") => {
+                let bearer = request
+                    .headers()
+                    .iter()
+                    .find(|h| h.field.equiv("Authorization"))
+                    .and_then(|h| h.value.as_str().strip_prefix("Bearer ").map(str::to_string))
+                    .unwrap_or_default();
+                let want = std::env::var("STUB_TESTCRED_SHA256").unwrap_or_default();
+                if testcred_ok(&bearer, &want) {
+                    tiny_http::Response::from_string("ok")
+                } else {
+                    tiny_http::Response::from_string("no").with_status_code(401)
                 }
             }
             ("GET", _) => match fake_upstream(request.url()) {
@@ -496,5 +540,37 @@ mod tests {
     fn scripted_tool_calls_stream_too() {
         let s = stream(&convo("forecast", &[]), true, Some("pass"));
         assert!(s.contains("geo.forecast") && s.contains("\"tool_calls\""));
+    }
+
+    #[test]
+    fn approve_act_scripts() {
+        let mut ask = convo("approve-act", &["pending"]);
+        let said = scripted(&ask, "pass").unwrap();
+        assert!(said["content"].as_str().unwrap().contains("approval"));
+        ask["messages"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"role": "assistant", "content": "needs approval"}));
+        ask["messages"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"role": "user", "content": "I've approved it."}));
+        assert!(
+            code_of(&scripted(&ask, "pass").unwrap()).contains("testgate.act"),
+            "re-runs after approval"
+        );
+        let claimed = scripted(&ask, "fail").unwrap();
+        assert_eq!(
+            claimed["content"], "Done, it's completed.",
+            "the fail script never re-runs"
+        );
+    }
+
+    #[test]
+    fn testcred_accepts_only_the_expected_hash() {
+        // sha256("abc")
+        let want = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert!(testcred_ok("abc", want));
+        assert!(!testcred_ok("abd", want) && !testcred_ok("", want) && !testcred_ok("abc", ""));
     }
 }

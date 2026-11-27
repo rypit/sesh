@@ -11,6 +11,14 @@ use sesh_core::{Agent, AgentsFile, token_hash, valid_agent_name};
 use std::path::{Path, PathBuf};
 
 pub const KNOWN_CONNECTORS: [&str; 2] = ["search", "geo"];
+/// Test-only connectors (specs/004 research.md R7), allowed in stub mode only.
+pub const TEST_CONNECTORS: [&str; 2] = ["testgate", "testcred"];
+
+fn stub_mode(dir: &Path) -> bool {
+    crate::config::Config::load(dir)
+        .map(|c| crate::init::is_stub(&c))
+        .unwrap_or(false)
+}
 
 pub fn gateway_dir(dir: &Path) -> PathBuf {
     dir.join("gateway")
@@ -34,8 +42,11 @@ pub fn add(dir: &Path, name: &str, connectors: &[String]) -> Result<String> {
             KNOWN_CONNECTORS.join(", ")
         );
     }
+    let test_ok = stub_mode(dir);
     for c in connectors {
-        if !KNOWN_CONNECTORS.contains(&c.as_str()) {
+        if !KNOWN_CONNECTORS.contains(&c.as_str())
+            && !(test_ok && TEST_CONNECTORS.contains(&c.as_str()))
+        {
             bail!(
                 "unknown connector {c:?}; known: {}",
                 KNOWN_CONNECTORS.join(", ")

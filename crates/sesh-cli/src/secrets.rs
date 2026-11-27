@@ -13,7 +13,7 @@ use std::path::Path;
 pub const FILE_NAME: &str = "secrets.env";
 
 /// Values `sesh init` generates when missing.
-pub const GENERATED: [&str; 7] = [
+pub const GENERATED: [&str; 14] = [
     "POSTGRES_PASSWORD",
     "GATEWAY_DB_PASSWORD",
     "SEARXNG_SECRET",
@@ -21,7 +21,40 @@ pub const GENERATED: [&str; 7] = [
     "LITELLM_MASTER_KEY",
     "WEBUI_SECRET_KEY",
     "WEBUI_ADMIN_PASSWORD",
+    // Feature 004: the secret store, the approval channel and the gateway's admin API.
+    "INFISICAL_ENCRYPTION_KEY",
+    "INFISICAL_AUTH_SECRET",
+    "INFISICAL_SETUP_TOKEN",
+    "INFISICAL_ADMIN_PASSWORD",
+    "NTFY_GATEWAY_PASSWORD",
+    "NTFY_PERSON_PASSWORD",
+    "SESH_GATEWAY_ADMIN_TOKEN",
 ];
+
+/// Set by `sesh up` when it bootstraps Infisical (specs/004 research.md R5).
+pub const INFISICAL_ADMIN_TOKEN: &str = "INFISICAL_ADMIN_TOKEN";
+pub const INFISICAL_PROJECT_ID: &str = "INFISICAL_PROJECT_ID";
+pub const INFISICAL_GATEWAY_CLIENT_ID: &str = "INFISICAL_GATEWAY_CLIENT_ID";
+pub const INFISICAL_GATEWAY_CLIENT_SECRET: &str = "INFISICAL_GATEWAY_CLIENT_SECRET";
+
+fn random_bytes(n: usize) -> Result<Vec<u8>> {
+    let mut b = vec![0u8; n];
+    getrandom::fill(&mut b).map_err(|e| anyhow::anyhow!("OS random source failed: {e}"))?;
+    Ok(b)
+}
+
+/// A value in the format its consumer expects.
+fn generate(key: &str) -> Result<String> {
+    let hex = |b: Vec<u8>| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    Ok(match key {
+        // Infisical: a 16-byte hex key, a 32-byte base64 secret, a 6-32 character token.
+        "INFISICAL_ENCRYPTION_KEY" | "INFISICAL_SETUP_TOKEN" => hex(random_bytes(16)?),
+        "INFISICAL_AUTH_SECRET" => {
+            base64::engine::general_purpose::STANDARD.encode(random_bytes(32)?)
+        }
+        _ => random_token()?,
+    })
+}
 
 /// The restricted router key for Open WebUI, created by `sesh up`.
 pub const WEBUI_ROUTER_KEY: &str = "WEBUI_ROUTER_KEY";
@@ -85,7 +118,7 @@ impl Secrets {
         let mut made = Vec::new();
         for key in GENERATED {
             if !self.values.contains_key(key) {
-                self.values.insert(key.to_string(), random_token()?);
+                self.values.insert(key.to_string(), generate(key)?);
                 made.push(key);
             }
         }
@@ -201,5 +234,23 @@ mod tests {
     fn rejects_malformed_lines() {
         assert!(Secrets::parse("NOEQUALS\n").is_err());
         assert!(Secrets::parse("# comment\n\nA=b\n").is_ok());
+    }
+
+    #[test]
+    fn infisical_values_have_their_formats() {
+        let mut s = Secrets::default();
+        s.fill_missing().unwrap();
+        let k = s.get("INFISICAL_ENCRYPTION_KEY").unwrap();
+        assert_eq!(k.len(), 32);
+        assert!(k.chars().all(|c| c.is_ascii_hexdigit()));
+        let a = s.get("INFISICAL_AUTH_SECRET").unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(a)
+                .unwrap()
+                .len(),
+            32
+        );
+        assert!((6..=32).contains(&s.get("INFISICAL_SETUP_TOKEN").unwrap().len()));
     }
 }

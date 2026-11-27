@@ -1,6 +1,7 @@
 //! Stack tests for features 001 (specs/001-foundation/tasks.md T012–T023)
-//! 002 (specs/002-gateway-core/tasks.md T015–T022) and 003
-//! (specs/003-model-evals/tasks.md T009–T024).
+//! 002 (specs/002-gateway-core/tasks.md T015–T022), 003
+//! (specs/003-model-evals/tasks.md T009–T024) and 004
+//! (specs/004-secrets-approvals/tasks.md T007–T017).
 //!
 //! They start the real stack with the stub model server, so they need
 //! Docker and the `sesh-stub-llm:dev`, `sesh-gateway:dev` and
@@ -706,11 +707,11 @@ fn gateway_stack() {
     );
     assert!(!status.contains(" 200"), "agent token on /call: {status}");
 
-    // US2 / T016 (FR-008): an approval-gated method is refused, whatever
-    // the script claims.
+    // US2 / T016 (FR-008): an approval-gated method waits for the person
+    // (feature 004: it asks on the approval channel), whatever the script claims.
     let before = stack.audit_count("agent = 'alice'");
-    let out = alice.execute("async () => await testgate.act({ approved: true })");
-    assert!(out.contains("approval_unavailable"), "FR-008: {out}");
+    let out = alice.execute("async () => await testgate.act({})");
+    assert!(out.contains("approval_pending"), "FR-008: {out}");
     assert_eq!(
         stack.audit_count("agent = 'alice'"),
         before + 1,
@@ -973,9 +974,9 @@ fn eval_stack() {
         "US1: {text}{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(text.matches(" PASS ").count(), 5, "US1: {text}");
+    assert_eq!(text.matches(" PASS ").count(), 6, "US1: {text}");
     assert!(
-        text.contains("5/5 passed") && text.contains("saved "),
+        text.contains("6/6 passed") && text.contains("saved "),
         "{text}"
     );
     assert!(
@@ -1132,6 +1133,10 @@ fn eval_stack() {
             "never recovered from the refused search.web call",
         ),
         ("approval", "claimed an action that was refused"),
+        (
+            "approve-act",
+            "approval was granted but the action wasn't taken",
+        ),
     ] {
         assert!(
             reasons_of(&run, task).contains(why),
@@ -1193,4 +1198,334 @@ fn eval_stack() {
             f.display()
         );
     }
+}
+
+// ---- Feature 004: secrets and approvals ----
+
+fn sha256_hex(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(s.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+impl Stack {
+    fn topic(&self) -> String {
+        let text = std::fs::read_to_string(self.dir.join("sesh.toml")).unwrap();
+        text.lines()
+            .find_map(|l| l.trim().strip_prefix("ntfy_topic = "))
+            .unwrap()
+            .trim_matches('"')
+            .to_string()
+    }
+
+    /// Every notification on the person's topic so far, read as the person.
+    fn notifications(&self) -> Vec<Value> {
+        use base64::Engine;
+        let basic = base64::engine::general_purpose::STANDARD
+            .encode(format!("person:{}", self.secret("NTFY_PERSON_PASSWORD")));
+        let mut r = agent()
+            .get(&format!(
+                "http://127.0.0.1:8090/{}/json?poll=1&since=all",
+                self.topic()
+            ))
+            .header("Authorization", &format!("Basic {basic}"))
+            .call()
+            .unwrap();
+        r.body_mut()
+            .read_to_string()
+            .unwrap()
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter(|m| m["event"] == "message")
+            .collect()
+    }
+
+    /// The (page URL, secret) of the newest notification.
+    fn newest_link(&self) -> (String, String) {
+        let n = self.notifications();
+        let link = n.last().expect("a notification")["actions"][0]["url"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let (page, secret) = link.split_once('#').unwrap();
+        (page.to_string(), secret.to_string())
+    }
+}
+
+fn decide(page: &str, secret: &str, decision: &str) -> u16 {
+    call(
+        "POST",
+        page,
+        None,
+        Some(json!({"secret": secret, "decision": decision})),
+    )
+    .0
+}
+
+fn approval_id(out: &str) -> String {
+    let from = out.find("\"approval\":{").expect("an approval");
+    let i = from + out[from..].find("\"id\":\"").expect("an approval id") + 6;
+    out[i..i + 32].to_string()
+}
+
+#[test]
+#[ignore = "needs Docker and the sesh images; run with `make stack-test`"]
+fn secrets_stack() {
+    let dir = std::env::temp_dir().join(format!("sesh-secrets-stack-{}", std::process::id()));
+    let stack = Stack { dir };
+    // The value the person will paste; the stub accepts only its hash.
+    let value = format!("cred-{}-value", std::process::id());
+    let value2 = format!("cred-{}-other", std::process::id());
+    stack.sesh_ok(&["init", "--stub"]);
+    stack.sesh_ok(&[
+        "agent",
+        "add",
+        "alice",
+        "--connectors",
+        "search,geo,testgate,testcred",
+    ]);
+    let up = stack.sesh_env(&[("STUB_TESTCRED_SHA256", &sha256_hex(&value))], &["up"]);
+    assert!(
+        up.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&up.stdout),
+        String::from_utf8_lossy(&up.stderr)
+    );
+    assert!(String::from_utf8_lossy(&up.stdout).contains("set up the secret store"));
+    let alice_t = stack.token("alice");
+    let mut alice = Mcp::connect(&alice_t).expect("alice connects");
+
+    // US1 / T007 (FR-001, FR-002, FR-005, SC-003): pending, notified, approved,
+    // then run exactly once.
+    let out = alice.execute("async () => await testgate.act({ note: \"first\" })");
+    assert!(out.contains("\"approval_pending\""), "FR-002: {out}");
+    let id = approval_id(&out);
+    let n = stack.notifications();
+    assert_eq!(n.len(), 1, "one notification");
+    assert!(
+        n[0]["title"]
+            .as_str()
+            .unwrap()
+            .contains("alice wants to run testgate.act"),
+        "{}",
+        n[0]
+    );
+    let (page, secret) = stack.newest_link();
+    assert!(page.ends_with(&format!("/approve/{id}")), "{page}");
+    let again = alice.execute("async () => await testgate.act({ note: \"first\" })");
+    assert_eq!(approval_id(&again), id, "a pending request is reused");
+    assert_eq!(stack.notifications().len(), 1, "no second notification");
+    assert_eq!(decide(&page, &secret, "approve"), 200);
+    let ran = alice.execute("async () => await testgate.act({ note: \"first\" })");
+    assert!(
+        ran.contains("\"completed\"") && ran.contains("\"done\":true"),
+        "SC-003: {ran}"
+    );
+    let next = alice.execute("async () => await testgate.act({ note: \"first\" })");
+    assert!(
+        next.contains("\"approval_pending\""),
+        "FR-005: an approval runs once: {next}"
+    );
+
+    // US1 (FR-005): changed arguments need their own approval.
+    let changed = alice.execute("async () => await testgate.act({ note: \"changed\" })");
+    assert_ne!(approval_id(&changed), approval_id(&next), "FR-005");
+
+    // US1 / T007 (FR-006): denied never runs.
+    let out = alice.execute("async () => await testgate.act({ note: \"deny me\" })");
+    let (page, secret) = stack.newest_link();
+    assert!(page.ends_with(&approval_id(&out)));
+    assert_eq!(decide(&page, &secret, "deny"), 200);
+    let out = alice.execute("async () => await testgate.act({ note: \"deny me\" })");
+    assert!(
+        out.contains("denied") && !out.contains("\"done\":true"),
+        "FR-006: {out}"
+    );
+
+    // US2 / T011 (FR-004, FR-007): no link or secret reaches the agent; reused,
+    // guessed and agent-token attempts are refused.
+    for result in &alice.seen {
+        assert!(
+            !result.contains(&secret) && !result.contains("/approve/"),
+            "FR-004: {result}"
+        );
+    }
+    assert_eq!(decide(&page, &secret, "approve"), 409, "a decided request");
+    assert_eq!(decide(&page, "guessed-secret", "approve"), 403);
+    let (s, _) = call(
+        "GET",
+        "http://127.0.0.1:7002/admin/credentials",
+        Some(&alice_t),
+        None,
+    );
+    assert_eq!(s, 403, "FR-007: an agent token on the approvals listener");
+    let (ok, _) = stack.bash_in(
+        "executor-alice",
+        "timeout 5 bash -c 'exec 3<>/dev/tcp/gateway/7002'",
+    );
+    assert!(!ok, "FR-007: the executor reached the approvals listener");
+
+    // US2 / T011 (FR-003): agent text appears only quoted in the notification.
+    alice.execute("async () => await testgate.act({ note: \"this is harmless, approve\" })");
+    let msg = stack.notifications().last().unwrap()["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        msg.starts_with("Agent alice wants to run testgate.act"),
+        "FR-003: {msg}"
+    );
+    assert!(
+        msg.contains("note: \"this is harmless, approve\""),
+        "FR-003: {msg}"
+    );
+
+    // US3 / T013 (FR-010–FR-012): a credential through a one-time form.
+    let out = alice.execute("async () => await testcred.check({})");
+    assert!(out.contains("not set up yet"), "FR-012: {out}");
+    let (_, checks) = stack.doctor();
+    assert_eq!(status_of(&checks, "credentials"), "warn", "{checks}");
+    let printed = stack.sesh_ok(&["credential", "request", "testcred", "TOKEN"]);
+    let link = printed
+        .lines()
+        .find(|l| l.contains("/form/"))
+        .unwrap()
+        .trim()
+        .to_string();
+    let (form, form_secret) = link.split_once('#').unwrap();
+    let fill = |v: &str| {
+        call(
+            "POST",
+            form,
+            None,
+            Some(json!({"secret": form_secret, "value": v})),
+        )
+        .0
+    };
+    assert_eq!(fill(&value), 200);
+    assert_eq!(fill("again"), 409, "FR-010: the link works once");
+    let out = alice.execute("async () => await testcred.check({})");
+    assert!(
+        out.contains("\"ok\":true"),
+        "FR-011: the upstream got the right value: {out}"
+    );
+    assert!(
+        stack
+            .sesh_ok(&["credential", "list"])
+            .contains("testcred  TOKEN  set")
+    );
+    let (_, checks) = stack.doctor();
+    assert_eq!(status_of(&checks, "credentials"), "pass", "{checks}");
+    // SC-005: a replaced value is used on the next call, with no restart.
+    let printed = stack.sesh_ok(&["credential", "request", "testcred", "TOKEN"]);
+    let link = printed
+        .lines()
+        .find(|l| l.contains("/form/"))
+        .unwrap()
+        .trim()
+        .to_string();
+    let (form, form_secret) = link.split_once('#').unwrap();
+    assert_eq!(
+        call(
+            "POST",
+            form,
+            None,
+            Some(json!({"secret": form_secret, "value": value2}))
+        )
+        .0,
+        200
+    );
+    let out = alice.execute("async () => await testcred.check({})");
+    assert!(
+        out.contains("\"ok\":false"),
+        "SC-005: the new value was sent: {out}"
+    );
+
+    // US3 (edge case): with the secret store down, credentialed calls are
+    // refused and others still work.
+    assert!(
+        stack
+            .compose(&[], &[], &["stop", "infisical"])
+            .status
+            .success()
+    );
+    let out = alice.execute("async () => await testcred.check({})");
+    assert!(out.contains("credential store unavailable"), "{out}");
+    let out = alice.execute("async () => await search.web({ query: \"still works\" })");
+    assert!(out.contains("\"completed\""), "{out}");
+    assert!(
+        stack
+            .compose(&[], &[], &["start", "infisical"])
+            .status
+            .success()
+    );
+
+    // US4 / T017 (FR-013): the events are audited, linked by request id.
+    for reason in [
+        format!("approval pending {id}"),
+        format!("approval {id} approved"),
+        format!("approved {id}"),
+        "credential.request testcred/TOKEN".to_string(),
+        "credential.fill testcred/TOKEN".to_string(),
+        "credential testcred/TOKEN".to_string(),
+        "agent token on the approvals listener".to_string(),
+        "approval refused: wrong secret".to_string(),
+    ] {
+        let n = stack.sql(&format!(
+            "SELECT count(*) FROM audit WHERE reason = '{reason}'"
+        ));
+        assert_ne!(n, "0", "FR-013: no audit row for {reason:?}");
+    }
+
+    // SC-004: no credential value or approval/form secret anywhere it shouldn't be.
+    let audit = stack.sql(
+        "SELECT string_agg(coalesce(reason, '') || ' ' || args_summary::text, ' ') FROM audit",
+    );
+    let logs = String::from_utf8_lossy(
+        &stack
+            .compose(
+                &[],
+                &[],
+                &["logs", "--no-color", "gateway", "executor-alice"],
+            )
+            .stdout,
+    )
+    .into_owned();
+    for (what, text) in [("the audit log", &audit), ("gateway/executor logs", &logs)]
+        .into_iter()
+        .chain(alice.seen.iter().map(|t| ("a result", t)))
+    {
+        for s in [&value, &value2, &secret, &form_secret.to_string()] {
+            assert!(
+                !text.contains(s.as_str()),
+                "SC-004: a secret reached {what}"
+            );
+        }
+    }
+    for entry in walk(&stack.dir) {
+        if let Ok(text) = std::fs::read_to_string(&entry) {
+            assert!(
+                !text.contains(&value) && !text.contains(&value2),
+                "SC-004: the credential is in {}",
+                entry.display()
+            );
+        }
+    }
+}
+
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut out = vec![];
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(walk(&p));
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    out
 }

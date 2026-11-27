@@ -29,20 +29,26 @@ pub fn agent_addrs(
     configured: Option<&str>,
     route_ip: Option<IpAddr>,
 ) -> Result<Vec<SocketAddr>, String> {
+    addrs_on(AGENT_PORT, configured, route_ip)
+}
+
+/// The same rule for any port (the approvals listener is `:7002`).
+pub fn addrs_on(
+    port: u16,
+    configured: Option<&str>,
+    route_ip: Option<IpAddr>,
+) -> Result<Vec<SocketAddr>, String> {
     if let Some(list) = configured {
         return list
             .split(',')
             .map(str::trim)
             .filter(|a| !a.is_empty())
-            .map(|a| {
-                a.parse()
-                    .map_err(|_| format!("SESH_AGENT_LISTEN: bad address {a}"))
-            })
+            .map(|a| a.parse().map_err(|_| format!("bad listen address {a}")))
             .collect();
     }
-    let mut addrs = vec![SocketAddr::from((Ipv4Addr::LOCALHOST, AGENT_PORT))];
+    let mut addrs = vec![SocketAddr::from((Ipv4Addr::LOCALHOST, port))];
     if let Some(ip) = route_ip {
-        addrs.push(SocketAddr::new(ip, AGENT_PORT));
+        addrs.push(SocketAddr::new(ip, port));
     }
     Ok(addrs)
 }

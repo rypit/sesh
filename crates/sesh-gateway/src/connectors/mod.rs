@@ -34,6 +34,7 @@ fn connector(
             .into_iter()
             .map(|(n, (_, m))| (n.to_string(), m))
             .collect::<BTreeMap<_, _>>(),
+        credentials: vec![],
     }
 }
 
@@ -117,11 +118,25 @@ pub fn all(test_connectors: bool) -> Vec<ConnectorDescriptor> {
                 "act",
                 method(
                     "A side effect that needs approval.",
-                    json!({"type": "object"}),
+                    json!({"type": "object", "properties": {"note": {"type": "string", "maxLength": 2000}}}),
                     true,
                 ),
             )],
         ));
+        let mut c = connector(
+            "testcred",
+            "Test-only connector that uses a credential.",
+            vec![(
+                "check",
+                method(
+                    "Calls the test service with the connector's credential.",
+                    json!({"type": "object"}),
+                    false,
+                ),
+            )],
+        );
+        c.credentials = vec!["TOKEN".into()];
+        out.push(c);
     }
     out
 }
@@ -182,7 +197,13 @@ impl Upstream {
     }
 
     /// Runs one method. Arguments are already validated against its schema.
-    pub async fn call(&self, connector: &str, method: &str, args: &Value) -> Result<Value, String> {
+    pub async fn call(
+        &self,
+        connector: &str,
+        method: &str,
+        args: &Value,
+        creds: &BTreeMap<String, String>,
+    ) -> Result<Value, String> {
         let u = &self.settings.upstreams;
         let s = |k: &str| args[k].as_str().unwrap_or_default().to_string();
         let lim = args["limit"].as_u64().unwrap_or(5) as usize;
@@ -238,6 +259,20 @@ impl Upstream {
                     )
                     .await?;
                 Ok(geo::parse_places(&body, 10))
+            }
+            // Test-only connectors (specs/004 research.md R7).
+            ("testgate", "act") => Ok(json!({"done": true})),
+            ("testcred", "check") => {
+                let token = creds.get("TOKEN").ok_or("credential TOKEN is missing")?;
+                let r = self
+                    .http
+                    .get(format!("{}/testcred", u.test.trim_end_matches('/')))
+                    .bearer_auth(token)
+                    .send()
+                    .await
+                    .map_err(|_| "the test service is unreachable".to_string())?;
+                // Only success or failure comes back, never the credential.
+                Ok(json!({"ok": r.status().is_success()}))
             }
             _ => Err(format!("{connector}.{method} has no upstream")),
         }

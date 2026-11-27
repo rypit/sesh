@@ -25,6 +25,9 @@ use suite::{Limits, SUITE_VERSION};
 pub const EVAL_COMPOSE: &str = include_str!("../../../../deploy/eval/compose.yaml");
 pub const EVAL_PROJECT: &str = "sesh-eval";
 pub const EVAL_PORT: u16 = 7100;
+pub const EVAL_APPROVALS_PORT: u16 = 7102;
+pub const EVAL_NTFY_PORT: u16 = 7190;
+pub const EVAL_TOPIC: &str = "sesh-eval-approvals";
 pub const EVAL_AGENT: &str = "eval";
 pub const EVAL_CONNECTORS: [&str; 3] = ["search", "geo", "testgate"];
 const FAKES: &str = "http://fakes:8000";
@@ -98,9 +101,12 @@ pub fn eval_gateway(config: &Config) -> GatewaySettings {
         &mut g.upstreams.kiwix,
         &mut g.upstreams.open_meteo,
         &mut g.upstreams.nominatim,
+        &mut g.upstreams.test,
     ] {
         *u = FAKES.into();
     }
+    g.ntfy_topic = EVAL_TOPIC.into();
+    g.approvals_base_url = format!("http://127.0.0.1:{EVAL_APPROVALS_PORT}");
     g.home = Some(config.gateway.home.clone().unwrap_or(Home {
         latitude: 59.91,
         longitude: 10.75,
@@ -108,9 +114,16 @@ pub fn eval_gateway(config: &Config) -> GatewaySettings {
     g
 }
 
+/// The run's files and the eval approval channel's passwords.
+pub struct Prepared {
+    pub audit: PathBuf,
+    pub ntfy_gateway_pw: String,
+    pub ntfy_person_pw: String,
+}
+
 /// Writes the run's files; only the token's hash reaches the gateway
-/// (data-model.md Eval agent). Returns the audit file's path.
-pub fn prepare(dir: &Path, config: &Config, token: &str) -> Result<PathBuf> {
+/// (data-model.md Eval agent).
+pub fn prepare(dir: &Path, config: &Config, token: &str) -> Result<Prepared> {
     let root = store::evals_dir(dir);
     secrets::ensure_private_dir(&root)?;
     let rdir = run_dir(dir);
@@ -141,14 +154,117 @@ pub fn prepare(dir: &Path, config: &Config, token: &str) -> Result<PathBuf> {
     }
     std::fs::write(rdir.join("compose.yaml"), EVAL_COMPOSE)?;
     std::fs::write(rdir.join("empty.env"), "")?;
-    Ok(adir.join("audit.jsonl"))
+    let (gw_pw, person_pw) = (secrets::random_token()?, secrets::random_token()?);
+    crate::ntfy::write_config(&rdir, EVAL_TOPIC, &gw_pw, &person_pw)?;
+    std::fs::rename(rdir.join(crate::ntfy::FILE), rdir.join("ntfy-server.yml"))?;
+    mode(&rdir.join("ntfy-server.yml"), 0o644)?;
+    Ok(Prepared {
+        audit: adir.join("audit.jsonl"),
+        ntfy_gateway_pw: gw_pw,
+        ntfy_person_pw: person_pw,
+    })
+}
+
+/// Answers the eval gateway's approval requests for the person
+/// (research.md R8): reads new notifications on the eval topic and posts
+/// `decision` to each one's approval page. Returns how many it answered.
+pub struct Approver {
+    person_pw: String,
+    seen: std::cell::RefCell<Vec<String>>,
+}
+
+impl Approver {
+    pub fn new(person_pw: &str) -> Self {
+        Approver {
+            person_pw: person_pw.into(),
+            seen: Default::default(),
+        }
+    }
+
+    pub fn answer(&self, approve: bool) -> usize {
+        use base64::Engine;
+        let basic = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(format!(
+                "{}:{}",
+                crate::ntfy::PERSON_USER,
+                self.person_pw
+            ))
+        );
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(10)))
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut answered = 0;
+        // Notifications can lag the call that caused them by a moment.
+        for _ in 0..10 {
+            let Ok(mut r) = agent
+                .get(&format!(
+                    "http://127.0.0.1:{EVAL_NTFY_PORT}/{EVAL_TOPIC}/json?poll=1&since=all"
+                ))
+                .header("Authorization", &basic)
+                .call()
+            else {
+                break;
+            };
+            let text = r.body_mut().read_to_string().unwrap_or_default();
+            for line in text.lines() {
+                let Ok(m) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
+                let (Some(id), Some(link)) = (m["id"].as_str(), m["actions"][0]["url"].as_str())
+                else {
+                    continue;
+                };
+                if self.seen.borrow().iter().any(|s| s == id) {
+                    continue;
+                }
+                self.seen.borrow_mut().push(id.to_string());
+                let Some((page, secret)) = link.split_once('#') else {
+                    continue;
+                };
+                let decision = if approve { "approve" } else { "deny" };
+                if let Ok(resp) = agent
+                    .post(page)
+                    .send_json(json!({"secret": secret, "decision": decision}))
+                    && resp.status() == 200
+                    && approve
+                {
+                    answered += 1;
+                }
+            }
+            if answered > 0 || !approve {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        answered
+    }
 }
 
 pub fn eval_compose(dir: &Path) -> DockerCompose {
+    eval_compose_with(dir, "")
+}
+
+/// The eval project, with the eval gateway's ntfy password for `up`.
+pub fn eval_compose_with(dir: &Path, ntfy_gateway_pw: &str) -> DockerCompose {
     let rdir = run_dir(dir);
     let mut vars = vec![
+        (
+            "SESH_EVAL_NTFY_GATEWAY_PASSWORD".to_string(),
+            ntfy_gateway_pw.to_string(),
+        ),
         ("SESH_EVAL_DIR".to_string(), rdir.display().to_string()),
         ("SESH_EVAL_PORT".to_string(), EVAL_PORT.to_string()),
+        (
+            "SESH_EVAL_APPROVALS_PORT".to_string(),
+            EVAL_APPROVALS_PORT.to_string(),
+        ),
+        (
+            "SESH_EVAL_NTFY_PORT".to_string(),
+            EVAL_NTFY_PORT.to_string(),
+        ),
     ];
     for v in [
         "SESH_GATEWAY_IMAGE",
@@ -294,10 +410,14 @@ pub fn run(dir: &Path, opts: &Options) -> Result<bool> {
 
     let _lock = Lock::take(dir)?;
     let token = secrets::random_token()?;
-    let audit = prepare(dir, &config, &token)?;
-    let compose = eval_compose(dir);
+    let prepared = prepare(dir, &config, &token)?;
+    let audit = prepared.audit.clone();
+    let compose = eval_compose_with(dir, &prepared.ntfy_gateway_pw);
+    let approver = Approver::new(&prepared.ntfy_person_pw);
     let mut redact = secrets.values();
     redact.push(token.clone());
+    redact.push(prepared.ntfy_gateway_pw.clone());
+    redact.push(prepared.ntfy_person_pw.clone());
 
     let started = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -367,7 +487,14 @@ pub fn run(dir: &Path, opts: &Options) -> Result<bool> {
 
     let mut offset = 0;
     for task in &tasks {
-        let outcome = run_loop::run(
+        // The harness answers this task's approvals itself (research.md R8).
+        let approver = &approver;
+        let decide = task.approve.map(|d| move || approver.answer(d));
+        let hooks = run_loop::Hooks {
+            approver: decide.as_ref().map(|f| f as &dyn Fn() -> usize),
+            followup: task.followup,
+        };
+        let outcome = run_loop::run_with(
             &chat,
             &mcp as &dyn Mcp,
             &alias,
@@ -375,7 +502,12 @@ pub fn run(dir: &Path, opts: &Options) -> Result<bool> {
             &system,
             &task.prompt,
             &limits(&task.limits, opts),
+            &hooks,
         );
+        // Decisions are audited by the eval gateway's page; let them land.
+        if task.approve.is_some() {
+            std::thread::sleep(Duration::from_millis(200));
+        }
         let (calls, next) = read_audit(&audit, offset);
         offset = next;
         let result = score::score(task, &outcome, &calls);
@@ -421,7 +553,7 @@ mod tests {
         let dir = tempdir("prep");
         let config = Config::new("http://srv:8080/v1", "qwen3");
         let token = "eval-token-value-123456";
-        let audit = prepare(&dir, &config, token).unwrap();
+        let audit = prepare(&dir, &config, token).unwrap().audit;
         let rdir = run_dir(&dir);
         let agents = std::fs::read_to_string(rdir.join("gateway/agents.toml")).unwrap();
         assert!(!agents.contains(token) && agents.contains(&token_hash(token)));

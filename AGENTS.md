@@ -44,3 +44,5 @@ runs the stack tests (needs Docker and the dev images:
 `sesh eval` runs the model-eval suite (feature 003); in stub mode,
 `STUB_SCRIPT=pass sesh up` (or `fail`) makes the stub model play the
 suite's scripted conversations.
+`sesh credential request <connector> <NAME>` prints a one-time form link
+for a credential (feature 004); nothing in sesh ever prints a value.

@@ -74,6 +74,13 @@ pub fn run(dir: &Path, opts: &InitOptions) -> Result<Vec<String>> {
             longitude,
         });
     }
+    // The person's private approval topic (specs/004 data-model.md Settings).
+    if config.gateway.ntfy_topic.is_empty() {
+        let mut b = [0u8; 8];
+        getrandom::fill(&mut b).map_err(|e| anyhow::anyhow!("OS random source failed: {e}"))?;
+        let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+        config.gateway.ntfy_topic = format!("sesh-approvals-{hex}");
+    }
     config.validate()?;
     if !existing || config != before {
         config.save(dir)?;

@@ -154,6 +154,19 @@ impl Tools {
         )
         .await;
         gw.caps.revoke(&cap);
+        // A gated call waiting for the person (ADR 0007): whatever the script
+        // did with the refusal, the agent is told to re-run after approval.
+        let pending = gw.take_pending(&execution);
+        if let Some(r) = pending.first() {
+            let call = format!("{}.{}", r.connector, r.method);
+            let body = json!({
+                "status": "approval_pending",
+                "approval": {"id": r.id, "expires_in_secs": r.expires_at.saturating_sub(crate::approvals::now())},
+                "error": format!("{call} needs the person's approval. They have been asked. Once they approve, run the same call again with the same arguments."),
+            });
+            let out = format!("{UNTRUSTED_HEADER}\n{body}");
+            return (true, cap_text(out, gw.settings.max_result_bytes));
+        }
         let (is_error, body) = match outcome {
             Outcome::Completed { result, logs } => (
                 false,

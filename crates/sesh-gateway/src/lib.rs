@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod approvals;
 pub mod audit;
 pub mod auth;
 pub mod calls;
@@ -13,8 +14,11 @@ pub mod connectors;
 pub mod executor;
 pub mod listen;
 pub mod mcp;
+pub mod notify;
+pub mod pages;
 pub mod redact;
 pub mod schema;
+pub mod secrets;
 
 use sesh_core::{Agent, AgentsFile, ConnectorDescriptor, GatewaySettings};
 use std::path::PathBuf;
@@ -76,6 +80,14 @@ pub struct Gateway {
     pub upstream: connectors::Upstream,
     /// `{agent}` is replaced by the agent's name.
     pub executor_url: String,
+    /// Approval requests and credential forms (specs/004).
+    pub approvals: approvals::Store,
+    pub notifier: notify::Notifier,
+    pub secrets: secrets::SecretStore,
+    /// The operator's token for `/admin/*` on the approvals listener.
+    pub admin_token: Option<String>,
+    /// Approvals a running execution is waiting for, by execution id.
+    pub pending: Mutex<std::collections::HashMap<String, Vec<approvals::Request>>>,
 }
 
 impl Gateway {
@@ -94,5 +106,31 @@ impl Gateway {
 
     pub fn executor_url_for(&self, agent: &str) -> String {
         self.executor_url.replace("{agent}", agent)
+    }
+
+    pub fn approval_limits(&self) -> approvals::Limits {
+        approvals::Limits {
+            ttl_secs: self.settings.approval_ttl_secs,
+            pending_max: self.settings.approvals_pending_max,
+            per_hour: self.settings.approvals_per_hour,
+            base_url: self.settings.approvals_base_url.clone(),
+        }
+    }
+
+    /// Records that `execution` is waiting for `r`.
+    pub fn note_pending(&self, execution: &str, r: &approvals::Request) {
+        let mut p = self.pending.lock().expect("lock");
+        let list = p.entry(execution.to_string()).or_default();
+        if !list.iter().any(|x| x.id == r.id) {
+            list.push(r.clone());
+        }
+    }
+
+    pub fn take_pending(&self, execution: &str) -> Vec<approvals::Request> {
+        self.pending
+            .lock()
+            .expect("lock")
+            .remove(execution)
+            .unwrap_or_default()
     }
 }

@@ -55,11 +55,13 @@ impl Check {
     }
 }
 
-const SERVICES: [&str; 6] = [
+const SERVICES: [&str; 8] = [
     "postgres",
     "redis",
     "litellm",
     "searxng",
+    "infisical",
+    "ntfy",
     "gateway",
     "open-webui",
 ];
@@ -78,6 +80,7 @@ pub fn run(
     let mut checks = alias_checks(config, secrets, http);
     checks.extend(stack_checks(config, agents, compose));
     checks.push(gateway_check(http));
+    checks.push(credentials_check(secrets, http));
     checks.push(audit_check(compose));
     checks.push(match tailscale.serves_port(config.ports.webui) {
         Ok(Some(true)) => Check::pass("tailscale-serve", "Open WebUI is served on the tailnet"),
@@ -261,6 +264,58 @@ fn gateway_check(http: &dyn Http) -> Check {
     }
 }
 
+/// Warns for each credential a connector needs that isn't set (specs/004 FR-012).
+fn credentials_check(secrets: &Secrets, http: &dyn Http) -> Check {
+    let Some(token) = secrets.get("SESH_GATEWAY_ADMIN_TOKEN") else {
+        return Check::warn(
+            "credentials",
+            "no gateway admin token yet",
+            "run `sesh init`",
+        );
+    };
+    match http.get(
+        &format!("{}/credentials", crate::credential::admin_url()),
+        Some(token),
+    ) {
+        Ok(r) if r.status == 200 => {
+            let missing: Vec<String> = r
+                .body
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|c| c["state"] != "set")
+                .map(|c| {
+                    format!(
+                        "{}/{} {}",
+                        c["connector"].as_str().unwrap_or("?"),
+                        c["name"].as_str().unwrap_or("?"),
+                        c["state"].as_str().unwrap_or("?")
+                    )
+                })
+                .collect();
+            if missing.is_empty() {
+                Check::pass("credentials", "every credential connectors need is set")
+            } else {
+                Check::warn(
+                    "credentials",
+                    format!("not set: {}", missing.join(", ")),
+                    "sesh credential request <connector> <NAME>",
+                )
+            }
+        }
+        Ok(r) => Check::warn(
+            "credentials",
+            format!("the gateway answered {}", r.status),
+            "run `sesh up`",
+        ),
+        Err(e) => Check::warn(
+            "credentials",
+            format!("can't reach the gateway: {e}"),
+            "run `sesh up`",
+        ),
+    }
+}
+
 /// Warns when an agent had many refusals in the last hour (FR-016).
 fn audit_check(compose: &dyn Compose) -> Check {
     let sql = format!(
@@ -387,6 +442,8 @@ mod tests {
             ("redis", None),
             ("litellm", Some(("127.0.0.1", 4000))),
             ("searxng", None),
+            ("infisical", Some(("127.0.0.1", 8222))),
+            ("ntfy", Some(("127.0.0.1", 8090))),
             ("gateway", Some(("127.0.0.1", 7000))),
             ("open-webui", Some(("127.0.0.1", 3000))),
         ])
@@ -394,6 +451,12 @@ mod tests {
 
     fn good_router(tools: bool) -> FakeHttp {
         FakeHttp::new(move |method, url, body| {
+            if url.ends_with("/admin/credentials") {
+                return (
+                    200,
+                    json!([{"connector": "testcred", "name": "TOKEN", "state": "set"}]),
+                );
+            }
             if method == "GET" {
                 return (200, json!({"data": [{"id": "agent-main"}]}));
             }
@@ -474,7 +537,7 @@ mod tests {
     fn open_port_fails_and_names_the_service() {
         let (c, s) = setup(false);
         let stack = healthy_stack();
-        stack.services.borrow_mut()[5].published[0].address = "0.0.0.0".into();
+        stack.services.borrow_mut()[7].published[0].address = "0.0.0.0".into();
         let checks = run(
             &c,
             &s,

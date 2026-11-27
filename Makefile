@@ -27,16 +27,21 @@ compose-config:
 	mkdir -p target/compose-check
 	touch target/compose-check/litellm.yaml
 	printf '%s\n' POSTGRES_PASSWORD=x REDIS_PASSWORD=x LITELLM_MASTER_KEY=x WEBUI_SECRET_KEY=x \
-	  WEBUI_ADMIN_EMAIL=x WEBUI_ADMIN_PASSWORD=x GATEWAY_DB_PASSWORD=x SEARXNG_SECRET=x > target/compose-check/secrets.env
+	  WEBUI_ADMIN_EMAIL=x WEBUI_ADMIN_PASSWORD=x GATEWAY_DB_PASSWORD=x SEARXNG_SECRET=x \
+	  INFISICAL_ENCRYPTION_KEY=x INFISICAL_AUTH_SECRET=x INFISICAL_SETUP_TOKEN=x NTFY_GATEWAY_PASSWORD=x \
+	  SESH_GATEWAY_ADMIN_TOKEN=x > target/compose-check/secrets.env
 	SESH_DATA_DIR=$(CURDIR)/target/compose-check SESH_WEBUI_PORT=3000 SESH_ROUTER_PORT=4000 \
 	  docker compose --env-file target/compose-check/secrets.env $(COMPOSE_FILES) config -q
-	SESH_EVAL_DIR=$(CURDIR)/target/compose-check docker compose -f deploy/eval/compose.yaml config -q
+	SESH_EVAL_DIR=$(CURDIR)/target/compose-check SESH_EVAL_NTFY_GATEWAY_PASSWORD=x docker compose -f deploy/eval/compose.yaml config -q
 
 # Fails if instance data (secrets or rendered config) is ever committed (ADR 0003).
 no-instance-data:
 	@if git ls-files | grep -E '(^|/)(secrets\.env|litellm\.yaml|sesh\.toml)$$'; then \
 	  echo "instance data is tracked in git; remove it" >&2; exit 1; fi
 
+# STACK_TESTS picks stack tests by exact name (CI runs one per job), e.g.
+#   make stack-test STACK_TESTS=secrets_stack
+STACK_TESTS ?=
 stack-test:
 	cargo build --workspace
-	cargo test -p sesh-cli --test stack -- --ignored --test-threads=1
+	cargo test -p sesh-cli --test stack -- --ignored --test-threads=1 $(if $(STACK_TESTS),--exact $(STACK_TESTS))
