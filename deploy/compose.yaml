@@ -33,11 +33,17 @@ services:
       POSTGRES_USER: sesh
       POSTGRES_DB: sesh
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run sesh init}
+    # Login rules written by `sesh up` from the networks' address ranges:
+    # each login only from its own database network (specs/008 R10).
+    command: ["postgres", "-c", "hba_file=/etc/sesh-pg/pg_hba.conf"]
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ${SESH_DATA_DIR:?}/compose/postgres-init.sql:/docker-entrypoint-initdb.d/10-sesh.sql:ro
-    # `feeds-db`: Miniflux's own route to its database (specs/006 R2).
-    networks: [default, feeds-db]
+      # A directory, not a file: a file mount would keep the old rules
+      # after `sesh up` replaces them.
+      - ${SESH_DATA_DIR:?}/postgres-conf:/etc/sesh-pg:ro
+    # Only the database networks, one per storing service (specs/008).
+    networks: [litellm-db, openwebui-db, gateway-db, infisical-db, paperless-db, feeds-db]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sesh -d sesh"]
       interval: 5s
@@ -84,6 +90,9 @@ services:
       - "127.0.0.1:${SESH_ROUTER_PORT:-4000}:4000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Its database; `models` for Open WebUI; its edge for its port and the
+    # inference server (specs/008).
+    networks: [litellm-db, models, litellm-edge]
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')\""]
       interval: 5s
@@ -124,7 +133,7 @@ services:
       - open-webui-data:/app/backend/data
     ports:
       - "127.0.0.1:${SESH_WEBUI_PORT:-3000}:8080"
-    networks: [default, openwebui-redis]
+    networks: [openwebui-db, models, openwebui-redis, webui-edge]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health >/dev/null"]
       interval: 10s
@@ -171,7 +180,10 @@ services:
       # Approval pages and credential forms; reach them from a phone with
       # `tailscale serve` (specs/004 quickstart.md).
       - "127.0.0.1:${SESH_APPROVALS_PORT:-7002}:7002"
-    networks: [default, search, docs, feeds]
+    # Its database, Infisical (`secrets`), ntfy (`notify`), the resource
+    # networks, and its edge for its ports and Google, weather and maps.
+    # Executor networks come from the generated overlay (specs/008).
+    networks: [gateway-db, secrets, notify, search, docs, feeds, gateway-edge]
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -207,7 +219,7 @@ services:
       DISABLE_UPDATE_CHECK: "true"
     ports:
       - "127.0.0.1:${SESH_INFISICAL_PORT:-8222}:8080"
-    networks: [default, infisical-redis]
+    networks: [infisical-db, secrets, infisical-redis, infisical-edge]
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8080/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 5s
@@ -231,6 +243,9 @@ services:
       - ntfy-data:/var/lib/ntfy
     ports:
       - "127.0.0.1:${SESH_NTFY_PORT:-8090}:80"
+    # The gateway publishes on `notify`; its edge carries its port (and
+    # any upstream push relay) (specs/008).
+    networks: [notify, ntfy-edge]
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/v1/health"]
       interval: 5s
@@ -239,8 +254,8 @@ services:
     restart: unless-stopped
 
   # Documents (specs/005, ADR 0008). Reachable only from the gateway (the
-  # `docs` network is internal); it reaches Postgres on `default` and its
-  # own Redis on `paperless-redis`.
+  # `docs` network is internal); it reaches Postgres on `paperless-db` and
+  # its own Redis on `paperless-redis`.
   paperless:
     image: paperlessngx/paperless-ngx:3.5.1@sha256:8508853b8a0f8394074260957d0be186c8c64f346973b24a7583de4580f306b9
     environment:
@@ -260,7 +275,7 @@ services:
     volumes:
       - paperless-data:/usr/src/paperless/data
       - paperless-media:/usr/src/paperless/media
-    networks: [default, docs, paperless-redis]
+    networks: [paperless-db, docs, paperless-redis]
     healthcheck:
       test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/ | grep -qE '^(200|301|302|401|403)$$'"]
       interval: 10s
@@ -331,8 +346,33 @@ volumes:
   paperless-data:
   paperless-media:
 
+# No `default`: each network is shared only by the services its purpose
+# names (specs/008-network-isolation/contracts/networks.md).
 networks:
-  default: {}
+  # A database network per storing service: it and Postgres only.
+  litellm-db:
+    internal: true
+  openwebui-db:
+    internal: true
+  gateway-db:
+    internal: true
+  infisical-db:
+    internal: true
+  paperless-db:
+    internal: true
+  # One link each.
+  models:
+    internal: true
+  secrets:
+    internal: true
+  notify:
+    internal: true
+  # One member each: its published loopback port and its outbound access.
+  webui-edge: {}
+  litellm-edge: {}
+  gateway-edge: {}
+  infisical-edge: {}
+  ntfy-edge: {}
   search:
     internal: true
   docs:

@@ -1,6 +1,6 @@
 //! Fakes for the seams, used by unit tests.
 
-use super::compose::{Compose, Published, ServiceState};
+use super::compose::{Compose, NetworkRemoval, Published, ServiceState};
 use super::http::{Http, Reply};
 use super::tailscale::Tailscale;
 use anyhow::Result;
@@ -13,6 +13,15 @@ pub struct FakeCompose {
     pub calls: RefCell<Vec<String>>,
     /// What `exec_sql` returns.
     pub sql_output: RefCell<String>,
+    /// Each network's subnets; a network that's absent has none.
+    pub subnets: RefCell<std::collections::BTreeMap<String, Vec<String>>>,
+    /// Networks that exist, with the containers attached.
+    pub networks: RefCell<std::collections::BTreeMap<String, Vec<String>>>,
+    /// Each running service's networks.
+    pub service_nets: RefCell<Vec<(String, Vec<String>)>>,
+    /// `exec_sql` answers by query: the first (needle, output) whose needle
+    /// the SQL contains wins; otherwise `sql_output`.
+    pub sql_by_query: RefCell<Vec<(String, String)>>,
 }
 
 impl FakeCompose {
@@ -36,8 +45,7 @@ impl FakeCompose {
             .collect();
         FakeCompose {
             services: RefCell::new(states),
-            calls: RefCell::default(),
-            sql_output: RefCell::default(),
+            ..Default::default()
         }
     }
 }
@@ -62,9 +70,46 @@ impl Compose for FakeCompose {
     fn ps(&self) -> Result<Vec<ServiceState>> {
         Ok(self.services.borrow().clone())
     }
-    fn exec_sql(&self, database: &str, _sql: &str) -> Result<String> {
+    fn exec_sql(&self, database: &str, sql: &str) -> Result<String> {
+        if sql.trim() == "SELECT pg_reload_conf();" {
+            self.calls.borrow_mut().push("reload postgres".into());
+            return Ok("t\n".into());
+        }
         self.calls.borrow_mut().push(format!("sql {database}"));
+        if let Some((_, out)) = self
+            .sql_by_query
+            .borrow()
+            .iter()
+            .find(|(n, _)| sql.contains(n.as_str()))
+        {
+            return Ok(out.clone());
+        }
         Ok(self.sql_output.borrow().clone())
+    }
+    fn network_subnets(&self, network: &str) -> Result<Vec<String>> {
+        Ok(self
+            .subnets
+            .borrow()
+            .get(network)
+            .cloned()
+            .unwrap_or_default())
+    }
+    fn remove_network_if_unused(&self, network: &str) -> Result<NetworkRemoval> {
+        let mut nets = self.networks.borrow_mut();
+        match nets.get(network) {
+            None => Ok(NetworkRemoval::Absent),
+            Some(users) if !users.is_empty() => Ok(NetworkRemoval::InUse(users.clone())),
+            Some(_) => {
+                nets.remove(network);
+                self.calls
+                    .borrow_mut()
+                    .push(format!("rm network {network}"));
+                Ok(NetworkRemoval::Removed)
+            }
+        }
+    }
+    fn service_networks(&self) -> Result<Vec<(String, Vec<String>)>> {
+        Ok(self.service_nets.borrow().clone())
     }
 }
 

@@ -120,7 +120,7 @@ jobs:
       matrix:
         tests:
           - isolation_stack secrets_stack
-          - eval_stack gateway_stack
+          - eval_stack gateway_stack network_stack
           - foundation_stack google_docs_stack feeds_stack
     name: stack (${{ matrix.tests }})
     steps:

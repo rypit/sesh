@@ -23,6 +23,15 @@ pub struct ServiceState {
     pub published: Vec<Published>,
 }
 
+/// What `remove_network_if_unused` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NetworkRemoval {
+    Removed,
+    Absent,
+    /// Still in use by these containers; left alone.
+    InUse(Vec<String>),
+}
+
 pub trait Compose {
     fn up(&self, services: &[&str]) -> Result<()>;
     fn restart(&self, service: &str) -> Result<()>;
@@ -32,6 +41,14 @@ pub trait Compose {
     /// (so nothing in it, such as a password, appears in a process list).
     /// Returns psql's unaligned output.
     fn exec_sql(&self, database: &str, sql: &str) -> Result<String>;
+    /// The address ranges Docker assigned to one of the project's networks
+    /// (`<project>_<network>`), in CIDR form (specs/008 research.md R10).
+    fn network_subnets(&self, network: &str) -> Result<Vec<String>>;
+    /// Removes a project network if nothing uses it.
+    fn remove_network_if_unused(&self, network: &str) -> Result<NetworkRemoval>;
+    /// Each running service's networks, by Compose network name (without
+    /// the project prefix), for the doctor's layout check.
+    fn service_networks(&self) -> Result<Vec<(String, Vec<String>)>>;
 }
 
 /// Runs `docker compose -p <project> --env-file <secrets> -f <files…>`.
@@ -55,6 +72,13 @@ impl DockerCompose {
             c.env(k, v);
         }
         c
+    }
+
+    fn docker(&self, args: &[&str]) -> Result<std::process::Output> {
+        Command::new("docker")
+            .args(args)
+            .output()
+            .context("can't run `docker`; is Docker installed and running?")
     }
 
     fn run(&self, args: &[&str]) -> Result<String> {
@@ -132,6 +156,81 @@ impl Compose for DockerCompose {
             bail!("psql failed: {}", err.lines().next().unwrap_or("").trim());
         }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    fn network_subnets(&self, network: &str) -> Result<Vec<String>> {
+        let name = format!("{}_{network}", self.project);
+        let out = self.docker(&[
+            "network",
+            "inspect",
+            "-f",
+            "{{range .IPAM.Config}}{{.Subnet}} {{end}}",
+            &name,
+        ])?;
+        if !out.status.success() {
+            bail!("can't inspect {name}");
+        }
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .map(str::to_string)
+            .collect())
+    }
+
+    fn remove_network_if_unused(&self, network: &str) -> Result<NetworkRemoval> {
+        let name = format!("{}_{network}", self.project);
+        let out = self.docker(&[
+            "network",
+            "inspect",
+            "-f",
+            "{{range .Containers}}{{.Name}} {{end}}",
+            &name,
+        ])?;
+        if !out.status.success() {
+            return Ok(NetworkRemoval::Absent);
+        }
+        let users: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        if !users.is_empty() {
+            return Ok(NetworkRemoval::InUse(users));
+        }
+        let rm = self.docker(&["network", "rm", &name])?;
+        if !rm.status.success() {
+            bail!(
+                "can't remove {name}: {}",
+                String::from_utf8_lossy(&rm.stderr).trim()
+            );
+        }
+        Ok(NetworkRemoval::Removed)
+    }
+
+    fn service_networks(&self) -> Result<Vec<(String, Vec<String>)>> {
+        let prefix = format!("{}_", self.project);
+        let ids = self.run(&["ps", "-q"])?;
+        let mut out = vec![];
+        for id in ids.split_whitespace() {
+            let o = self.docker(&[
+                "inspect",
+                "-f",
+                "{{index .Config.Labels \"com.docker.compose.service\"}}|{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}",
+                id,
+            ])?;
+            if !o.status.success() {
+                continue;
+            }
+            let text = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let Some((service, nets)) = text.split_once('|') else {
+                continue;
+            };
+            let nets = nets
+                .split_whitespace()
+                .map(|n| n.strip_prefix(&prefix).unwrap_or(n).to_string())
+                .collect();
+            out.push((service.to_string(), nets));
+        }
+        out.sort();
+        Ok(out)
     }
 }
 
