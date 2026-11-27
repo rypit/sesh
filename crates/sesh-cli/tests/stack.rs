@@ -726,7 +726,8 @@ fn gateway_stack() {
     );
     let (mut alice, out, took) = runaway.join().unwrap();
     assert!(out.contains("\"timeout\""), "FR-006: {out}");
-    assert!(took < Duration::from_secs(37), "SC-004: took {took:?}");
+    // SC-004: stopped within 5 s of the 30 s deadline.
+    assert!(took < Duration::from_secs(35), "SC-004: took {took:?}");
     let out = alice.execute("async () => 1 + 1");
     assert!(out.contains("\"completed\""), "FR-006: no recovery: {out}");
 

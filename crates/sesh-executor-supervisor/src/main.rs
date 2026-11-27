@@ -162,6 +162,9 @@ fn main() {
         tiny_http::Server::http(env("SUPERVISOR_LISTEN", "0.0.0.0:8000")).expect("bind supervisor");
     // One request at a time: an agent runs one script at a time.
     for mut req in server.incoming_requests() {
+        // Restart after replying, so the timeout reaches the gateway at
+        // once (SC-004) instead of after workerd's start-up.
+        let mut restart_after = false;
         let path = req.url().split('?').next().unwrap_or("").to_string();
         let response = match (req.method().as_str(), path.as_str()) {
             ("GET", "/health") => {
@@ -202,7 +205,10 @@ fn main() {
                     }
                     Err(_) => {
                         // Deadline passed (or workerd died): stop the runaway script.
-                        workerd.restart();
+                        if let Some(c) = workerd.child.as_mut() {
+                            let _ = c.kill();
+                        }
+                        restart_after = true;
                         tiny_http::Response::from_string(r#"{"status":"timeout"}"#)
                             .with_status_code(504)
                     }
@@ -211,6 +217,9 @@ fn main() {
             _ => tiny_http::Response::from_string("not found").with_status_code(404),
         };
         let _ = req.respond(response);
+        if restart_after {
+            workerd.restart();
+        }
     }
 }
 

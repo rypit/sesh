@@ -149,13 +149,22 @@ to start even with no outbound TLS (the image installs `ca-certificates`).
 The executor healthcheck now asks workerd itself, not only the
 supervisor's port.
 
-Not yet measured as stated:
+Success criteria, measured in run 45916128439 on commit 25cd632 (stack
+tests 11 min 28 s, with containers' internet blocked):
 
-- SC-001: the two-call script completes, but its time isn't asserted.
-- SC-003: the test checks that each kind of call is audited, not that
-  each has exactly one entry (the one-write-per-call rule is unit-tested
-  in `calls.rs`).
-- SC-005: every upstream is the stub, but CI runners have internet
-  access, so "passes with outbound internet blocked" isn't shown.
-- SC-006: the audit log is checked for tokens; gateway logs and results
-  aren't.
+- SC-001: the two-connector script completes in under 2 s.
+- SC-002: every hostile case above is refused, and the refusals are in
+  the audit log.
+- SC-003: audit rows are counted around each call: the two-call script
+  adds exactly two allowed entries, and a gated or schema-refused call
+  exactly one refused entry.
+- SC-004: the runaway's timeout comes back within 5 s of its 30 s
+  deadline (the supervisor kills workerd, replies, then restarts it), and
+  bob's script finishes within 2 s meanwhile.
+- SC-005: CI drops all traffic forwarded from containers to the internet
+  (DOCKER-USER) for the whole stack job's tests, and the test confirms
+  searxng, the one service with an egress network, can't reach it. Both
+  stack tests pass.
+- SC-006: gateway and executor logs, every result an agent received and
+  the audit log contain no agent token, no database password and no
+  capability-shaped value.
