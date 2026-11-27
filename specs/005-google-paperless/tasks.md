@@ -54,6 +54,7 @@ they check.
   - `sesh user add ana`, `sesh user add ben`, and agents with `--owner`;
   - Ana's gated `testgate.act` notifies Ana's topic only;
   - a Household agent's notifies the Household topic, readable as Ana and as Ben;
+  - `sesh user list` shows both users;
   - after `sesh user remove ben`, Ben's agent is refused.
 - [ ] T009 [US1] CLI:
   - `sesh user add|remove|list` in `crates/sesh-cli/src/user.rs`;
@@ -79,11 +80,12 @@ they check.
   - `invalid_grant` → revoked.
 
   Pages `/google/start/{id}` and `/google/callback`, and `/admin/google/consent` and `/admin/google/disconnect`, in `pages.rs`.
-- [ ] T012 [US2] CLI `sesh google connect|disconnect` in `crates/sesh-cli/src/google.rs`; doctor `google` check
+- [ ] T012 [US2] CLI `sesh google connect|disconnect` in `crates/sesh-cli/src/google.rs`; doctor checks `google` and `paperless` (FR-016) through a gateway admin endpoint
 - [ ] T013 [US2] Stack steps in `google_docs_stack`:
   - connect Ana through the link (the fake consent redirects straight back); the link is refused the second time;
   - `sesh user list` shows Ana connected;
   - no refresh or access token appears in outputs, logs, the audit log or the data directory;
+  - audit rows exist for the consent request, the connection and the disconnection (FR-015);
   - after disconnecting, calls answer "not connected".
 
 ## Phase 5: User Story 3 - Mail and calendar (P1)
