@@ -55,9 +55,12 @@ impl Check {
     }
 }
 
-const SERVICES: [&str; 10] = [
+const SERVICES: [&str; 12] = [
     "postgres",
-    "redis",
+    // Each service's own Redis (specs/007 research.md R3).
+    "redis-openwebui",
+    "redis-infisical",
+    "redis-paperless",
     "litellm",
     "searxng",
     "infisical",
@@ -87,6 +90,7 @@ pub fn run(
     checks.push(paperless_check(secrets, http));
     checks.push(feeds_check(secrets, http));
     checks.push(audit_check(compose));
+    checks.push(isolation_check(compose));
     checks.push(match tailscale.serves_port(config.ports.webui) {
         Ok(Some(true)) => Check::pass("tailscale-serve", "Open WebUI is served on the tailnet"),
         Ok(Some(false)) => Check::warn(
@@ -507,6 +511,64 @@ fn audit_check(compose: &dyn Compose) -> Check {
     }
 }
 
+/// The `db-isolation` query (specs/007 research.md R6): one line per
+/// problem, nothing when every service logs in as its own role.
+/// `sesh up`, doctor and the operator use the superuser over the Postgres
+/// container's local socket, which has no client address; a superuser
+/// session with one comes from another container.
+fn isolation_sql() -> String {
+    let roles: Vec<String> = crate::up::SERVICE_DATABASES
+        .iter()
+        .map(|(role, _)| format!("('{role}')"))
+        .collect();
+    let names: Vec<String> = crate::up::SERVICE_DATABASES
+        .iter()
+        .map(|(role, _)| format!("'{role}'"))
+        .collect();
+    format!(
+        "SELECT DISTINCT 'superuser session from ' || host(a.client_addr) || ' (' || \
+           coalesce(nullif(a.application_name, ''), 'no application name') || ')' \
+         FROM pg_stat_activity a JOIN pg_roles r ON r.oid = a.usesysid \
+         WHERE r.rolsuper AND a.client_addr IS NOT NULL \
+         UNION ALL \
+         SELECT 'database ' || e.name || CASE WHEN d.oid IS NULL THEN ' is missing' \
+           ELSE ' is owned by ' || pg_get_userbyid(d.datdba) END \
+         FROM (VALUES {}) AS e(name) LEFT JOIN pg_database d ON d.datname = e.name \
+         WHERE d.oid IS NULL OR pg_get_userbyid(d.datdba) <> e.name \
+         UNION ALL \
+         SELECT 'role ' || rolname || ' has administrative rights' FROM pg_roles \
+         WHERE rolname IN ({}) \
+           AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls);",
+        roles.join(", "),
+        names.join(", ")
+    )
+}
+
+/// specs/007 FR-010: no service uses the superuser; each service database
+/// belongs to its own login, which has no administrative rights.
+fn isolation_check(compose: &dyn Compose) -> Check {
+    match compose.exec_sql("sesh", &isolation_sql()) {
+        Ok(out) if out.trim().is_empty() => Check::pass(
+            "db-isolation",
+            "every service logs in as its own role, owning only its database",
+        ),
+        Ok(out) => Check::fail(
+            "db-isolation",
+            out.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .collect::<Vec<_>>()
+                .join("; "),
+            "run `sesh up`",
+        ),
+        Err(e) => Check::fail(
+            "db-isolation",
+            format!("can't check the database logins: {e}"),
+            "run `sesh up`",
+        ),
+    }
+}
+
 fn stack_checks(config: &Config, agents: &[String], compose: &dyn Compose) -> Vec<Check> {
     let states = match compose.ps() {
         Ok(s) => s,
@@ -604,7 +666,7 @@ mod tests {
     fn healthy_stack() -> FakeCompose {
         FakeCompose::healthy(&[
             ("postgres", None),
-            ("redis", None),
+            ("redis-openwebui", None),
             ("litellm", Some(("127.0.0.1", 4000))),
             ("searxng", None),
             ("infisical", Some(("127.0.0.1", 8222))),
@@ -613,6 +675,8 @@ mod tests {
             ("miniflux", None),
             ("gateway", Some(("127.0.0.1", 7000))),
             ("open-webui", Some(("127.0.0.1", 3000))),
+            ("redis-infisical", None),
+            ("redis-paperless", None),
         ])
     }
 
@@ -819,5 +883,64 @@ mod tests {
         assert_eq!(c.status, Status::Warn);
         let none = json!({"state": "ok", "feeds": []});
         assert_eq!(feeds_check(&s, &reply(none)).detail, "no feeds yet");
+    }
+
+    #[test]
+    fn db_isolation_passes_with_no_problems_and_names_each_one() {
+        let ok = FakeCompose::healthy(&[]);
+        let c = isolation_check(&ok);
+        assert_eq!(c.status, Status::Pass, "{}", c.detail);
+        assert_eq!(
+            *ok.calls.borrow(),
+            vec!["sql sesh"],
+            "asked as the superuser"
+        );
+        let bad = FakeCompose::healthy(&[]);
+        *bad.sql_output.borrow_mut() =
+            "superuser session from 172.18.0.5 (no application name)\ndatabase litellm is owned by sesh\n"
+                .into();
+        let c = isolation_check(&bad);
+        assert_eq!(c.status, Status::Fail, "specs/007 FR-010");
+        assert_eq!(
+            c.detail,
+            "superuser session from 172.18.0.5 (no application name); database litellm is owned by sesh"
+        );
+        assert_eq!(c.fix.as_deref(), Some("run `sesh up`"));
+        // It is part of every doctor run.
+        let (cfg, s) = setup(false);
+        let checks = run(
+            &cfg,
+            &s,
+            &[],
+            &bad,
+            &good_router(true),
+            &FakeTailscale(None),
+        );
+        assert_eq!(status(&checks, "db-isolation"), Status::Fail);
+    }
+
+    #[test]
+    fn db_isolation_asks_about_every_service_database() {
+        let q = isolation_sql();
+        for (role, _) in crate::up::SERVICE_DATABASES {
+            assert!(q.contains(&format!("('{role}')")), "{role}");
+        }
+        for needle in [
+            "rolsuper",
+            "client_addr IS NOT NULL",
+            "rolcreatedb",
+            "rolcreaterole",
+            "datdba",
+        ] {
+            assert!(q.contains(needle), "{needle}");
+        }
+    }
+
+    #[test]
+    fn doctor_expects_each_service_redis() {
+        for r in ["redis-openwebui", "redis-infisical", "redis-paperless"] {
+            assert!(SERVICES.contains(&r), "{r}");
+        }
+        assert!(!SERVICES.contains(&"redis"));
     }
 }

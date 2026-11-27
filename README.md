@@ -50,13 +50,16 @@ evals, secrets and approvals) are done; feature 005 (Google and
 Paperless, with per-user identity,
 [`specs/005-google-paperless/`](specs/005-google-paperless/)) and
 feature 006 (RSS feeds, [`specs/006-rss-feeds/`](specs/006-rss-feeds/))
+and feature 007 (service isolation: a database login and a cache per
+service, [`specs/007-service-isolation/`](specs/007-service-isolation/))
 are in progress. The design is in the
 [Solutions Architecture](docs/architecture/solutions-architecture.md);
 decisions are in [`docs/decisions/`](docs/decisions/)
 and reference notes in [`docs/research/`](docs/research/). The build
-follows the architecture's eleven phases (foundation, gateway core,
+follows the architecture's twelve phases (foundation, gateway core,
 model evals, secrets and approvals, Google and Paperless, RSS feeds,
-read-only Google Docs, memory, one agent, browser, household), each a
+service isolation, read-only Google Docs, memory, one agent, browser,
+household), each a
 feature under `specs/`.
 
 ## Try it
@@ -118,3 +121,13 @@ agents' skills repos; those live on the server (ADR 0003).
 Spec-driven, using [GitHub Spec Kit](https://github.github.com/spec-kit/):
 constitution → specify → clarify → plan → tasks → implement. The `/speckit-*`
 skills live in `.claude/skills/`, templates and scripts in `.specify/`.
+
+## License
+
+sesh is licensed under the [Apache License 2.0](LICENSE). If you
+redistribute it, keep the license and the attribution in [NOTICE](NOTICE),
+and mark the files you changed.
+
+The components sesh runs (Open WebUI, LiteLLM, Infisical, ntfy, SearXNG,
+Paperless-ngx, Miniflux, Postgres, Redis and the rest) keep their own
+licenses: sesh pulls their published images and doesn't redistribute them.

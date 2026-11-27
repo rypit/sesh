@@ -51,6 +51,11 @@ for a credential (feature 004); nothing in sesh ever prints a value.
 <name>` binds an agent to them, and `sesh google connect <name>` prints a
 one-time Google consent link (feature 005). The gateway derives every
 scope from the calling agent's owner, never from arguments.
+Each adopted service logs in to Postgres as its own role, owning only
+its database, and has its own Redis (feature 007, ADR 0010): never give
+a service the `sesh` superuser; add its role to `SERVICE_DATABASES` and
+`deploy/postgres/gateway.sql`. `sesh doctor`'s `db-isolation` check
+fails otherwise.
 `sesh feed add <owner> <url> [--name <name>]`, `remove` and `list`
 manage feeds (feature 006) in Miniflux, which the gateway reaches only
 through `connectors/feeds.rs` (ADR 0009).

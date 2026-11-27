@@ -13,11 +13,10 @@ use std::path::Path;
 pub const FILE_NAME: &str = "secrets.env";
 
 /// Values `sesh init` generates when missing.
-pub const GENERATED: [&str; 18] = [
+pub const GENERATED: [&str; 24] = [
     "POSTGRES_PASSWORD",
     "GATEWAY_DB_PASSWORD",
     "SEARXNG_SECRET",
-    "REDIS_PASSWORD",
     "LITELLM_MASTER_KEY",
     "WEBUI_SECRET_KEY",
     "WEBUI_ADMIN_PASSWORD",
@@ -36,6 +35,14 @@ pub const GENERATED: [&str; 18] = [
     "MINIFLUX_ADMIN_PASSWORD",
     // Miniflux's own Postgres login (never the superuser).
     "MINIFLUX_DB_PASSWORD",
+    // Feature 007: every service's own Postgres login and Redis (ADR 0010).
+    "OPENWEBUI_DB_PASSWORD",
+    "LITELLM_DB_PASSWORD",
+    "INFISICAL_DB_PASSWORD",
+    "PAPERLESS_DB_PASSWORD",
+    "REDIS_OPENWEBUI_PASSWORD",
+    "REDIS_INFISICAL_PASSWORD",
+    "REDIS_PAPERLESS_PASSWORD",
 ];
 
 /// Set by `sesh up` when it bootstraps Infisical (specs/004 research.md R5).

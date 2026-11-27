@@ -1,15 +1,56 @@
--- Idempotent migration for the gateway's audit log (specs/002-gateway-core).
--- Run by `sesh up` as the database owner through psql on stdin, after
--- `\set gateway_pw '...'` and `\set miniflux_pw '...'` lines; never logged.
+-- Idempotent migration (specs/002-gateway-core, 006, 007). Run by `sesh up`
+-- as the superuser through psql on stdin, before any service starts, after
+-- `\set gateway_pw '...'` and one `\set <role>_pw '...'` line per service
+-- role; never logged. `sesh up` then appends, for each service database,
+-- `\c <database>` and deploy/postgres/owners.sql, which hands everything in
+-- it to the database's owner.
 \set ON_ERROR_STOP on
 
+-- A login per adopted service, named after it and its database, that owns
+-- only that database: never the superuser (specs/007 research.md R1,
+-- ADR 0010). Miniflux's came first (specs/006 research.md R2).
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'openwebui') THEN
+    CREATE ROLE openwebui LOGIN;
+  END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'litellm') THEN
+    CREATE ROLE litellm LOGIN;
+  END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'infisical') THEN
+    CREATE ROLE infisical LOGIN;
+  END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'paperless') THEN
+    CREATE ROLE paperless LOGIN;
+  END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'miniflux') THEN
+    CREATE ROLE miniflux LOGIN;
+  END IF;
+END $$;
+ALTER ROLE openwebui LOGIN PASSWORD :'openwebui_pw' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE litellm LOGIN PASSWORD :'litellm_pw' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE infisical LOGIN PASSWORD :'infisical_pw' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE paperless LOGIN PASSWORD :'paperless_pw' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE miniflux LOGIN PASSWORD :'miniflux_pw' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+
+-- The gateway's audit log (specs/002), owned by the superuser.
 SELECT 'CREATE DATABASE gateway' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'gateway') \gexec
--- Infisical's own database (specs/004 research.md R5).
-SELECT 'CREATE DATABASE infisical' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'infisical') \gexec
--- Paperless-ngx's own database (specs/005 research.md R6).
-SELECT 'CREATE DATABASE paperless' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'paperless') \gexec
--- Miniflux's own database (specs/006 research.md R1).
-SELECT 'CREATE DATABASE miniflux' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'miniflux') \gexec
+-- Each service's database. Open WebUI's and LiteLLM's are also made by
+-- init.sql on first boot, as the superuser; they are handed over below.
+SELECT 'CREATE DATABASE openwebui OWNER openwebui' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'openwebui') \gexec
+SELECT 'CREATE DATABASE litellm OWNER litellm' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'litellm') \gexec
+-- Infisical (specs/004 research.md R5).
+SELECT 'CREATE DATABASE infisical OWNER infisical' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'infisical') \gexec
+-- Paperless-ngx (specs/005 research.md R6).
+SELECT 'CREATE DATABASE paperless OWNER paperless' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'paperless') \gexec
+-- Miniflux (specs/006 research.md R1).
+SELECT 'CREATE DATABASE miniflux OWNER miniflux' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'miniflux') \gexec
+
+-- Databases an earlier version created as the superuser change hands.
+ALTER DATABASE openwebui OWNER TO openwebui;
+ALTER DATABASE litellm OWNER TO litellm;
+ALTER DATABASE infisical OWNER TO infisical;
+ALTER DATABASE paperless OWNER TO paperless;
+ALTER DATABASE miniflux OWNER TO miniflux;
 
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sesh_gateway') THEN
@@ -18,16 +59,7 @@ DO $$ BEGIN
 END $$;
 ALTER ROLE sesh_gateway PASSWORD :'gateway_pw';
 
--- Miniflux parses untrusted feeds, so it gets its own login that owns only
--- its own database (specs/006 research.md R2): never the superuser.
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'miniflux') THEN
-    CREATE ROLE miniflux LOGIN;
-  END IF;
-END $$;
-ALTER ROLE miniflux PASSWORD :'miniflux_pw' NOSUPERUSER NOCREATEDB NOCREATEROLE;
-ALTER DATABASE miniflux OWNER TO miniflux;
-
+-- Only a database's own login may connect to it (and the superuser).
 REVOKE CONNECT ON DATABASE gateway FROM PUBLIC;
 REVOKE CONNECT ON DATABASE openwebui FROM PUBLIC;
 REVOKE CONNECT ON DATABASE litellm FROM PUBLIC;
@@ -35,6 +67,10 @@ REVOKE CONNECT ON DATABASE infisical FROM PUBLIC;
 REVOKE CONNECT ON DATABASE paperless FROM PUBLIC;
 REVOKE CONNECT ON DATABASE miniflux FROM PUBLIC;
 GRANT CONNECT ON DATABASE gateway TO sesh_gateway;
+GRANT CONNECT ON DATABASE openwebui TO openwebui;
+GRANT CONNECT ON DATABASE litellm TO litellm;
+GRANT CONNECT ON DATABASE infisical TO infisical;
+GRANT CONNECT ON DATABASE paperless TO paperless;
 GRANT CONNECT ON DATABASE miniflux TO miniflux;
 -- The default databases too: a service login reaches only its own.
 REVOKE CONNECT ON DATABASE sesh FROM PUBLIC;
@@ -94,16 +130,3 @@ CREATE TABLE IF NOT EXISTS credential_forms (
 REVOKE ALL ON approvals, credential_forms FROM PUBLIC;
 REVOKE ALL ON approvals, credential_forms FROM sesh_gateway;
 GRANT INSERT, SELECT, UPDATE ON approvals, credential_forms TO sesh_gateway;
-
-
--- Objects an earlier run created as the superuser belong to Miniflux too.
-\c miniflux
-ALTER SCHEMA public OWNER TO miniflux;
-DO $$ DECLARE r record; BEGIN
-  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tableowner <> 'miniflux' LOOP
-    EXECUTE format('ALTER TABLE public.%I OWNER TO miniflux', r.tablename);
-  END LOOP;
-  FOR r IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public' AND sequenceowner <> 'miniflux' LOOP
-    EXECUTE format('ALTER SEQUENCE public.%I OWNER TO miniflux', r.sequencename);
-  END LOOP;
-END $$;
