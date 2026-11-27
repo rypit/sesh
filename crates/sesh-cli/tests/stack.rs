@@ -2190,10 +2190,21 @@ fn feeds_stack() {
     }
     let (ok, out) = stack.bash_in("executor-anabot", "exec 3<>/dev/tcp/miniflux/8080");
     assert!(!ok, "SC-002: an executor reached Miniflux: {out}");
-    let published = stack.compose(&[], &[], &["port", "miniflux", "8080"]);
+    // `docker compose port` prints a placeholder for an unpublished port,
+    // so read the container's port bindings instead.
+    let bindings = Command::new("docker")
+        .args([
+            "inspect",
+            "-f",
+            "{{json .HostConfig.PortBindings}}",
+            &stack.container("miniflux"),
+        ])
+        .output()
+        .expect("docker inspect");
+    let bindings = String::from_utf8_lossy(&bindings.stdout).trim().to_string();
     assert!(
-        String::from_utf8_lossy(&published.stdout).trim().is_empty(),
-        "FR-005: Miniflux publishes a port"
+        bindings == "{}" || bindings == "null",
+        "FR-005: Miniflux publishes a port: {bindings}"
     );
     let (_, checks) = stack.doctor();
     assert_eq!(status_of(&checks, "feeds"), "pass", "FR-012: {checks}");
