@@ -138,7 +138,7 @@ blocked; flipping one scoring rule makes it fail.
 ## Phase 8: Polish
 
 - [x] T025 [P] Update `README.md` (try `sesh eval`), `AGENTS.md` (commands), and `specs/003-model-evals/quickstart.md` if anything changed
-- [ ] T026 Record CI results for SC-001–SC-006 in `specs/003-model-evals/research.md`
+- [x] T026 Record CI results for SC-001–SC-006 in `specs/003-model-evals/research.md`
 
 ## Dependencies
 

@@ -183,3 +183,48 @@
   0006 records it.
 - The architecture diagram shows runtime components; the eval gateway
   is a transient operator tool outside it, so the diagram doesn't change.
+
+## R11. Results (CI, 2026-11-27)
+
+GitHub Actions run 45925718329 on commit 051a6cf: `make check` passed.
+The stack job passed all three stack tests in 12 min 16 s, with
+containers' internet blocked. `eval_stack` took 6 min 27 s, including
+starting the stack and four eval runs. It verified, against the stub
+model:
+
+- **SC-001, US1:** the passing script passes all 5 tasks, in under
+  2 minutes (asserted), with exit 0 and the run saved.
+- **SC-002, FR-017:**
+  - With no script and tool calls off, `web-fact` and `forecast` fail with
+    "expected a … call that was allowed; none made", and the command
+    exits 1.
+  - The failing script fails each task for its expected reason: no call,
+    wrong fact ("13.7"), turn limit after malformed calls, never
+    recovered from the refused `search.web`, and claimed a refused
+    action.
+  - The two remaining negative cases, an unreachable server and an
+    ungranted connector, are unit tests of the loop.
+- **SC-003:** two runs of the passing script gave identical results and
+  reasons.
+- **SC-004, FR-008:**
+  - The household gateway's agent list and audit row count were
+    unchanged by the runs.
+  - The `sesh-eval` project was gone after each run, including after
+    Ctrl-C. An interrupted run exits 130 and is listed as incomplete.
+- **Constitution II:** during a run, `executor-eval` reached
+  `gateway-eval:7001`, and not `fakes`, `gateway-eval:7000` or the
+  internet. The eval gateway refused any other token.
+- **US4:** `list` puts the newest run first. `compare` marked `forecast
+  PASS FAIL *`. `show` printed the transcript under the untrusted
+  header.
+- **SC-005:** no value from `secrets.env` and no capability-shaped value
+  appeared in any saved run or transcript.
+- **SC-006:** the run's own output gives each task's PASS/FAIL with
+  reasons and the verdict. This was checked by the assertions above,
+  which read only that output.
+
+**Harness check (T023):** inverting the fact rule in `score.rs` failed 7
+of the 8 scoring unit tests, and they passed again once restored.
+
+**Not yet run:** an eval of a real model. That is an operator run
+against their inference server (quickstart.md).
