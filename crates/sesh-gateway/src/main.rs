@@ -123,6 +123,12 @@ async fn main() -> anyhow::Result<()> {
         secrets,
         admin_token: env("SESH_GATEWAY_ADMIN_TOKEN"),
         pending: Default::default(),
+        google: Default::default(),
+        refs: Default::default(),
+        paperless: sesh_gateway::connectors::docs::Paperless::new(
+            &env("SESH_PAPERLESS_USER").unwrap_or_default(),
+            &env("SESH_PAPERLESS_PASSWORD").unwrap_or_default(),
+        ),
         upstream: connectors::Upstream::new(settings.clone())?,
         settings,
         executor_url: env("SESH_EXECUTOR_URL")

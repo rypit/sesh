@@ -382,6 +382,7 @@ impl Google {
         Ok(tok)
     }
 
+    #[allow(clippy::too_many_arguments)]
     /// One Google API call as the owner. `body` is JSON for POST, or None for GET.
     pub async fn api(
         &self,

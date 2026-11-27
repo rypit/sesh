@@ -126,6 +126,9 @@ pub struct Gateway {
     pub secrets: secrets::SecretStore,
     /// The operator's token for `/admin/*` on the approvals listener.
     pub admin_token: Option<String>,
+    pub google: google::Google,
+    pub refs: refs::Refs,
+    pub paperless: connectors::docs::Paperless,
     /// Approvals a running execution is waiting for, by execution id.
     pub pending: Mutex<std::collections::HashMap<String, Vec<approvals::Request>>>,
 }

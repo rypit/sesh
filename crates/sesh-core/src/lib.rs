@@ -365,6 +365,13 @@ pub struct GatewaySettings {
     /// The person's ntfy topic; empty until `sesh init` generates one.
     #[serde(default)]
     pub ntfy_topic: String,
+    /// Mail searches return at most this many (specs/005 data-model.md Limits).
+    #[serde(default = "d_mail_max")]
+    pub mail_results_max: u32,
+    #[serde(default = "d_upload_max")]
+    pub upload_max_bytes: u64,
+    #[serde(default = "d_ref_ttl")]
+    pub ref_ttl_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -465,6 +472,15 @@ fn d_pending_max() -> u32 {
 fn d_per_hour() -> u32 {
     30
 }
+fn d_mail_max() -> u32 {
+    25
+}
+fn d_upload_max() -> u64 {
+    25 * 1024 * 1024
+}
+fn d_ref_ttl() -> u64 {
+    3600
+}
 
 impl Default for Upstreams {
     fn default() -> Self {
@@ -499,6 +515,9 @@ impl Default for GatewaySettings {
             approvals_pending_max: d_pending_max(),
             approvals_per_hour: d_per_hour(),
             ntfy_topic: String::new(),
+            mail_results_max: d_mail_max(),
+            upload_max_bytes: d_upload_max(),
+            ref_ttl_secs: d_ref_ttl(),
         }
     }
 }
