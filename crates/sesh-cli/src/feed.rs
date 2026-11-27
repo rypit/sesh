@@ -66,25 +66,27 @@ pub fn list(dir: &Path, http: &dyn Http, owner: Option<&str>) -> Result<Vec<Stri
     if r.status != 200 {
         bail!("the gateway answered {}", r.status);
     }
+    if r.body["state"] != "ok" {
+        bail!(
+            "the feed service: {}",
+            r.body["message"].as_str().unwrap_or("unavailable")
+        );
+    }
     let lines = r.body["feeds"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|f| owner.is_none_or(|o| f["owner"] == o))
         .map(|f| {
-            let last = match f["last"]["state"].as_str() {
-                Some("failed") => {
-                    format!("failed: {}", f["last"]["message"].as_str().unwrap_or("?"))
-                }
-                Some(s) => s.to_string(),
-                None => "?".into(),
+            let last = match f["error"].as_str() {
+                Some(e) => format!("failed: {e}"),
+                None => "ok".into(),
             };
             format!(
-                "{}  {}  {}  added by {}  last fetch {last}",
+                "{}  {}  {}  last update {last}",
                 f["owner"].as_str().unwrap_or("?"),
                 f["name"].as_str().unwrap_or("?"),
                 f["url"].as_str().unwrap_or("?"),
-                f["added_by"].as_str().unwrap_or("?"),
             )
         })
         .collect();
@@ -161,16 +163,27 @@ mod tests {
             assert!(url.ends_with("/admin/feeds"));
             (
                 200,
-                json!({"feeds": [
-                    {"owner": "ana", "name": "garden", "url": "https://example.org/g", "added_by": "operator", "last": {"state": "ok"}},
-                    {"owner": "household", "name": "harbour", "url": "https://example.org/h", "added_by": "house", "last": {"state": "failed", "message": "the feed answered 500"}}
+                json!({"state": "ok", "feeds": [
+                    {"owner": "ana", "name": "garden", "url": "https://example.org/g", "error": null},
+                    {"owner": "household", "name": "harbour", "url": "https://example.org/h", "error": "the feed answered 500"}
                 ]}),
             )
         });
         let all = list(&d, &http, None).unwrap();
         assert_eq!(all.len(), 2);
+        assert!(all[0].ends_with("last update ok"));
+        assert!(all[1].ends_with("last update failed: the feed answered 500"));
+        let down = FakeHttp::new(|_, _, _| {
+            (
+                200,
+                json!({"state": "unavailable", "message": "the feed service is unavailable"}),
+            )
+        });
         assert!(
-            all[1].contains("added by house") && all[1].contains("failed: the feed answered 500")
+            list(&d, &down, None)
+                .unwrap_err()
+                .to_string()
+                .contains("unavailable")
         );
         let ana = list(&d, &http, Some("ana")).unwrap();
         assert_eq!(ana.len(), 1);

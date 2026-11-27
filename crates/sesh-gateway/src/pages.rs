@@ -685,15 +685,8 @@ async fn feeds_add(
         Ok(x) => x,
         Err(why) => return refuse(why).await,
     };
-    let feed = crate::feeds::Feed {
-        owner: owner.into(),
-        name: name.clone(),
-        url: url.to_string(),
-        added_by: "operator".into(),
-        added_at: approvals::now(),
-    };
-    if let Err(e) = gw.feeds.add(&feed, gw.settings.feeds_max_per_owner).await {
-        return refuse(e.to_string()).await;
+    if let Err(e) = crate::connectors::feeds::add(&gw, owner, &url, &name).await {
+        return refuse(e).await;
     }
     audit(
         &gw,
@@ -704,7 +697,13 @@ async fn feeds_add(
         format!("feed.added {owner}/{name}"),
     )
     .await;
-    Json(json!({"owner": owner, "name": name, "url": feed.url})).into_response()
+    Json(json!({"owner": owner, "name": name, "url": url.as_str()})).into_response()
+}
+
+fn owners(gw: &Gateway) -> Vec<String> {
+    let mut o = vec![sesh_core::HOUSEHOLD.to_string()];
+    o.extend(gw.users.all().into_iter().map(|u| u.name));
+    o
 }
 
 async fn feeds_remove(
@@ -717,7 +716,19 @@ async fn feeds_remove(
     }
     let owner = b["owner"].as_str().unwrap_or("");
     let name = b["name"].as_str().unwrap_or("");
-    match gw.feeds.remove(owner, name).await {
+    let found = match crate::connectors::feeds::readable(&gw, &[owner.to_string()]).await {
+        Ok(f) => f.into_iter().find(|f| f.name == name),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let removed = match &found {
+        Some(f) => gw
+            .miniflux
+            .delete(gw.settings.upstreams.miniflux.trim_end_matches('/'), f)
+            .await
+            .map(|_| true),
+        None => Ok(false),
+    };
+    match removed {
         Ok(true) => {
             audit(
                 &gw,
@@ -739,27 +750,22 @@ async fn feeds_remove(
     }
 }
 
-/// Every feed with its last fetch (`sesh feed list`, doctor).
+/// Every owner's feeds, with Miniflux's last update error (`sesh feed
+/// list`, doctor).
 async fn feeds_list(State(gw): State<Arc<Gateway>>, headers: HeaderMap) -> Response {
-    use crate::connectors::feeds::Last;
     if !admin_ok(&gw, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let Ok(all) = gw.feeds.all().await else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
-    let feeds: Vec<Value> = all
-        .iter()
-        .map(|f| {
-            let last = match gw.feed_cache.last(&f.url) {
-                Last::Never => json!({"state": "never"}),
-                Last::Ok(at) => json!({"state": "ok", "at": at}),
-                Last::Failed(at, m) => json!({"state": "failed", "at": at, "message": m}),
-            };
-            json!({"owner": f.owner, "name": f.name, "url": f.url, "added_by": f.added_by, "added_at": f.added_at, "last": last})
-        })
-        .collect();
-    Json(json!({"feeds": feeds, "allow_hosts": gw.settings.feeds_allow_hosts})).into_response()
+    match crate::connectors::feeds::readable(&gw, &owners(&gw)).await {
+        Ok(all) => {
+            let feeds: Vec<Value> = all
+                .iter()
+                .map(|f| json!({"owner": f.owner, "name": f.name, "url": f.url, "error": f.error}))
+                .collect();
+            Json(json!({"state": "ok", "feeds": feeds})).into_response()
+        }
+        Err(m) => Json(json!({"state": "unavailable", "message": m})).into_response(),
+    }
 }
 
 #[cfg(test)]
@@ -1061,14 +1067,9 @@ mod tests {
 
     #[tokio::test]
     async fn the_operator_adds_lists_and_removes_feeds_audited() {
-        let mut gw = gateway(Audit::memory(), GatewaySettings::default());
-        gw.users = crate::Users::fixed(sesh_core::UsersFile {
-            users: vec![sesh_core::User {
-                name: "ana".into(),
-                topic: "ana-topic".into(),
-            }],
-        });
-        let gw = Arc::new(gw);
+        use crate::connectors::feeds::tests::{owners_gateway, seeded};
+        let state = seeded();
+        let gw = Arc::new(owners_gateway(state.clone()).await);
         let url = serve(gw.clone()).await;
         let http = reqwest::Client::new();
         let post = |path: &str, body: Value, token: Option<&str>| {
@@ -1106,9 +1107,9 @@ mod tests {
                 "only http and https",
             ),
             (
-                json!({"owner": "ana", "url": "http://192.168.1.10/rss"}),
+                json!({"owner": "ana", "url": "https://u:p@example.org/rss"}),
                 422,
-                "isn't on the public internet",
+                "user name or password",
             ),
             (
                 json!({"owner": "ana", "url": "http://93.184.216.34/other", "name": "news"}),
@@ -1137,9 +1138,33 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert_eq!(list["feeds"].as_array().unwrap().len(), 1);
-        assert_eq!(list["feeds"][0]["added_by"], "operator");
-        assert_eq!(list["feeds"][0]["last"]["state"], "never");
+        let got: Vec<String> = list["feeds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                format!(
+                    "{}/{}",
+                    f["owner"].as_str().unwrap(),
+                    f["name"].as_str().unwrap()
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec!["household/harbour", "ana/garden", "ana/news", "ben/cycling"],
+            "only sesh owners' own feeds, never another account's"
+        );
+        assert_eq!(list["feeds"][0]["error"], "the feed answered 500");
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .feeds
+                .iter()
+                .any(|f| f["title"] == "news" && f["user_id"] == 101),
+            "in ana's own account"
+        );
         let r = post(
             "/admin/feeds/remove",
             json!({"owner": "ana", "name": "news"}),
@@ -1165,7 +1190,7 @@ mod tests {
         for want in [
             "feed.added ana/news",
             "feed.removed ana/news",
-            "feed.add refused: that address isn't on the public internet",
+            "feed.add refused: a feed address can't carry a user name or password",
         ] {
             assert!(e.iter().any(|r| r == want), "{want}: {e:?}");
         }

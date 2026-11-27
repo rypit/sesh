@@ -8,6 +8,8 @@ SELECT 'CREATE DATABASE gateway' WHERE NOT EXISTS (SELECT FROM pg_database WHERE
 SELECT 'CREATE DATABASE infisical' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'infisical') \gexec
 -- Paperless-ngx's own database (specs/005 research.md R6).
 SELECT 'CREATE DATABASE paperless' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'paperless') \gexec
+-- Miniflux's own database (specs/006 research.md R1).
+SELECT 'CREATE DATABASE miniflux' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'miniflux') \gexec
 
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sesh_gateway') THEN
@@ -21,6 +23,7 @@ REVOKE CONNECT ON DATABASE openwebui FROM PUBLIC;
 REVOKE CONNECT ON DATABASE litellm FROM PUBLIC;
 REVOKE CONNECT ON DATABASE infisical FROM PUBLIC;
 REVOKE CONNECT ON DATABASE paperless FROM PUBLIC;
+REVOKE CONNECT ON DATABASE miniflux FROM PUBLIC;
 GRANT CONNECT ON DATABASE gateway TO sesh_gateway;
 
 \c gateway
@@ -78,18 +81,3 @@ REVOKE ALL ON approvals, credential_forms FROM PUBLIC;
 REVOKE ALL ON approvals, credential_forms FROM sesh_gateway;
 GRANT INSERT, SELECT, UPDATE ON approvals, credential_forms TO sesh_gateway;
 
--- Feeds (specs/006 data-model.md, ADR 0009): written only by the gateway,
--- for the operator's `sesh feed` commands and approved agent requests.
--- No UPDATE: a feed is replaced by removing and adding it.
-CREATE TABLE IF NOT EXISTS feeds (
-  owner    text NOT NULL,
-  name     text NOT NULL,
-  url      text NOT NULL,
-  added_by text NOT NULL,
-  added_at bigint NOT NULL,
-  PRIMARY KEY (owner, name)
-);
-
-REVOKE ALL ON feeds FROM PUBLIC;
-REVOKE ALL ON feeds FROM sesh_gateway;
-GRANT SELECT, INSERT, DELETE ON feeds TO sesh_gateway;

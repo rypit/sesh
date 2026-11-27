@@ -19,6 +19,8 @@
 //! - `SESH_INFISICAL_URL`, `SESH_INFISICAL_CLIENT_ID`,
 //!   `SESH_INFISICAL_CLIENT_SECRET`, `SESH_INFISICAL_PROJECT_ID`: the secret store
 //! - `SESH_GATEWAY_ADMIN_TOKEN`: the operator's token for `/admin/*`
+//! - `SESH_MINIFLUX_USER`, `SESH_MINIFLUX_PASSWORD`: the feed service's
+//!   admin (specs/006)
 //! - `SESH_SECRET_STORE=memory`: an in-process secret store (the eval
 //!   project only; never the household stack)
 
@@ -114,23 +116,7 @@ async fn main() -> anyhow::Result<()> {
         Some(url) if url.starts_with("file:") => Audit::file(&url["file:".len()..])?,
         Some(url) => Audit::postgres(url.to_string()),
     };
-    // The feed address filter's test allowance (ADR 0009): honoured only
-    // with test connectors, which only stub and eval set-ups turn on.
     let test_connectors = env("SESH_GATEWAY_TEST_CONNECTORS").as_deref() == Some("1");
-    let mut settings = settings;
-    if !settings.feeds_allow_hosts.is_empty() && !test_connectors {
-        tracing::warn!(
-            "feeds_allow_hosts is ignored: it is honoured only in stub and eval set-ups"
-        );
-    }
-    settings.feeds_allow_hosts =
-        connectors::feeds::honoured_allow_hosts(&settings.feeds_allow_hosts, test_connectors);
-    let feeds = match audit_url.as_deref() {
-        Some(url) if url.starts_with("postgres") => {
-            sesh_gateway::feeds::Store::postgres(url.to_string())
-        }
-        _ => sesh_gateway::feeds::Store::memory(),
-    };
     let users = sesh_gateway::Users::from_file(
         env("SESH_USERS_FILE")
             .unwrap_or_else(|| "/etc/sesh/users.toml".into())
@@ -149,8 +135,10 @@ async fn main() -> anyhow::Result<()> {
         pending: Default::default(),
         google: Default::default(),
         refs: Default::default(),
-        feeds,
-        feed_cache: Default::default(),
+        miniflux: connectors::feeds::Miniflux::new(
+            &env("SESH_MINIFLUX_USER").unwrap_or_default(),
+            &env("SESH_MINIFLUX_PASSWORD").unwrap_or_default(),
+        ),
         paperless: sesh_gateway::connectors::docs::Paperless::new(
             &env("SESH_PAPERLESS_USER").unwrap_or_default(),
             &env("SESH_PAPERLESS_PASSWORD").unwrap_or_default(),

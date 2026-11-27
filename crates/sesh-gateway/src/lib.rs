@@ -12,7 +12,6 @@ pub mod calls;
 pub mod capability;
 pub mod connectors;
 pub mod executor;
-pub mod feeds;
 pub mod google;
 pub mod listen;
 pub mod mcp;
@@ -142,9 +141,8 @@ pub struct Gateway {
     pub google: google::Google,
     pub refs: refs::Refs,
     pub paperless: connectors::docs::Paperless,
-    /// Feeds per owner, and the gateway's copies of them (specs/006).
-    pub feeds: feeds::Store,
-    pub feed_cache: connectors::feeds::Cache,
+    /// The feed service (specs/006): one Miniflux user per owner.
+    pub miniflux: connectors::feeds::Miniflux,
     /// Approvals a running execution is waiting for, by execution id.
     pub pending: Mutex<std::collections::HashMap<String, Vec<approvals::Request>>>,
 }

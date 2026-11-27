@@ -11,7 +11,8 @@
 //!   `/content/...`) and Open-Meteo (`/v1/forecast`). Each result says
 //!   "fake" and echoes the query, so tests can see what was asked.
 //!
-//! - Fake feeds (specs/006): `/fake/feeds/<name>.xml` (see `fake_feeds`).
+//! - Fake feeds (specs/006): the publisher, `/fake/feeds/<name>.xml`
+//!   (`fake_feeds`), and, for the eval, Miniflux's API (`fake_miniflux`).
 //!
 //! - `STUB_SCRIPT=pass|fail` (specs/003-model-evals/contracts/stub-script.md):
 //!   for requests whose first user message carries a `[task:<id>]` tag,
@@ -344,6 +345,7 @@ fn header(name: &str, value: &str) -> tiny_http::Header {
 
 mod fake_feeds;
 mod fake_google;
+mod fake_miniflux;
 mod fake_paperless;
 
 fn main() {
@@ -359,7 +361,8 @@ fn main() {
     eprintln!("sesh-stub-llm listening on {port} (tools {tools_enabled}, script {script:?})");
     let mut google = fake_google::Fake::default();
     let mut paperless = fake_paperless::Fake::default();
-    let mut feeds = fake_feeds::Fake::default();
+    let mut feeds = fake_feeds::Fake;
+    let mut miniflux = fake_miniflux::Fake::default();
     for mut request in server.incoming_requests() {
         let path = request.url().split('?').next().unwrap_or("").to_string();
         let method = request.method().as_str().to_string();
@@ -395,6 +398,24 @@ fn main() {
                 resp = resp.with_header(header("Location", &loc));
             }
             let _ = request.respond(resp);
+            continue;
+        }
+        if fake_miniflux::is_route(&path) {
+            let auth = request
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv("Authorization"))
+                .map(|h| h.value.as_str().to_string())
+                .unwrap_or_default();
+            let mut body = String::new();
+            let _ = request.as_reader().read_to_string(&mut body);
+            let url = request.url().to_string();
+            let (status, v) = miniflux.handle(&method, &url, &auth, &body);
+            let _ = request.respond(
+                tiny_http::Response::from_string(v.to_string())
+                    .with_status_code(status)
+                    .with_header(json_ct),
+            );
             continue;
         }
         if path.starts_with("/api/") {

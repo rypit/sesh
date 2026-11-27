@@ -105,8 +105,6 @@ pub fn effective_gateway(config: &Config) -> GatewaySettings {
             latitude: 59.91,
             longitude: 10.75,
         });
-        // The stub serves fake feeds on a private address (ADR 0009).
-        g.feeds_allow_hosts = vec!["stub-llm".into()];
     }
     g
 }
@@ -235,6 +233,7 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
         "infisical",
         "ntfy",
         "paperless",
+        "miniflux",
         "gateway",
     ];
     base.extend(executors.iter().map(String::as_str));
@@ -385,14 +384,6 @@ mod tests {
     }
 
     #[test]
-    fn only_stub_mode_allows_the_fake_feed_host() {
-        let stub = Config::new(crate::init::STUB_URL, "stub-model");
-        assert_eq!(effective_gateway(&stub).feeds_allow_hosts, vec!["stub-llm"]);
-        let real = Config::new("http://srv/v1", "m");
-        assert!(effective_gateway(&real).feeds_allow_hosts.is_empty());
-    }
-
-    #[test]
     fn first_up_migrates_then_starts_services_and_webui_last() {
         let dir = ready("first");
         crate::agent::add(&dir, "alice", &["search".into()], "household").unwrap();
@@ -403,7 +394,7 @@ mod tests {
             vec![
                 "up postgres",
                 "sql sesh",
-                "up redis litellm searxng infisical ntfy paperless gateway executor-alice stub-llm",
+                "up redis litellm searxng infisical ntfy paperless miniflux gateway executor-alice stub-llm",
                 "restart gateway",
                 "up open-webui"
             ]

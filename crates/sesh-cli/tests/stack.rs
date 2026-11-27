@@ -1941,40 +1941,42 @@ fn google_docs_stack() {
 
 // ---- Feature 006: RSS feeds ----
 
+/// The stub's fake publisher, as Miniflux reaches it on `feeds-egress`.
 const FAKE_FEEDS: &str = "http://stub-llm:8000/fake/feeds";
 
 impl Stack {
-    /// How often the stub served each fake feed, read from inside the
-    /// gateway's container (the stub has no host port).
-    fn feed_hits(&self) -> Value {
-        let (ok, out) = self.bash_in(
-            "gateway",
-            "exec 3<>/dev/tcp/stub-llm/8000 && printf 'GET /fake/feeds/hits HTTP/1.1\\r\\nHost: stub\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3",
-        );
-        assert!(ok, "{out}");
-        let body = out.split("\r\n\r\n").nth(1).unwrap_or("");
-        serde_json::from_str(body).unwrap_or_else(|_| panic!("feed hits: {out}"))
+    /// A service's container id.
+    fn container(&self, service: &str) -> String {
+        let out = self.compose(&[], &[], &["ps", "-q", service]);
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
-}
 
-/// Dotted IPv4 addresses in the private ranges Compose networks use.
-fn private_v4_in(text: &str) -> Vec<String> {
-    text.split(|c: char| !(c.is_ascii_digit() || c == '.'))
-        .filter_map(|w| {
-            let o: Vec<u8> = w.split('.').filter_map(|p| p.parse().ok()).collect();
-            (o.len() == 4 && w.split('.').count() == 4).then_some((w, o))
-        })
-        .filter(|(_, o)| {
-            o[0] == 10 || (o[0] == 172 && (16..32).contains(&o[1])) || (o[0] == 192 && o[1] == 168)
-        })
-        .map(|(w, _)| w.to_string())
-        .collect()
-}
+    /// A container's networks, by name, with its address on each.
+    fn networks_of(&self, service: &str) -> Value {
+        let out = Command::new("docker")
+            .args([
+                "inspect",
+                "-f",
+                "{{json .NetworkSettings.Networks}}",
+                &self.container(service),
+            ])
+            .output()
+            .expect("docker inspect");
+        serde_json::from_slice(&out.stdout).expect("networks json")
+    }
 
-#[test]
-fn private_addresses_are_found() {
-    assert_eq!(private_v4_in("x 172.18.0.5:80 y"), vec!["172.18.0.5"]);
-    assert!(private_v4_in("8.8.8.8 and 2026.11.27 and 172.32.0.1").is_empty());
+    /// Runs `sh -c` in a service container (Miniflux's image has no bash).
+    fn sh_in(&self, service: &str, script: &str) -> (bool, String) {
+        let out = self.compose(&[], &[], &["exec", "-T", service, "sh", "-c", script]);
+        (
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    }
 }
 
 #[test]
@@ -1998,7 +2000,7 @@ fn feeds_stack() {
     }
     stack.sesh_ok(&["up"]);
 
-    // US1 (FR-001, FR-003, FR-004): people choose the feeds.
+    // US1 (FR-001, FR-003): people choose the feeds; Miniflux fetches them.
     for (owner, name) in [
         ("household", "harbour"),
         ("ana", "garden"),
@@ -2019,15 +2021,14 @@ fn feeds_stack() {
     }
     for (url, why) in [
         ("ftp://example.org/feed", "only http and https"),
+        ("https://u:p@example.org/feed", "user name or password"),
         (
-            "http://127.0.0.1:8000/fake/feeds/harbour.xml",
-            "public internet",
+            &format!("{FAKE_FEEDS}/notafeed.xml") as &str,
+            "couldn't add that feed",
         ),
-        ("http://postgres:5432/", "public internet"),
-        ("http://169.254.169.254/latest/meta-data", "public internet"),
     ] {
         let out = stack.sesh(&["feed", "add", "ana", url, "--name", "bad"]);
-        assert!(!out.status.success(), "FR-004: {url} was added");
+        assert!(!out.status.success(), "{url} was added");
         assert!(
             String::from_utf8_lossy(&out.stderr).contains(why),
             "{url}: {}",
@@ -2060,8 +2061,14 @@ fn feeds_stack() {
         out.contains("harbour") && !out.contains("garden") && !out.contains("cycling"),
         "{out}"
     );
-    let out = anabot.execute("async () => await feeds.latest({ feed: \"garden\" })");
-    assert!(out.contains("Seed swap on Saturday"), "{out}");
+    let mut last = String::new();
+    assert!(
+        retry(|| {
+            last = anabot.execute("async () => await feeds.latest({ feed: \"garden\" })");
+            last.contains("Seed swap on Saturday")
+        }),
+        "SC-005: ana reads her feed: {last}"
+    );
     let out = benbot.execute("async () => await feeds.latest({ feed: \"garden\" })");
     assert!(
         out.contains("no feed named garden") && !out.contains("Seed swap"),
@@ -2076,19 +2083,18 @@ fn feeds_stack() {
         "FR-002: {out}"
     );
     // FR-008: the injected item arrives as data, and nothing is added.
-    let out = anabot.execute("async () => await feeds.latest({ feed: \"harbour\" })");
-    assert!(
-        out.contains("Marrow Quay") && out.contains("Ignore previous instructions"),
-        "{out}"
-    );
-    assert!(
-        !out.contains("<p>") && !out.contains("&lt;"),
-        "markup stripped: {out}"
-    );
-    // SC-005: two readers of one feed, one fetch.
-    benbot.execute("async () => await feeds.latest({ feed: \"harbour\" })");
-    house.execute("async () => await feeds.latest({ feed: \"harbour\" })");
-    assert_eq!(stack.feed_hits()["harbour"], 1, "SC-005: the cache");
+    for bot in [&mut anabot, &mut benbot] {
+        let out = bot.execute("async () => await feeds.latest({ feed: \"harbour\" })");
+        assert!(
+            out.contains("Marrow Quay") && out.contains("Ignore previous instructions"),
+            "the Household's feed, for both users: {out}"
+        );
+        assert!(
+            !out.contains("<p>") && !out.contains("<b>"),
+            "markup stripped: {out}"
+        );
+    }
+    assert!(!stack.sesh_ok(&["feed", "list"]).contains("evil"), "FR-008");
 
     // US3 (FR-009, SC-003): an agent's add waits for the owner.
     let ana_topic = stack.user_topic("ana");
@@ -2110,78 +2116,81 @@ fn feeds_stack() {
     assert_eq!(decide(page, secret, "approve"), 200);
     let out = anabot.execute(&add);
     assert!(out.contains("\"added\":\"ferry\""), "{out}");
-    assert!(
-        stack
-            .sesh_ok(&["feed", "list", "ana"])
-            .contains("added by anabot")
-    );
+    assert!(stack.sesh_ok(&["feed", "list", "ana"]).contains("ferry"));
     let out = benbot.execute("async () => await feeds.list({})");
     assert!(
         !out.contains("ferry"),
         "SC-001: ben sees ana's new feed: {out}"
     );
-    for url in [
-        "http://169.254.169.254/latest/meta-data",
-        "http://postgres:5432/",
-        "http://127.0.0.1:7002/admin/feeds",
-        "http://[::1]/",
-        "file:///etc/passwd",
-    ] {
-        let out = anabot.execute(&format!(
-            "async () => await feeds.add({{ url: \"{url}\", name: \"x\" }})"
-        ));
-        assert!(
-            !out.contains("approval_pending") && !out.contains("\"added\""),
-            "FR-009: {url}: {out}"
-        );
-    }
+    let out =
+        anabot.execute("async () => await feeds.add({ url: \"file:///etc/passwd\", name: \"x\" })");
+    assert!(out.contains("only http and https"), "FR-009: {out}");
     assert_eq!(
         stack
             .notifications_as("u-ana", "NTFY_PASSWORD_ANA", &ana_topic)
             .len(),
         1,
-        "FR-009: no one was asked about an internal address"
+        "FR-009: no one was asked about a bad address"
     );
 
-    // US4 (FR-004, FR-005, FR-010): misbehaving feeds can't reach inside.
-    for name in ["redirect", "big", "notafeed"] {
-        stack.sesh_ok(&[
-            "feed",
-            "add",
-            "household",
-            &format!("{FAKE_FEEDS}/{name}.xml"),
-            "--name",
-            name,
-        ]);
-    }
-    for (name, why) in [
-        ("redirect", "redirected to an address that isn't public"),
-        ("big", "the feed is too large"),
-        ("notafeed", "isn't an RSS or Atom feed"),
-    ] {
-        let out = house.execute(&format!(
-            "async () => await feeds.latest({{ feed: \"{name}\" }})"
-        ));
-        assert!(out.contains(why), "{name}: {out}");
-    }
+    // US4 (FR-005, SC-002): Miniflux reaches only the internet and its
+    // database; only the gateway reaches Miniflux.
+    let nets = stack.networks_of("miniflux");
+    let mut names: Vec<&str> = nets
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    names.sort();
     assert_eq!(
-        stack.feed_hits()["harbour"],
-        1,
-        "SC-002: the redirect to loopback was never followed"
+        names,
+        vec!["sesh_feeds", "sesh_feeds-db", "sesh_feeds-egress"],
+        "FR-005: Miniflux's networks"
+    );
+    let default_ip = |service: &str| {
+        stack.networks_of(service)["sesh_default"]["IPAddress"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{service} has no address on default"))
+            .to_string()
+    };
+    let (gw_ip, pg_ip) = (default_ip("gateway"), default_ip("postgres"));
+    let (_, out) = stack.sh_in(
+        "miniflux",
+        &format!("wget -q -T 3 -O - http://{gw_ip}:7001/health && echo REACHED"),
+    );
+    assert!(
+        !out.contains("REACHED"),
+        "SC-002: Miniflux reached the gateway on default: {out}"
+    );
+    let (_, out) = stack.sh_in(
+        "miniflux",
+        &format!("nc -w 3 {pg_ip} 5432 </dev/null && echo REACHED"),
+    );
+    assert!(
+        !out.contains("REACHED"),
+        "SC-002: Miniflux reached Postgres on default: {out}"
+    );
+    let (ok, out) = stack.bash_in("executor-anabot", "exec 3<>/dev/tcp/miniflux/8080");
+    assert!(!ok, "SC-002: an executor reached Miniflux: {out}");
+    let published = stack.compose(&[], &[], &["port", "miniflux", "8080"]);
+    assert!(
+        String::from_utf8_lossy(&published.stdout).trim().is_empty(),
+        "FR-005: Miniflux publishes a port"
     );
     let (_, checks) = stack.doctor();
-    assert_eq!(status_of(&checks, "feeds"), "warn", "FR-012: {checks}");
-    for name in ["redirect", "big", "notafeed"] {
-        stack.sesh_ok(&["feed", "remove", "household", name]);
-    }
-    let (_, checks) = stack.doctor();
-    assert_eq!(status_of(&checks, "feeds"), "pass", "{checks}");
+    assert_eq!(status_of(&checks, "feeds"), "pass", "FR-012: {checks}");
+
+    // Removal stops reads.
+    stack.sesh_ok(&["feed", "remove", "ana", "ferry"]);
+    let out = anabot.execute("async () => await feeds.latest({ feed: \"ferry\" })");
+    assert!(out.contains("no feed named ferry"), "{out}");
 
     // FR-011: changes and calls are audited, with the owner.
     for reason in [
         "feed.added household/harbour",
         "feed.added ana/garden",
-        "feed.removed household/big",
+        "feed.removed ana/ferry",
     ] {
         assert_ne!(
             stack.audit_count(&format!("reason = '{reason}'")),
@@ -2202,22 +2211,54 @@ fn feeds_stack() {
         0
     );
 
-    // SC-004: no internal address of the stack in any result or audit row.
+    // SC-004, FR-010: the Miniflux admin password is nowhere but secrets.env.
+    let pw = stack.secret("MINIFLUX_ADMIN_PASSWORD");
     let audit = stack.sql(
         "SELECT string_agg(coalesce(reason, '') || ' ' || args_summary::text, ' ') FROM audit",
     );
-    for (what, text) in std::iter::once(("the audit log", &audit)).chain(
-        anabot
-            .seen
-            .iter()
-            .chain(&benbot.seen)
-            .chain(&house.seen)
-            .map(|t| ("a result", t)),
-    ) {
+    let logs = String::from_utf8_lossy(
+        &stack
+            .compose(
+                &[],
+                &[],
+                &[
+                    "logs",
+                    "--no-color",
+                    "gateway",
+                    "executor-anabot",
+                    "executor-benbot",
+                    "executor-house",
+                ],
+            )
+            .stdout,
+    )
+    .into_owned();
+    let seen: Vec<&String> = anabot
+        .seen
+        .iter()
+        .chain(&benbot.seen)
+        .chain(&house.seen)
+        .collect();
+    for (what, text) in [("the audit log", &audit), ("logs", &logs)]
+        .into_iter()
+        .chain(seen.into_iter().map(|t| ("a result", t)))
+    {
         assert!(
-            private_v4_in(text).is_empty(),
-            "SC-004: an internal address reached {what}: {text}"
+            !text.contains(&pw),
+            "SC-004: the Miniflux password reached {what}"
         );
+    }
+    for entry in walk(&stack.dir) {
+        if entry.file_name().is_some_and(|n| n == "secrets.env") {
+            continue;
+        }
+        if let Ok(text) = std::fs::read_to_string(&entry) {
+            assert!(
+                !text.contains(&pw),
+                "SC-004: the Miniflux password is in {}",
+                entry.display()
+            );
+        }
     }
 }
 

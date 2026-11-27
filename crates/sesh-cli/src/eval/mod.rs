@@ -103,6 +103,7 @@ pub fn eval_gateway(config: &Config) -> GatewaySettings {
         &mut g.upstreams.nominatim,
         &mut g.upstreams.test,
         &mut g.upstreams.paperless,
+        &mut g.upstreams.miniflux,
     ] {
         *u = FAKES.into();
     }
@@ -116,8 +117,6 @@ pub fn eval_gateway(config: &Config) -> GatewaySettings {
     ] {
         *u = format!("{FAKES}/fake/google");
     }
-    // The fakes serve the eval's feeds on a private address (ADR 0009).
-    g.feeds_allow_hosts = vec!["fakes".into()];
     g.ntfy_topic = EVAL_TOPIC.into();
     g.approvals_base_url = format!("http://127.0.0.1:{EVAL_APPROVALS_PORT}");
     g.home = Some(config.gateway.home.clone().unwrap_or(Home {
@@ -325,8 +324,8 @@ pub fn connect_fake_google(http: &dyn Http, admin_token: &str) -> Result<()> {
     Ok(())
 }
 
-/// The Household's `harbour` feed on the fakes, added through the same
-/// admin endpoint as `sesh feed add` (specs/006 research.md R11).
+/// The Household's `harbour` feed in fake Miniflux, added through the
+/// same admin endpoint as `sesh feed add` (specs/006 research.md R9).
 pub fn add_fake_feed(http: &dyn Http, admin_token: &str) -> Result<()> {
     let r = http.post(
         &format!("http://127.0.0.1:{EVAL_APPROVALS_PORT}/admin/feeds/add"),
@@ -663,7 +662,7 @@ mod tests {
         assert_eq!(g.upstreams.open_meteo, FAKES);
         // specs/005: Google and Paperless are the fakes too; nothing real.
         assert_eq!(g.upstreams.paperless, FAKES);
-        assert_eq!(g.feeds_allow_hosts, vec!["fakes"], "only the fakes");
+        assert_eq!(g.upstreams.miniflux, FAKES, "fake Miniflux");
         for u in [
             &g.upstreams.google_token,
             &g.upstreams.gmail,

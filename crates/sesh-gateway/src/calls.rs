@@ -248,8 +248,7 @@ pub mod tests {
             google: Default::default(),
             refs: Default::default(),
             paperless: crate::connectors::docs::Paperless::new("", ""),
-            feeds: crate::feeds::Store::memory(),
-            feed_cache: Default::default(),
+            miniflux: crate::connectors::feeds::Miniflux::new("", ""),
             pending: Default::default(),
         }
     }
