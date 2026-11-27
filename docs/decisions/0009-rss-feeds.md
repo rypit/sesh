@@ -1,6 +1,6 @@
 # 0009. Feeds through Miniflux, an adopted feed service behind the gateway
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-27
 - Feature: specs/006-rss-feeds
 
@@ -66,6 +66,12 @@ resources.
   doesn't come from the calling agent's executor (decision 5). A feed
   address can make Miniflux send a GET with no credentials, nothing
   more. SearXNG has the same shape on `search`.
+- **The home network:** `feeds-egress` can route to the household's LAN
+  (a router's admin page, a NAS). Miniflux refuses private, loopback and
+  link-local addresses by default (`FETCHER_ALLOW_PRIVATE_NETWORKS`,
+  off); only the stub overlay (`compose.stub.yaml`, development and CI)
+  turns it on, for the fake publisher. With an agent's adds needing
+  approval, a feed address can't be used to probe the LAN.
 - Miniflux polls feeds on its own (hourly by default), so items are as
   fresh as its last poll; publishers see the server's address, as with
   any reader.

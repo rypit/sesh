@@ -1,6 +1,6 @@
 # 0010. A database login and a cache per adopted service
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-27
 - Feature: specs/007-service-isolation
 
