@@ -24,8 +24,9 @@ to:
   project, `sesh-eval`, removed when the run ends:
   - `gateway-eval`, with upstreams pointed at fakes, the test-only
     approval connector, and one agent with search, geo and testgate;
-  - `executor-eval`;
-  - `fakes`.
+  - `executor-eval`, on its own internal network with only the gateway
+    (ADR 0004);
+  - `fakes`, on another internal network with only the gateway.
 - **The audit sink:** the gateway gains a file audit sink, accepted only
   under `/var/log/sesh-eval/` and set only by the eval project. The CLI
   reads it to score which connector methods ran.

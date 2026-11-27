@@ -81,8 +81,8 @@ scores or does.
    by its fixed rules and never acts on text from the model or the
    results.
 4. **Given** the eval agent's grants, **When** the model asks for a
-   connector it wasn't granted, **Then** the call is refused by the
-   gateway and the task records the refusal.
+   connector it wasn't granted, **Then** the gateway reports that no such
+   connector is available and the task records it.
 
 ---
 
@@ -177,8 +177,8 @@ broken scoring rule makes the job fail.
   turn or time limit.
 - The model never stops calling tools: the task ends at its turn limit
   and fails with that reason.
-- The model's answer is very long: only the first part is scored and
-  stored, with a note that it was truncated.
+- The model's answer is very long: the whole answer is scored, and only
+  the first part is stored, with a note that it was truncated.
 - The eval is run while no stack is up: it stops at once and says to run
   `sesh up`.
 - Two evals are started at once: the second refuses to start.
@@ -279,7 +279,8 @@ broken scoring rule makes the job fail.
   it.
 - The eval's own gateway is a second instance of the same gateway,
   started for the run with fake upstreams and the test-only approval
-  connector, and an in-memory audit log; it is removed afterwards. Its
+  connector, and an audit log the eval reads to score which calls ran;
+  it is removed afterwards. Its
   agent and token exist only for the run.
 - Fake upstream content is the stub server's fake routes, extended so
   each task has facts that appear nowhere else (so a model can't pass

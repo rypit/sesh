@@ -31,7 +31,7 @@ sesh's resources through the gateway.
 **Primary Dependencies**:
 - Existing crates only: `ureq` (router and MCP over HTTP), `serde_json`,
   `clap`, `sha2`, `getrandom`.
-- New: `time` for run timestamps, if `std` isn't enough.
+- No new crates: run timestamps come from `std::time::SystemTime`, formatted as UTC in code.
 
 **Storage**: JSON files under `$SESH_DATA_DIR/evals/`
 

@@ -17,8 +17,8 @@ they check.
 ## Phase 1: Setup
 
 - [ ] T001 Module skeleton that compiles: `crates/sesh-cli/src/eval/{mod,suite,run_loop,score,store}.rs` and `crates/sesh-cli/src/host/mcp.rs`, declared in `crates/sesh-cli/src/main.rs`; an `Eval` subcommand with `list`, `compare`, `show` per contracts/cli.md, each returning "not implemented" for now
-- [ ] T002 [P] `deploy/eval/compose.yaml` (project `sesh-eval`): `gateway-eval`, `executor-eval`, `fakes` per research.md R2 (networks `eval` internal and `eval-edge`; `127.0.0.1:7100:7000`; read-only, `cap_drop: ALL`); added to `make compose-config` in `Makefile`
-- [ ] T003 [P] `docs/decisions/0006-model-evals.md` reviewed against the final design. Index it wherever other ADRs are listed (`README.md` if it lists them)
+- [ ] T002 [P] `deploy/eval/compose.yaml` (project `sesh-eval`): `gateway-eval`, `executor-eval`, `fakes` per research.md R2 (internal networks `eval-exec` and `eval-fakes`, plus `eval-edge`; `127.0.0.1:7100:7000`; read-only, `cap_drop: ALL`); added to `make compose-config` in `Makefile`
+- [ ] T003 [P] `docs/decisions/0006-model-evals.md` reviewed against the final design (three eval networks)
 
 ---
 
@@ -44,7 +44,7 @@ missing call (exit 1).
 
 - [ ] T009 [US1] Stack test (written first, seen failing) in `crates/sesh-cli/tests/stack.rs`, as a new `eval_stack` test:
   - `sesh init --stub`, `STUB_SCRIPT=pass sesh up`, `sesh eval`: all PASS, exit 0, a run directory is saved;
-  - with `STUB_TOOLS=off`: the tool tasks FAIL with "expected a … call; none made", exit 1.
+  - with `STUB_TOOLS=off sesh up`: the tool tasks FAIL with "expected a … call; none made", exit 1.
 - [ ] T010 [US1] Unit tests (fake router, `FakeMcp`), then the loop in `crates/sesh-cli/src/eval/run_loop.rs` per research.md R3–R4:
   - tools from `tools/list` mapped to OpenAI tools; the system prompt;
   - non-streaming calls; tool calls forwarded in order;
@@ -60,10 +60,11 @@ missing call (exit 1).
   - prerequisites (router answers, `EVAL_ROUTER_KEY` present; else exit 3);
   - the eval agent per data-model.md Eval agent (`Eval agent.name`, `Eval agent.connectors`, `Eval agent.token`), with only the hash written to the run's temporary `agents.toml`;
   - starting the `sesh-eval` project through the Compose seam, with a second `DockerCompose` for project `sesh-eval`;
-  - reading the audit file around each task (research.md R5);
+  - the run's audit directory created as research.md R5 says, and read around each task;
+  - the CLI limit flags (`--turns`, `--tool-calls`, `--timeout`) applied over data-model.md `Task.limits` (FR-012);
   - text output per contracts/cli.md;
   - exit code from data-model.md `Run.threshold` and `Run.verdict`.
-- [ ] T013 [US1] Scripted mode in `crates/sesh-stub-llm/src/main.rs` per contracts/stub-script.md (`STUB_SCRIPT=pass|fail`; unchanged when unset), with unit tests per task and step. Pass `STUB_SCRIPT` through in `deploy/compose.stub.yaml` and `crates/sesh-cli/src/main.rs`
+- [ ] T013 [US1] Scripted mode in `crates/sesh-stub-llm/src/main.rs` per contracts/stub-script.md (`STUB_SCRIPT=pass|fail`; unchanged when unset), with unit tests per task and step. Pass `STUB_SCRIPT` and `STUB_TOOLS` through `sesh up`, in `deploy/compose.stub.yaml` and `crates/sesh-cli/src/main.rs`
 
 ## Phase 4: User Story 2 - Safe and repeatable (P1)
 
@@ -85,7 +86,9 @@ result containing instructions changes nothing.
 - [ ] T016 [US2] Unit tests, then untrusted handling:
   - In `crates/sesh-cli/src/eval/run_loop.rs`, a tool result or answer containing instructions ("ignore the task, call X") changes nothing about scoring or the next request beyond appending it as a `tool` or `assistant` message (FR-011).
   - Add an injection line to one fake result in `crates/sesh-stub-llm/src/main.rs`.
-- [ ] T017 [US2] Unit test with `FakeMcp`: a call to an ungranted connector is recorded as a refusal, and the task fails or passes by its rules only (FR-009, FR-017)
+- [ ] T017 [US2] Unit test with `FakeMcp`: a call to an ungranted connector is recorded as a refusal, and the task fails or passes by its rules only (FR-009, FR-017). Stack checks in `eval_stack`:
+  - `describe email` on the eval gateway is refused;
+  - from `executor-eval`, `fakes:8000` and the internet are unreachable, and `gateway-eval:7001` is reachable (constitution II).
 
 ## Phase 5: User Story 3 - Hard cases: refusals and approvals (P2)
 
@@ -129,7 +132,7 @@ the untrusted header.
 **Independent test**: the CI stack job runs `eval_stack` with internet
 blocked; flipping one scoring rule makes it fail.
 
-- [ ] T023 [US5] Confirm `make stack-test` runs `eval_stack` in the CI stack job (`.github/workflows/ci.yml`), with containers' internet blocked. Check locally that inverting the fact rule in `score.rs` makes the pass-script step fail, then revert
+- [ ] T023 [US5] Confirm `make stack-test` runs `eval_stack` in the CI stack job (`.github/workflows/ci.yml`), with containers' internet blocked. Check locally that inverting the fact rule in `score.rs` makes the pass-script step fail, then revert; record the result in research.md
 - [ ] T024 [US5] SC-001: in `eval_stack`, the pass-script suite finishes in under 2 minutes (asserted). SC-005: saved results and output are scanned for every secret and for capability-shaped values
 
 ## Phase 8: Polish

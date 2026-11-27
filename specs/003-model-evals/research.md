@@ -31,8 +31,11 @@
   - `gateway-eval`: the same gateway image;
   - `executor-eval`: the same executor image;
   - `fakes`: the stub image, serving only its fake upstream routes.
-- **Networks:**
-  - `eval`: internal, holding the executor, the fakes and the gateway.
+- **Networks**, all three joined by the gateway:
+  - `eval-exec`: internal, holding only the gateway and the executor. As
+    in ADR 0004, the executor's one route is the gateway; it can't reach
+    the fakes.
+  - `eval-fakes`: internal, holding only the gateway and the fakes.
   - `eval-edge`: holds only the gateway, so its agent port can be
     published on `127.0.0.1:7100`.
 - **Gateway settings:**
@@ -93,6 +96,9 @@
 - **Decision:** a third audit sink in the gateway, `file:<path>`, which
   appends one JSON object per entry. It's used only by the eval gateway,
   on a bind mount the CLI reads (`$SESH_DATA_DIR/evals/.run/audit.jsonl`).
+  The CLI creates `.run/` for each run with mode 0777, so the gateway's
+  uid can write to it. It sits inside the data directory, which is 0700,
+  so no other host user can reach it, and it is removed after the run.
   Tasks run one at a time; the harness notes the file length before a
   task and reads the entries appended during it.
 - **Why the audit, not the transcript:** connector calls happen inside
