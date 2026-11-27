@@ -372,6 +372,8 @@ struct Mcp {
     token: String,
     session: Option<String>,
     next_id: u64,
+    /// Every tool result this agent received, scanned for secrets (SC-006).
+    seen: Vec<String>,
 }
 
 impl Mcp {
@@ -410,6 +412,7 @@ impl Mcp {
 
     fn connect(token: &str) -> Result<Mcp, u16> {
         let mut m = Mcp {
+            seen: Vec::new(),
             token: token.to_string(),
             session: None,
             next_id: 1,
@@ -431,13 +434,15 @@ impl Mcp {
             "method": "tools/call", "params": {"name": name, "arguments": args}}));
         assert_eq!(s, 200, "tools/call {name}: {msg:?}");
         let msg = msg.expect("a reply");
-        msg["result"]["content"]
+        let text = msg["result"]["content"]
             .as_array()
             .unwrap_or_else(|| panic!("no content in {msg}"))
             .iter()
             .filter_map(|c| c["text"].as_str())
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        self.seen.push(text.clone());
+        text
     }
 
     fn execute(&mut self, code: &str) -> String {
@@ -493,6 +498,21 @@ fn raw_call(capability: &str, extra_header: &str) -> String {
     )
 }
 
+/// True if `text` holds a run of exactly 43 base64url characters: the
+/// shape of a capability (32 random bytes, unpadded base64url).
+fn has_capability_shape(text: &str) -> bool {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+        .any(|w| w.len() == 43)
+}
+
+impl Stack {
+    fn audit_count(&self, filter: &str) -> u64 {
+        self.sql(&format!("SELECT count(*) FROM audit WHERE {filter}"))
+            .parse()
+            .unwrap()
+    }
+}
+
 #[test]
 #[ignore = "needs Docker and the sesh images; run with `make stack-test`"]
 fn gateway_stack() {
@@ -528,16 +548,61 @@ fn gateway_stack() {
     stack.sesh_ok(&["up"]);
     let (alice_t, bob_t) = (stack.token("alice"), stack.token("bob"));
 
+    // SC-005: CI blocks containers' internet access (SESH_TEST_NO_INTERNET=1,
+    // see .github/workflows/ci.yml), so the suite passing shows no test
+    // needs it. Check the block holds from searxng, the one service with
+    // an egress network.
+    if std::env::var("SESH_TEST_NO_INTERNET").as_deref() == Ok("1") {
+        let out = stack.compose(
+            &[],
+            &[],
+            &[
+                "exec",
+                "-T",
+                "searxng",
+                "wget",
+                "-q",
+                "-T",
+                "5",
+                "-O",
+                "/dev/null",
+                "http://example.org/",
+            ],
+        );
+        assert!(
+            !out.status.success(),
+            "SC-005: a container reached the internet"
+        );
+    }
+
     // US1 / T015 (FR-001, SC-001): one script calls two connectors.
     let mut alice = Mcp::connect(&alice_t).expect("alice connects");
     let found = alice.tool("search", json!({"query": "weather forecast"}));
     assert!(found.contains("geo.forecast"), "search: {found}");
     let described = alice.tool("describe", json!({"target": "search.web"}));
     assert!(described.contains("query"), "describe: {described}");
+    let before = stack.audit_count("agent = 'alice'");
+    let started = std::time::Instant::now();
     let out = alice.execute(
         "async () => { const w = await search.web({ query: \"oslo\" }); const f = await geo.forecast({}); return { w, f }; }",
     );
+    let took = started.elapsed();
     assert!(out.contains("\"completed\""), "US1: {out}");
+    assert!(
+        took < Duration::from_secs(2),
+        "SC-001: two calls took {took:?}"
+    );
+    // SC-003: exactly one audit entry per call.
+    assert_eq!(
+        stack.audit_count("agent = 'alice'"),
+        before + 2,
+        "SC-003: two calls"
+    );
+    assert_eq!(
+        stack.audit_count("agent = 'alice' AND outcome = 'allowed' AND ((connector = 'search' AND method = 'web') OR (connector = 'geo' AND method = 'forecast'))"),
+        2,
+        "SC-003: one allowed entry for each call"
+    );
     assert!(
         out.contains("fake result for oslo"),
         "US1 search result: {out}"
@@ -625,12 +690,24 @@ fn gateway_stack() {
 
     // US2 / T016 (FR-008): an approval-gated method is refused, whatever
     // the script claims.
+    let before = stack.audit_count("agent = 'alice'");
     let out = alice.execute("async () => await testgate.act({ approved: true })");
     assert!(out.contains("approval_unavailable"), "FR-008: {out}");
+    assert_eq!(
+        stack.audit_count("agent = 'alice'"),
+        before + 1,
+        "SC-003: one entry for the gated call"
+    );
 
     // US2 / T016 (FR-009): an argument outside the schema is refused.
+    let before = stack.audit_count("agent = 'alice'");
     let out = alice.execute("async () => await search.web({ query: \"x\", user: \"bob\" })");
     assert!(!out.contains("\"completed\""), "FR-009: {out}");
+    assert_eq!(
+        stack.audit_count("agent = 'alice'"),
+        before + 1,
+        "SC-003: one entry for the refused call"
+    );
 
     // US4 / T020 (FR-006, FR-007, SC-004): a runaway script is stopped at the
     // deadline and doesn't stall another agent; the executor recovers.
@@ -717,6 +794,40 @@ fn gateway_stack() {
         "FR-010: the gateway role can delete audit rows"
     );
 
+    // SC-006: no token, database password or capability reaches the
+    // gateway's or executors' logs, or any result an agent received.
+    let logs = stack.compose(
+        &[],
+        &[],
+        &[
+            "logs",
+            "--no-color",
+            "gateway",
+            "executor-alice",
+            "executor-bob",
+        ],
+    );
+    let logs = String::from_utf8_lossy(&logs.stdout).into_owned();
+    assert!(!logs.trim().is_empty(), "no gateway logs to check");
+    for (what, text) in [("logs", &logs)].into_iter().chain(
+        alice
+            .seen
+            .iter()
+            .chain(bob.seen.iter())
+            .map(|t| ("a result", t)),
+    ) {
+        for secret in [&alice_t, &bob_t, &pw] {
+            assert!(
+                !text.contains(secret.as_str()),
+                "SC-006: a secret reached {what}"
+            );
+        }
+        assert!(
+            !has_capability_shape(text),
+            "SC-006: a capability-shaped value reached {what}: {text}"
+        );
+    }
+
     // US5 / T022 (FR-016): removing an agent revokes its token.
     stack.sesh_ok(&["agent", "remove", "bob"]);
     std::thread::sleep(Duration::from_secs(2));
@@ -731,4 +842,15 @@ fn gateway_stack() {
     let (ok, checks) = stack.doctor();
     assert_eq!(status_of(&checks, "executors-healthy"), "pass", "{checks}");
     assert!(ok, "doctor failed: {checks}");
+}
+
+#[test]
+fn capability_shape_matches_43_base64url_characters() {
+    let cap = "A".repeat(42) + "_";
+    assert!(has_capability_shape(&format!("x {cap} y")));
+    assert!(has_capability_shape(&format!("\"{cap}\"")));
+    assert!(!has_capability_shape(&"a".repeat(44)));
+    assert!(!has_capability_shape(
+        "https://example.org/fake exec-0123456789abcdef"
+    ));
 }

@@ -47,7 +47,18 @@ jobs:
         run: |
           docker builder prune -af
           df -h /
+      # SC-005 (specs/002-gateway-core): containers get no internet while
+      # the stack tests run. DOCKER-USER filters only traffic forwarded from
+      # containers, so image pulls and cargo (host traffic) still work.
+      - name: Block containers' internet access
+        run: |
+          ext=$(ip -o route show default | awk '{print $5; exit}')
+          sudo iptables -I DOCKER-USER -o "$ext" -j DROP
+          sudo ip6tables -I DOCKER-USER -o "$ext" -j DROP 2>/dev/null || true
+          sudo iptables -S DOCKER-USER
       - name: Stack tests
+        env:
+          SESH_TEST_NO_INTERNET: "1"
         run: make stack-test
       - name: Disk usage
         if: failure()
