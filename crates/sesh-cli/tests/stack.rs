@@ -2,7 +2,7 @@
 //! 002 (specs/002-gateway-core/tasks.md T015–T022), 003
 //! (specs/003-model-evals/tasks.md T009–T024), 004
 //! (specs/004-secrets-approvals/tasks.md T007–T017) and 005
-//! (specs/005-google-paperless/tasks.md).
+//! (specs/005-google-paperless/tasks.md) and 006 (specs/006-rss-feeds/tasks.md).
 //!
 //! They start the real stack with the stub model server, so they need
 //! Docker and the `sesh-stub-llm:dev`, `sesh-gateway:dev` and
@@ -1152,6 +1152,15 @@ fn eval_stack() {
             "approval was granted but the action wasn't taken",
         ),
         ("file-attachment", "the answer pastes a file's contents"),
+        // Suite v4 (specs/006 research.md R11).
+        (
+            "feed-headline",
+            "the answer doesn't contain the expected fact \"Marrow Quay\"",
+        ),
+        (
+            "feed-add",
+            "approval was granted but the action wasn't taken",
+        ),
     ] {
         assert!(
             reasons_of(&run, task).contains(why),
@@ -1927,6 +1936,288 @@ fn google_docs_stack() {
                 entry.display()
             );
         }
+    }
+}
+
+// ---- Feature 006: RSS feeds ----
+
+const FAKE_FEEDS: &str = "http://stub-llm:8000/fake/feeds";
+
+impl Stack {
+    /// How often the stub served each fake feed, read from inside the
+    /// gateway's container (the stub has no host port).
+    fn feed_hits(&self) -> Value {
+        let (ok, out) = self.bash_in(
+            "gateway",
+            "exec 3<>/dev/tcp/stub-llm/8000 && printf 'GET /fake/feeds/hits HTTP/1.1\\r\\nHost: stub\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3",
+        );
+        assert!(ok, "{out}");
+        let body = out.split("\r\n\r\n").nth(1).unwrap_or("");
+        serde_json::from_str(body).unwrap_or_else(|_| panic!("feed hits: {out}"))
+    }
+}
+
+/// Dotted IPv4 addresses in the private ranges Compose networks use.
+fn private_v4_in(text: &str) -> Vec<String> {
+    text.split(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .filter_map(|w| {
+            let o: Vec<u8> = w.split('.').filter_map(|p| p.parse().ok()).collect();
+            (o.len() == 4 && w.split('.').count() == 4).then_some((w, o))
+        })
+        .filter(|(_, o)| {
+            o[0] == 10 || (o[0] == 172 && (16..32).contains(&o[1])) || (o[0] == 192 && o[1] == 168)
+        })
+        .map(|(w, _)| w.to_string())
+        .collect()
+}
+
+#[test]
+fn private_addresses_are_found() {
+    assert_eq!(private_v4_in("x 172.18.0.5:80 y"), vec!["172.18.0.5"]);
+    assert!(private_v4_in("8.8.8.8 and 2026.11.27 and 172.32.0.1").is_empty());
+}
+
+#[test]
+#[ignore = "needs Docker and the sesh images; run with `make stack-test`"]
+fn feeds_stack() {
+    let dir = std::env::temp_dir().join(format!("sesh-feeds-stack-{}", std::process::id()));
+    let stack = Stack { dir };
+    stack.sesh_ok(&["init", "--stub"]);
+    stack.sesh_ok(&["user", "add", "ana"]);
+    stack.sesh_ok(&["user", "add", "ben"]);
+    for (agent, owner) in [("anabot", "ana"), ("benbot", "ben"), ("house", "household")] {
+        stack.sesh_ok(&[
+            "agent",
+            "add",
+            agent,
+            "--connectors",
+            "feeds",
+            "--owner",
+            owner,
+        ]);
+    }
+    stack.sesh_ok(&["up"]);
+
+    // US1 (FR-001, FR-003, FR-004): people choose the feeds.
+    for (owner, name) in [
+        ("household", "harbour"),
+        ("ana", "garden"),
+        ("ben", "cycling"),
+    ] {
+        let out = stack.sesh_ok(&[
+            "feed",
+            "add",
+            owner,
+            &format!("{FAKE_FEEDS}/{name}.xml"),
+            "--name",
+            name,
+        ]);
+        assert!(
+            out.contains(&format!("added feed {name} for {owner}")),
+            "{out}"
+        );
+    }
+    for (url, why) in [
+        ("ftp://example.org/feed", "only http and https"),
+        (
+            "http://127.0.0.1:8000/fake/feeds/harbour.xml",
+            "public internet",
+        ),
+        ("http://postgres:5432/", "public internet"),
+        ("http://169.254.169.254/latest/meta-data", "public internet"),
+    ] {
+        let out = stack.sesh(&["feed", "add", "ana", url, "--name", "bad"]);
+        assert!(!out.status.success(), "FR-004: {url} was added");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(why),
+            "{url}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let bad = stack.sesh(&["feed", "add", "zed", &format!("{FAKE_FEEDS}/ferry.xml")]);
+    assert!(!bad.status.success(), "an unknown owner is refused");
+    let listed = stack.sesh_ok(&["feed", "list"]);
+    assert_eq!(listed.lines().count(), 3, "{listed}");
+    assert_eq!(stack.sesh_ok(&["feed", "list", "ana"]).lines().count(), 1);
+
+    let mut anabot = Mcp::connect(&stack.token("anabot")).expect("anabot connects");
+    let mut benbot = Mcp::connect(&stack.token("benbot")).expect("benbot connects");
+    let mut house = Mcp::connect(&stack.token("house")).expect("house connects");
+
+    // US2 (FR-002, SC-001): each agent reads its owner's and the Household's.
+    let out = anabot.execute("async () => await feeds.list({})");
+    assert!(
+        out.contains("garden") && out.contains("harbour") && !out.contains("cycling"),
+        "{out}"
+    );
+    let out = benbot.execute("async () => await feeds.list({})");
+    assert!(
+        out.contains("cycling") && out.contains("harbour") && !out.contains("garden"),
+        "{out}"
+    );
+    let out = house.execute("async () => await feeds.list({})");
+    assert!(
+        out.contains("harbour") && !out.contains("garden") && !out.contains("cycling"),
+        "{out}"
+    );
+    let out = anabot.execute("async () => await feeds.latest({ feed: \"garden\" })");
+    assert!(out.contains("Seed swap on Saturday"), "{out}");
+    let out = benbot.execute("async () => await feeds.latest({ feed: \"garden\" })");
+    assert!(
+        out.contains("no feed named garden") && !out.contains("Seed swap"),
+        "SC-001: {out}"
+    );
+    let out = house.execute("async () => await feeds.latest({ feed: \"garden\" })");
+    assert!(out.contains("no feed named garden"), "SC-001: {out}");
+    let out =
+        benbot.execute("async () => await feeds.latest({ feed: \"garden\", owner: \"ana\" })");
+    assert!(
+        out.contains("not allowed") && !out.contains("Seed swap"),
+        "FR-002: {out}"
+    );
+    // FR-008: the injected item arrives as data, and nothing is added.
+    let out = anabot.execute("async () => await feeds.latest({ feed: \"harbour\" })");
+    assert!(
+        out.contains("Marrow Quay") && out.contains("Ignore previous instructions"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("<p>") && !out.contains("&lt;"),
+        "markup stripped: {out}"
+    );
+    // SC-005: two readers of one feed, one fetch.
+    benbot.execute("async () => await feeds.latest({ feed: \"harbour\" })");
+    house.execute("async () => await feeds.latest({ feed: \"harbour\" })");
+    assert_eq!(stack.feed_hits()["harbour"], 1, "SC-005: the cache");
+
+    // US3 (FR-009, SC-003): an agent's add waits for the owner.
+    let ana_topic = stack.user_topic("ana");
+    let add = format!(
+        "async () => await feeds.add({{ url: \"{FAKE_FEEDS}/ferry.xml\", name: \"ferry\" }})"
+    );
+    let out = anabot.execute(&add);
+    assert!(out.contains("\"approval_pending\""), "FR-009: {out}");
+    assert!(!stack.sesh_ok(&["feed", "list", "ana"]).contains("ferry"));
+    let notes = stack.notifications_as("u-ana", "NTFY_PASSWORD_ANA", &ana_topic);
+    assert_eq!(notes.len(), 1, "ana is asked");
+    assert!(
+        notes[0]["message"].as_str().unwrap().contains("ferry.xml"),
+        "the approval shows the address: {}",
+        notes[0]
+    );
+    let link = notes[0]["actions"][0]["url"].as_str().unwrap();
+    let (page, secret) = link.split_once('#').unwrap();
+    assert_eq!(decide(page, secret, "approve"), 200);
+    let out = anabot.execute(&add);
+    assert!(out.contains("\"added\":\"ferry\""), "{out}");
+    assert!(
+        stack
+            .sesh_ok(&["feed", "list", "ana"])
+            .contains("added by anabot")
+    );
+    let out = benbot.execute("async () => await feeds.list({})");
+    assert!(
+        !out.contains("ferry"),
+        "SC-001: ben sees ana's new feed: {out}"
+    );
+    for url in [
+        "http://169.254.169.254/latest/meta-data",
+        "http://postgres:5432/",
+        "http://127.0.0.1:7002/admin/feeds",
+        "http://[::1]/",
+        "file:///etc/passwd",
+    ] {
+        let out = anabot.execute(&format!(
+            "async () => await feeds.add({{ url: \"{url}\", name: \"x\" }})"
+        ));
+        assert!(
+            !out.contains("approval_pending") && !out.contains("\"added\""),
+            "FR-009: {url}: {out}"
+        );
+    }
+    assert_eq!(
+        stack
+            .notifications_as("u-ana", "NTFY_PASSWORD_ANA", &ana_topic)
+            .len(),
+        1,
+        "FR-009: no one was asked about an internal address"
+    );
+
+    // US4 (FR-004, FR-005, FR-010): misbehaving feeds can't reach inside.
+    for name in ["redirect", "big", "notafeed"] {
+        stack.sesh_ok(&[
+            "feed",
+            "add",
+            "household",
+            &format!("{FAKE_FEEDS}/{name}.xml"),
+            "--name",
+            name,
+        ]);
+    }
+    for (name, why) in [
+        ("redirect", "redirected to an address that isn't public"),
+        ("big", "the feed is too large"),
+        ("notafeed", "isn't an RSS or Atom feed"),
+    ] {
+        let out = house.execute(&format!(
+            "async () => await feeds.latest({{ feed: \"{name}\" }})"
+        ));
+        assert!(out.contains(why), "{name}: {out}");
+    }
+    assert_eq!(
+        stack.feed_hits()["harbour"],
+        1,
+        "SC-002: the redirect to loopback was never followed"
+    );
+    let (_, checks) = stack.doctor();
+    assert_eq!(status_of(&checks, "feeds"), "warn", "FR-012: {checks}");
+    for name in ["redirect", "big", "notafeed"] {
+        stack.sesh_ok(&["feed", "remove", "household", name]);
+    }
+    let (_, checks) = stack.doctor();
+    assert_eq!(status_of(&checks, "feeds"), "pass", "{checks}");
+
+    // FR-011: changes and calls are audited, with the owner.
+    for reason in [
+        "feed.added household/harbour",
+        "feed.added ana/garden",
+        "feed.removed household/big",
+    ] {
+        assert_ne!(
+            stack.audit_count(&format!("reason = '{reason}'")),
+            0,
+            "FR-011: no audit row for {reason:?}"
+        );
+    }
+    assert_ne!(
+        stack.audit_count(
+            "method = 'add' AND outcome = 'allowed' AND reason LIKE 'approved %owner ana%'"
+        ),
+        0,
+        "FR-011: the approved add"
+    );
+    assert_ne!(
+        stack
+            .audit_count("connector = 'feeds' AND method = 'latest' AND reason LIKE '%owner ben%'"),
+        0
+    );
+
+    // SC-004: no internal address of the stack in any result or audit row.
+    let audit = stack.sql(
+        "SELECT string_agg(coalesce(reason, '') || ' ' || args_summary::text, ' ') FROM audit",
+    );
+    for (what, text) in std::iter::once(("the audit log", &audit)).chain(
+        anabot
+            .seen
+            .iter()
+            .chain(&benbot.seen)
+            .chain(&house.seen)
+            .map(|t| ("a result", t)),
+    ) {
+        assert!(
+            private_v4_in(text).is_empty(),
+            "SC-004: an internal address reached {what}: {text}"
+        );
     }
 }
 

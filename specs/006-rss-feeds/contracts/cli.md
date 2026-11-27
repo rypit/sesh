@@ -23,4 +23,4 @@ Admin endpoints behind them (approvals listener, admin token):
 |---|---|---|
 | `POST /admin/feeds/add` | `{owner, url, name?}` | `200 {owner, name, url}`; `404` unknown owner; `422 {error}` refused |
 | `POST /admin/feeds/remove` | `{owner, name}` | `200`; `404` no such feed |
-| `GET /admin/feeds` | | `[{owner, name, url, added_by, added_at, last: {state, at?, message?}}]`, plus `allow_hosts` honoured |
+| `GET /admin/feeds` | | `{feeds: [{owner, name, url, added_by, added_at, last: {state, at?, message?}}], allow_hosts}` (the hosts the gateway honours) |

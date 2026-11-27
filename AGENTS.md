@@ -51,3 +51,6 @@ for a credential (feature 004); nothing in sesh ever prints a value.
 <name>` binds an agent to them, and `sesh google connect <name>` prints a
 one-time Google consent link (feature 005). The gateway derives every
 scope from the calling agent's owner, never from arguments.
+`sesh feed add <owner> <url> [--name <name>]`, `remove` and `list`
+manage feeds (feature 006); only the gateway fetches them, through
+`connectors/feeds.rs` and its address filter (ADR 0009).

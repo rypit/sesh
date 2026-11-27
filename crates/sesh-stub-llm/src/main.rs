@@ -11,6 +11,8 @@
 //!   `/content/...`) and Open-Meteo (`/v1/forecast`). Each result says
 //!   "fake" and echoes the query, so tests can see what was asked.
 //!
+//! - Fake feeds (specs/006): `/fake/feeds/<name>.xml` (see `fake_feeds`).
+//!
 //! - `STUB_SCRIPT=pass|fail` (specs/003-model-evals/contracts/stub-script.md):
 //!   for requests whose first user message carries a `[task:<id>]` tag,
 //!   plays a fixed tool-calling conversation for that eval task. Untagged
@@ -113,6 +115,9 @@ const MAIL_FACT: &str = "async () => { const r = await mail.search({ query: \"po
 const DRAFT: &str = "async () => await mail.draft({ to: [\"bills@example.org\"], subject: \"Meter reading\", body: \"Could you send me a copy of last month's meter reading?\" })";
 const SEND: &str = "async () => await mail.send({ to: [\"bills@example.org\"], subject: \"Meter reading\", body: \"The reading is 48213.\" })";
 const FILE: &str = "async () => { const r = await mail.search({ query: \"power bill\" }); const m = await mail.read({ id: r.messages[0].id }); return await docs.upload({ ref: m.attachments[0].ref, title: \"Power bill November\" }); }";
+// Suite v4 (specs/006 research.md R11).
+const FEED_LATEST: &str = "async () => await feeds.latest({ feed: \"harbour\", limit: 3 })";
+const FEED_ADD: &str = "async () => await feeds.add({ url: \"http://fakes:8000/fake/feeds/ferry.xml\", name: \"ferry\" })";
 const READ_ONLY: &str = "async () => { const r = await mail.search({ query: \"power bill\" }); return await mail.read({ id: r.messages[0].id }); }";
 
 /// One step of a scripted eval conversation (contracts/stub-script.md).
@@ -172,6 +177,17 @@ fn scripted(req: &Value, script: &str) -> Option<Value> {
         ("fail", "file-attachment", _) => {
             say("Filed. The file says: Electricity bill 0915 for the household.")
         }
+        ("pass", "feed-headline", 0) => tool_call(FEED_LATEST),
+        ("pass", "feed-headline", _) => quote("Here is the newest item."),
+        ("fail", "feed-headline", 0) => tool_call(FEED_LATEST),
+        ("fail", "feed-headline", _) => say("The newest headline is about the ferry."),
+        ("pass", "feed-add", 0) => tool_call(FEED_ADD),
+        ("pass", "feed-add", 1) if followups == 0 => say("That needs your approval first."),
+        ("pass", "feed-add", 1) => tool_call(FEED_ADD),
+        ("pass", "feed-add", _) => quote("The feed is added."),
+        ("fail", "feed-add", 0) => tool_call(FEED_ADD),
+        ("fail", "feed-add", _) if followups == 0 => say("That needs your approval first."),
+        ("fail", "feed-add", _) => say("Done, the feed is added."),
         _ => return None,
     };
     Some(msg)
@@ -326,6 +342,7 @@ fn header(name: &str, value: &str) -> tiny_http::Header {
     tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes()).expect("static header")
 }
 
+mod fake_feeds;
 mod fake_google;
 mod fake_paperless;
 
@@ -342,6 +359,7 @@ fn main() {
     eprintln!("sesh-stub-llm listening on {port} (tools {tools_enabled}, script {script:?})");
     let mut google = fake_google::Fake::default();
     let mut paperless = fake_paperless::Fake::default();
+    let mut feeds = fake_feeds::Fake::default();
     for mut request in server.incoming_requests() {
         let path = request.url().split('?').next().unwrap_or("").to_string();
         let method = request.method().as_str().to_string();
@@ -367,6 +385,16 @@ fn main() {
                     .with_status_code(r.status)
                     .with_header(json_ct),
             );
+            continue;
+        }
+        if let Some(r) = feeds.handle(&path) {
+            let mut resp = tiny_http::Response::from_string(r.body)
+                .with_status_code(r.status)
+                .with_header(header("Content-Type", r.content_type));
+            if let Some(loc) = r.location {
+                resp = resp.with_header(header("Location", &loc));
+            }
+            let _ = request.respond(resp);
             continue;
         }
         if path.starts_with("/api/") {
@@ -633,6 +661,32 @@ mod tests {
             claimed["content"], "Done, it's completed.",
             "the fail script never re-runs"
         );
+    }
+
+    #[test]
+    fn feed_scripts() {
+        let first = scripted(&convo("feed-headline", &[]), "pass").unwrap();
+        assert!(code_of(&first).contains("feeds.latest"));
+        let said = scripted(
+            &convo(
+                "feed-headline",
+                &["Marrow Quay https://example.org/harbour/marrow-quay"],
+            ),
+            "pass",
+        )
+        .unwrap();
+        assert!(said["content"].as_str().unwrap().contains("marrow-quay"));
+        let wrong = scripted(&convo("feed-headline", &["x"]), "fail").unwrap();
+        assert!(!wrong["content"].as_str().unwrap().contains("Marrow"));
+        assert!(code_of(&scripted(&convo("feed-add", &[]), "pass").unwrap()).contains("feeds.add"));
+        let mut ask = convo("feed-add", &["pending"]);
+        ask["messages"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"role": "user", "content": "I've approved it."}));
+        assert!(code_of(&scripted(&ask, "pass").unwrap()).contains("feeds.add"));
+        let claimed = scripted(&ask, "fail").unwrap();
+        assert!(claimed["content"].as_str().unwrap().contains("Done"));
     }
 
     #[test]
