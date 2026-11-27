@@ -44,10 +44,11 @@ The [constitution](.specify/memory/constitution.md) is binding. In short:
 
 ## Status
 
-**Building.** Feature 001 (foundation stack,
-[`specs/001-foundation/`](specs/001-foundation/)) is done; feature 002
-(gateway core, [`specs/002-gateway-core/`](specs/002-gateway-core/)) is in
-progress. The design is in the sesh Solutions
+**Building.** Features 001 (foundation stack,
+[`specs/001-foundation/`](specs/001-foundation/)) and 002 (gateway core,
+[`specs/002-gateway-core/`](specs/002-gateway-core/)) are done; feature
+003 (model evals, [`specs/003-model-evals/`](specs/003-model-evals/)) is
+in progress. The design is in the sesh Solutions
 Architecture document; decisions are in [`docs/decisions/`](docs/decisions/)
 and reference notes in [`docs/research/`](docs/research/). The build
 follows the architecture's eight phases (foundation, gateway core, model
@@ -67,6 +68,7 @@ sesh init --stub --home 59.91,10.75
 sesh agent add test --connectors search,geo
 sesh up
 sesh doctor
+sesh eval      # can the model behind agent-main use sesh's resources?
 ```
 
 Open WebUI is then on http://127.0.0.1:3000 (admin password in
@@ -75,8 +77,16 @@ Open WebUI is then on http://127.0.0.1:3000 (admin password in
 OpenAI-compatible server, then `sesh up`. The gateway's MCP endpoint is
 http://127.0.0.1:7000/mcp; the test agent's token is in
 `~/.local/share/sesh/agents/test.token` (never printed). See the
-quickstarts for [001](specs/001-foundation/quickstart.md) and
-[002](specs/002-gateway-core/quickstart.md).
+quickstarts for [001](specs/001-foundation/quickstart.md),
+[002](specs/002-gateway-core/quickstart.md) and
+[003](specs/003-model-evals/quickstart.md).
+
+`sesh eval` runs a fixed set of tasks against a model through its alias.
+Each run uses its own short-lived gateway with fake resources, so it
+needs no internet and leaves the household's gateway and audit log
+untouched. Results are kept under `~/.local/share/sesh/evals/`, for
+`sesh eval list`, `compare` and `show`. Run it whenever you change the
+model behind an alias.
 
 ## Repository
 

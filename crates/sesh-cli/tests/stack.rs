@@ -1,5 +1,6 @@
 //! Stack tests for features 001 (specs/001-foundation/tasks.md T012–T023)
-//! and 002 (specs/002-gateway-core/tasks.md T015–T022).
+//! 002 (specs/002-gateway-core/tasks.md T015–T022) and 003
+//! (specs/003-model-evals/tasks.md T009–T024).
 //!
 //! They start the real stack with the stub model server, so they need
 //! Docker and the `sesh-stub-llm:dev`, `sesh-gateway:dev` and
@@ -854,4 +855,325 @@ fn capability_shape_matches_43_base64url_characters() {
     assert!(!has_capability_shape(
         "https://example.org/fake exec-0123456789abcdef"
     ));
+}
+
+// ---- Feature 003: model evals ----
+
+impl Stack {
+    /// `sesh` with extra environment (e.g. `STUB_SCRIPT` for `sesh up`).
+    fn sesh_env(&self, env: &[(&str, &str)], args: &[&str]) -> Output {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_sesh"));
+        c.args(args).env("SESH_DATA_DIR", &self.dir);
+        for (k, v) in env {
+            c.env(k, v);
+        }
+        c.output().expect("run sesh")
+    }
+
+    fn eval_json(&self) -> (i32, Value) {
+        let out = self.sesh(&["eval", "--json"]);
+        let run: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| {
+            panic!(
+                "sesh eval --json: {}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+        (out.status.code().unwrap_or(-1), run)
+    }
+
+    fn audit_rows(&self) -> String {
+        self.sql("SELECT count(*) FROM audit")
+    }
+}
+
+fn eval_project(args: &[&str]) -> Output {
+    Command::new("docker")
+        .args(["compose", "-p", "sesh-eval"])
+        .args(args)
+        .output()
+        .expect("docker compose")
+}
+
+fn eval_project_gone() -> bool {
+    String::from_utf8_lossy(&eval_project(&["ps", "-a", "-q"]).stdout)
+        .trim()
+        .is_empty()
+}
+
+fn reasons(run: &Value) -> Vec<(String, bool, Vec<String>)> {
+    run["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["task"].as_str().unwrap().to_string(),
+                r["passed"].as_bool().unwrap(),
+                r["reasons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.as_str().unwrap().to_string())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn reasons_of(run: &Value, task: &str) -> String {
+    reasons(run)
+        .into_iter()
+        .find(|(t, _, _)| t == task)
+        .map(|(_, _, r)| r.join("; "))
+        .unwrap_or_default()
+}
+
+#[test]
+#[ignore = "needs Docker and the sesh images; run with `make stack-test`"]
+fn eval_stack() {
+    let dir = std::env::temp_dir().join(format!("sesh-eval-stack-{}", std::process::id()));
+    let stack = Stack { dir };
+    stack.sesh_ok(&["init", "--stub"]);
+    stack.sesh_ok(&["agent", "add", "alice", "--connectors", "search"]);
+    let up = stack.sesh_env(&[("STUB_SCRIPT", "pass")], &["up"]);
+    assert!(
+        up.status.success(),
+        "{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    let agents_before = stack.sesh_ok(&["agent", "list"]);
+    let audit_before = stack.audit_rows();
+
+    // US1 / T009 (FR-001, FR-006, SC-001): every task passes against the
+    // passing script, quickly, and the run is saved.
+    let started = std::time::Instant::now();
+    let out = stack.sesh(&["eval"]);
+    let took = started.elapsed();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        out.status.success(),
+        "US1: {text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(text.matches(" PASS ").count(), 5, "US1: {text}");
+    assert!(
+        text.contains("5/5 passed") && text.contains("saved "),
+        "{text}"
+    );
+    assert!(
+        took < Duration::from_secs(120),
+        "SC-001: the suite took {took:?}"
+    );
+
+    // US2 / T014 (FR-008, SC-003, SC-004): repeatable, and the household
+    // gateway's agents and audit log are untouched; the eval project is gone.
+    let (code, again) = stack.eval_json();
+    assert_eq!(code, 0, "{again}");
+    let (_, third) = stack.eval_json();
+    assert_eq!(reasons(&again), reasons(&third), "SC-003: two runs differ");
+    assert!(
+        eval_project_gone(),
+        "FR-008: the eval project was left running"
+    );
+    assert_eq!(
+        stack.sesh_ok(&["agent", "list"]),
+        agents_before,
+        "FR-008: household agents changed"
+    );
+    assert_eq!(
+        stack.audit_rows(),
+        audit_before,
+        "SC-004: the household audit log changed"
+    );
+
+    // US2 / T017 (constitution II): during a run, the eval executor reaches
+    // only the eval gateway; another token is refused. A paused model keeps
+    // the run waiting, and Ctrl-C then removes the project (T014).
+    assert!(
+        stack
+            .compose(&[], &[], &["pause", "stub-llm"])
+            .status
+            .success()
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sesh"))
+        .args(["eval", "--timeout", "90"])
+        .env("SESH_DATA_DIR", &stack.dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let ready = (0..90).any(|_| {
+        std::thread::sleep(Duration::from_secs(1));
+        let ps = String::from_utf8_lossy(
+            &eval_project(&["ps", "--format", "{{.Service}} {{.Health}}"]).stdout,
+        )
+        .into_owned();
+        ps.contains("executor-eval healthy") && ps.contains("gateway-eval healthy")
+    });
+    assert!(ready, "the eval project never became healthy");
+    let probe = |target: &str| {
+        eval_project(&[
+            "exec",
+            "-T",
+            "executor-eval",
+            "bash",
+            "-c",
+            &format!("timeout 5 bash -c 'exec 3<>/dev/tcp/{target}'"),
+        ])
+        .status
+        .success()
+    };
+    assert!(
+        probe("gateway-eval/7001"),
+        "the eval executor can't reach its gateway"
+    );
+    for target in ["fakes/8000", "gateway-eval/7000", "1.1.1.1/443"] {
+        assert!(
+            !probe(target),
+            "constitution II: the eval executor reached {target}"
+        );
+    }
+    assert_eq!(
+        call(
+            "POST",
+            "http://127.0.0.1:7100/mcp",
+            Some("not-the-eval-token"),
+            Some(json!({}))
+        )
+        .0,
+        401,
+        "the eval gateway accepted another token"
+    );
+    let pid = child.id().to_string();
+    assert!(
+        Command::new("kill")
+            .args(["-INT", &pid])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(130), "interrupted eval exit code");
+    assert!(
+        eval_project_gone(),
+        "T014: the eval project survived an interrupt"
+    );
+    assert!(
+        stack
+            .compose(&[], &[], &["unpause", "stub-llm"])
+            .status
+            .success()
+    );
+    let listed = stack.sesh_ok(&["eval", "list"]);
+    assert!(listed.contains("(incomplete)"), "T015: {listed}");
+
+    // US1 / T009: with no script and no tool calls, the tool tasks fail
+    // naming the missing call.
+    let up = stack.sesh_env(&[("STUB_SCRIPT", ""), ("STUB_TOOLS", "off")], &["up"]);
+    assert!(
+        up.status.success(),
+        "{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    let (code, run) = stack.eval_json();
+    assert_eq!(code, 1, "{run}");
+    assert!(
+        reasons_of(&run, "web-fact")
+            .contains("expected a search.web call that was allowed; none made"),
+        "{run}"
+    );
+    assert!(
+        reasons_of(&run, "forecast")
+            .contains("expected a geo.forecast call that was allowed; none made"),
+        "{run}"
+    );
+
+    // US3 / T018 (FR-017, SC-002): the failing script fails each task for
+    // the expected reason.
+    let up = stack.sesh_env(&[("STUB_SCRIPT", "fail")], &["up"]);
+    assert!(
+        up.status.success(),
+        "{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    let (code, run) = stack.eval_json();
+    assert_eq!(code, 1, "{run}");
+    assert_eq!(run["passed"], 0, "{run}");
+    for (task, why) in [
+        (
+            "web-fact",
+            "expected a search.web call that was allowed; none made",
+        ),
+        (
+            "forecast",
+            "the answer doesn't contain the expected fact \"13.7\"",
+        ),
+        ("combined", "reached the turn limit (8)"),
+        (
+            "refusal",
+            "never recovered from the refused search.web call",
+        ),
+        ("approval", "claimed an action that was refused"),
+    ] {
+        assert!(
+            reasons_of(&run, task).contains(why),
+            "SC-002 {task}: {}",
+            reasons_of(&run, task)
+        );
+    }
+    let fail_id = run["id"].as_str().unwrap().to_string();
+
+    // US4 / T021: list, compare and show.
+    let pass_id = again["id"].as_str().unwrap().to_string();
+    let listed = stack.sesh_ok(&["eval", "list"]);
+    assert!(
+        listed.lines().next().unwrap().starts_with(&fail_id),
+        "newest first: {listed}"
+    );
+    let cmp = stack.sesh_ok(&["eval", "compare", &pass_id, &fail_id]);
+    assert!(cmp.contains("forecast  PASS  FAIL *"), "{cmp}");
+    let shown = stack.sesh_ok(&["eval", "show", &fail_id, "approval"]);
+    assert!(
+        shown.starts_with("=== untrusted model output and tool results ==="),
+        "{shown}"
+    );
+    assert!(shown.contains("Done, it's completed."), "{shown}");
+
+    // SC-005 / T024: no secret or capability-shaped value in any saved file.
+    let secrets: Vec<String> = std::fs::read_to_string(stack.dir.join("secrets.env"))
+        .unwrap()
+        .lines()
+        .filter_map(|l| l.split_once('=').map(|(_, v)| v.to_string()))
+        .filter(|v| v.len() >= 8)
+        .collect();
+    let mut files = vec![];
+    for run in std::fs::read_dir(stack.dir.join("evals"))
+        .unwrap()
+        .flatten()
+    {
+        if run.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        files.push(run.path().join("run.json"));
+        if let Ok(ts) = std::fs::read_dir(run.path().join("transcripts")) {
+            files.extend(ts.flatten().map(|t| t.path()));
+        }
+    }
+    assert!(files.len() > 5);
+    for f in files {
+        let text = std::fs::read_to_string(&f).unwrap();
+        for s in &secrets {
+            assert!(
+                !text.contains(s.as_str()),
+                "SC-005: a secret in {}",
+                f.display()
+            );
+        }
+        assert!(
+            !has_capability_shape(&text),
+            "SC-005: a capability-shaped value in {}",
+            f.display()
+        );
+    }
 }

@@ -41,3 +41,6 @@ guard. `make stack-test` starts the stack with the stub model server and
 runs the stack tests (needs Docker and the dev images:
 `docker build -f deploy/<name>.Dockerfile -t sesh-<name>:dev .` for
 `stub` (tagged `sesh-stub-llm:dev`), `gateway` and `executor`).
+`sesh eval` runs the model-eval suite (feature 003); in stub mode,
+`STUB_SCRIPT=pass sesh up` (or `fail`) makes the stub model play the
+suite's scripted conversations.

@@ -30,6 +30,7 @@ compose-config:
 	  WEBUI_ADMIN_EMAIL=x WEBUI_ADMIN_PASSWORD=x GATEWAY_DB_PASSWORD=x SEARXNG_SECRET=x > target/compose-check/secrets.env
 	SESH_DATA_DIR=$(CURDIR)/target/compose-check SESH_WEBUI_PORT=3000 SESH_ROUTER_PORT=4000 \
 	  docker compose --env-file target/compose-check/secrets.env $(COMPOSE_FILES) config -q
+	SESH_EVAL_DIR=$(CURDIR)/target/compose-check docker compose -f deploy/eval/compose.yaml config -q
 
 # Fails if instance data (secrets or rendered config) is ever committed (ADR 0003).
 no-instance-data:

@@ -1,0 +1,73 @@
+# The eval project (specs/003-model-evals research.md R2, ADR 0006).
+# `sesh eval` writes this next to the run's files, starts it, and removes it
+# (with its volumes) when the run ends. Nothing here touches the household
+# stack: its own gateway, executor and fake upstreams.
+#
+#   SESH_EVAL_DIR   the run's directory ($SESH_DATA_DIR/evals/.run)
+#   SESH_EVAL_PORT  the eval gateway's loopback port (default 7100)
+services:
+  # Fixed fake upstreams (the stub server's fake routes); reachable only
+  # from the eval gateway.
+  fakes:
+    image: ${SESH_STUB_IMAGE:-sesh-stub-llm:dev}
+    networks: [eval-fakes]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8000'"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  gateway-eval:
+    image: ${SESH_GATEWAY_IMAGE:-sesh-gateway:dev}
+    environment:
+      SESH_GATEWAY_CONFIG: /etc/sesh/gateway.toml
+      SESH_AGENTS_FILE: /etc/sesh/agents.toml
+      SESH_AUDIT_DATABASE_URL: file:/var/log/sesh-eval/audit.jsonl
+      SESH_GATEWAY_TEST_CONNECTORS: "1"
+      SESH_EXECUTOR_URL: http://executor-eval:8000
+    volumes:
+      - ${SESH_EVAL_DIR:?}/gateway:/etc/sesh:ro
+      - ${SESH_EVAL_DIR:?}/audit:/var/log/sesh-eval
+    ports:
+      - "127.0.0.1:${SESH_EVAL_PORT:-7100}:7000"
+    networks: [eval-edge, eval-exec, eval-fakes]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/7000'"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      fakes:
+        condition: service_healthy
+
+  # The untrusted executor: its only network holds the eval gateway (ADR 0004).
+  executor-eval:
+    image: ${SESH_EXECUTOR_IMAGE:-sesh-executor:dev}
+    environment:
+      SESH_GATEWAY_ADDRESS: gateway-eval:7001
+    networks: [eval-exec]
+    read_only: true
+    tmpfs: [/var/lib/sesh-executor]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/sesh-executor-supervisor", "health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+networks:
+  # Only the gateway: so its agent port can be published on loopback.
+  eval-edge: {}
+  eval-exec:
+    internal: true
+  eval-fakes:
+    internal: true

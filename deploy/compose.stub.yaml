@@ -6,6 +6,8 @@ services:
     image: sesh-stub-llm:dev
     environment:
       STUB_TOOLS: ${STUB_TOOLS:-on}
+      # Scripted eval conversations (specs/003-model-evals/contracts/stub-script.md).
+      STUB_SCRIPT: ${STUB_SCRIPT:-}
     restart: unless-stopped
   # The test-only approval-gated connector, for negative tests.
   gateway:

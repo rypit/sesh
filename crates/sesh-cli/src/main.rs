@@ -6,6 +6,7 @@
 mod agent;
 mod config;
 mod doctor;
+mod eval;
 mod host;
 mod init;
 mod render;
@@ -52,6 +53,30 @@ enum Command {
         #[arg(long, value_parser = parse_home)]
         home: Option<(f64, f64)>,
     },
+    /// Check that a model can use sesh's resources (runs the eval suite).
+    #[command(args_conflicts_with_subcommands = true)]
+    Eval {
+        #[command(subcommand)]
+        command: Option<EvalCommand>,
+        /// The router alias to test.
+        #[arg(long, default_value = "agent-main")]
+        alias: String,
+        /// Tasks that must pass (default: all).
+        #[arg(long)]
+        threshold: Option<usize>,
+        /// Model turns per task (default 8).
+        #[arg(long)]
+        turns: Option<u32>,
+        /// Tool calls per task (default 6).
+        #[arg(long)]
+        tool_calls: Option<u32>,
+        /// Seconds per task (default 120).
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Print the run as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage the agents the gateway accepts.
     Agent {
         #[command(subcommand)]
@@ -67,6 +92,22 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum EvalCommand {
+    /// List saved runs, newest first.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Compare two runs task by task (default: the latest two).
+    Compare {
+        a: Option<String>,
+        b: Option<String>,
+    },
+    /// Show one task's transcript (untrusted model output).
+    Show { run: String, task: String },
 }
 
 #[derive(Subcommand)]
@@ -109,6 +150,8 @@ fn compose_for(dir: &Path) -> Result<DockerCompose> {
         "SESH_GATEWAY_PORT",
         "SESH_GATEWAY_IMAGE",
         "SESH_EXECUTOR_IMAGE",
+        "STUB_SCRIPT",
+        "STUB_TOOLS",
     ] {
         if let Ok(value) = std::env::var(var) {
             vars.push((var.to_string(), value));
@@ -159,6 +202,25 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 println!("{line}");
             }
         }
+        Command::Eval {
+            command,
+            alias,
+            threshold,
+            turns,
+            tool_calls,
+            timeout,
+            json,
+        } => {
+            let opts = eval::Options {
+                alias,
+                threshold,
+                turns,
+                tool_calls,
+                timeout,
+                json,
+            };
+            return eval_command(&dir, command, opts);
+        }
         Command::Agent { command } => match command {
             AgentCommand::Add { name, connectors } => {
                 println!("{}", agent::add(&dir, &name, &connectors)?)
@@ -199,6 +261,62 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn eval_command(dir: &Path, command: Option<EvalCommand>, opts: eval::Options) -> Result<ExitCode> {
+    match command {
+        None => match eval::run(dir, &opts) {
+            Ok(true) => Ok(ExitCode::SUCCESS),
+            Ok(false) => Ok(ExitCode::from(1)),
+            Err(e) if e.downcast_ref::<eval::Prerequisite>().is_some() => {
+                eprintln!("{e}");
+                Ok(ExitCode::from(3))
+            }
+            Err(e) => Err(e),
+        },
+        Some(EvalCommand::List { json }) => {
+            let runs = eval::store::list(dir)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&runs)?);
+            } else {
+                for line in eval::store::list_lines(&runs) {
+                    println!("{line}");
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(EvalCommand::Compare { a, b }) => {
+            let complete: Vec<_> = eval::store::list(dir)?
+                .into_iter()
+                .filter(|r| r.complete)
+                .collect();
+            let pick = |id: &str| eval::store::load(dir, id);
+            let (ra, rb) = match (a, b) {
+                (Some(a), Some(b)) => (pick(&a)?, pick(&b)?),
+                (Some(a), None) => {
+                    let latest = complete
+                        .first()
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("no complete runs"))?;
+                    (pick(&a)?, latest)
+                }
+                (None, _) => {
+                    if complete.len() < 2 {
+                        anyhow::bail!("need two complete runs to compare");
+                    }
+                    (complete[1].clone(), complete[0].clone())
+                }
+            };
+            for line in eval::store::compare(&ra, &rb)? {
+                println!("{line}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(EvalCommand::Show { run, task }) => {
+            print!("{}", eval::store::show(dir, &run, &task)?);
+            Ok(ExitCode::SUCCESS)
+        }
+    }
 }
 
 fn main() -> ExitCode {

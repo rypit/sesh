@@ -3,7 +3,7 @@
 `SESH_AUDIT_DATABASE_URL=file:/var/log/sesh-eval/audit.jsonl`
 
 - Writes one JSON object per line, with the same fields as the audit
-  table: `at`, `agent`, `execution`, `connector`, `method`,
+  table, except that `at` is `at_ms` (Unix milliseconds): `at_ms`, `agent`, `execution`, `connector`, `method`,
   `args_summary`, `outcome`, `reason`.
 - Appends and flushes before the call returns, with the same
   failure-withholds-result rule as Postgres.
