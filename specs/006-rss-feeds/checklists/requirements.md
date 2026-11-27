@@ -32,10 +32,10 @@
 ## Notes
 
 - RSS and Atom are named because they are the formats the feature is
-  about; Postgres and Compose appear only in Assumptions.
+  about; Miniflux, Postgres and Compose appear only in Assumptions.
 - No clarification markers. Defaults are recorded in Assumptions:
-  - feeds in the gateway's database, changed through the gateway;
-  - limits of 3 redirects, 2 MB, 10 s, 15 minutes, 50 feeds per owner;
-  - the existing `default` network for egress, behind the address
-    filter;
-  - the fake-feed allowance only in stub and eval set-ups.
+  - Miniflux as the feed service, one user per owner, managed by the
+    gateway;
+  - its own networks (`feeds`, `feeds-egress`, `feeds-db`), never
+    `default`;
+  - limits of 50 feeds per owner, 25 items per read, 20 kB results.

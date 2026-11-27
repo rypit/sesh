@@ -1,55 +1,47 @@
 # Data model: RSS feeds
 
-## Feed (gateway Postgres, table `feeds`)
+The gateway keeps no feed table: Miniflux is the store (research.md R3).
+
+## Feed account (Miniflux user)
 
 | Field | Notes |
 |---|---|
-| `owner` | a user name, or `household`; must exist when added |
-| `name` | `[a-z0-9][a-z0-9-]{0,31}`; unique per owner |
-| `url` | http or https, a host, no credentials, ≤ 2,000 characters |
-| `added_by` | `operator`, or the agent's name (an approved add) |
-| `added_at` | Unix seconds |
+| `username` | `sesh-<owner>`; the Household is `sesh-household`; matched exactly |
+| `password` | random, set by the gateway the first time it needs the user in a process; memory only |
+| `is_admin` | false |
 
-Primary key `(owner, name)`. `sesh_gateway` may `SELECT`, `INSERT` and
-`DELETE`. At most `feeds_max_per_owner` rows per owner.
+The gateway's own Miniflux account is `sesh-gateway` (admin), with
+`MINIFLUX_ADMIN_PASSWORD` from `secrets.env`.
 
-## Feed copy (gateway memory, by URL)
+## Feed (Miniflux feed, in the owner's account)
 
 | Field | Notes |
 |---|---|
-| `fetched_at` | when it was fetched |
-| `outcome` | the parsed feed, or the failure's reason |
+| `title` | the feed's sesh name: `[a-z0-9][a-z0-9-]{0,31}`, unique per owner |
+| `feed_url` | http or https, a host, no credentials, ≤ 2,000 characters |
+| `user_id` | the owner's Miniflux id; the gateway checks it on every read |
+| `parsing_error_count`, `parsing_error_message` | Miniflux's last update error, for doctor |
 
-Used for `feeds_cache_secs` (a failure for 60 s). The last outcome per
-URL is kept for doctor: `ok`, `failed` (with the reason) or `never`.
+At most `feeds_max_per_owner` feeds per owner.
 
-## Parsed feed
-
-| Field | Notes |
-|---|---|
-| `title` | plain text, ≤ 300 characters |
-| `items` | ≤ 200, in feed order |
-
-## Feed item (what agents get)
+## Feed item (what agents get, from a Miniflux entry)
 
 | Field | Notes |
 |---|---|
 | `title` | plain text, ≤ 300 characters |
-| `link` | http(s) only, else empty; ≤ 2,000 characters |
-| `published` | RFC 3339 UTC when readable, else as written (≤ 64), or empty |
-| `summary` | plain text, markup removed, ≤ 1,000 characters |
+| `link` | the entry's `url`, http(s) only, else empty; ≤ 2,000 characters |
+| `published` | the entry's `published_at` |
+| `summary` | the entry's `content`, markup removed, ≤ 1,000 characters |
 
 ## Gateway settings (`GatewaySettings`, `gateway.toml`)
 
 | Setting | Default | Notes |
 |---|---|---|
-| `feeds_cache_secs` | 900 | 60–86,400 |
-| `feeds_max_bytes` | 2,097,152 | 1 KiB–16 MiB |
-| `feeds_timeout_secs` | 10 | 1–60 |
+| `upstreams.miniflux` | `http://miniflux:8080` | the eval points it at the fakes |
 | `feeds_max_per_owner` | 50 | 1–1,000 |
-| `feeds_allow_hosts` | `[]` | single-label names only; honoured only with test connectors (research.md R4) |
 
-Fixed: 3 redirects; caps in research.md R6.
+Environment: `SESH_MINIFLUX_USER` (`sesh-gateway`) and
+`SESH_MINIFLUX_PASSWORD`.
 
 ## Audit additions
 

@@ -6,54 +6,53 @@
 
 ## Summary
 
-- **Feeds per owner,** in a gateway-owned `feeds` table. The operator
-  adds, removes and lists them with `sesh feed …`, through admin
-  endpoints, so every change is checked and audited by the gateway.
+- **Miniflux is adopted** as the feed service: it fetches, parses and
+  stores feeds, on its own networks (`feeds` with the gateway,
+  `feeds-egress` to publishers, `feeds-db` to Postgres), never on
+  `default`.
+- **One module,** `connectors/feeds.rs`, is the gateway's only route to
+  Miniflux. It manages one Miniflux user per owner as admin, reads and
+  adds feeds as that user, and filters every result again by owner.
 - **A `feeds` connector:** `list`, `latest`, and `add`, which is
   approval-gated and checked before anyone is asked.
-- **One fetching module,** `connectors/feeds.rs`: http/https only, its
-  own DNS resolution with every address checked against the refused
-  ranges, the checked address pinned for the connection, redirects
-  followed by hand (3) and re-checked, 2 MB and 10 s caps, no proxy,
-  and a 15-minute cache.
-- **Parsing** RSS and Atom with `quick-xml` into plain-text, capped
-  items.
-- **Tests:** unit tests for every rule, a fake feed server in the stub,
-  stack test `feeds_stack`, and eval suite v4.
+- **`sesh feed add|remove|list`** through gateway admin endpoints, so
+  every change is audited by the gateway.
+- **The gateway never fetches a feed address** (research.md R0).
+- **Tests:** unit tests against a fake Miniflux that ignores scope, the
+  real Miniflux in `feeds_stack` with the stub as publisher, a fake
+  Miniflux in the stub for eval suite v4.
 
 ## Technical Context
 
 **Language/Version**: Rust 1.97 (ADR 0002)
 
 **Primary Dependencies**:
-- Existing: reqwest (its per-client `resolve` and manual redirects),
-  tokio (`lookup_host`), tokio-postgres, axum.
-- New crate: `quick-xml` 0.42, MIT, no default features (research.md
-  R5).
+- Existing: reqwest, axum, serde_json.
+- New adopted image: `miniflux/miniflux:2.3.5`, pinned by digest.
 
 **Storage**:
-- Gateway Postgres: table `feeds` (data-model.md).
-- Gateway memory: feed copies and last outcomes.
+- Miniflux: its own Postgres database `miniflux` (feeds, entries, users).
+- Gateway memory: each owner's Miniflux user id and session password.
+- No new gateway table.
 
 **Testing**:
-- Unit: URL rules, the address filter (every range, v4 and v6, mapped
-  forms), redirects to a private address (a local test server), size
-  and time caps, RSS/Atom parsing (malformed input, HTML stripping,
-  dates), caps, owner scoping, the gate, the cache.
-- Stack: `feeds_stack` against the stub's fake feeds, no internet.
-- Eval: suite v4 (`feed-headline`, `feed-add`).
+- Unit: URL and name rules, owner scoping with a fake Miniflux that
+  returns every user's data, user creation by exact name, the gate,
+  text cleaning and caps, the admin endpoints, doctor, the CLI.
+- Stack: `feeds_stack` with the real Miniflux; network negative tests.
+- Eval: suite v4 (`feed-headline`, `feed-add`) against fake Miniflux.
 
 **Target Platform**: the existing stack
 
-**Project Type**: a gateway connector, admin endpoints, CLI commands
+**Project Type**: a Compose service, a gateway connector, admin
+endpoints, CLI commands
 
-**Performance Goals**: a cached read answers at once; a fetch within
-10 s
+**Performance Goals**: a feed added by the operator is readable within
+1 minute (SC-005)
 
 **Constraints**:
-- No connection to an internal address, ever, outside the test
-  allowance.
-- No internal address in any error.
+- Miniflux reaches only the internet and its own database.
+- No Miniflux credential in any output.
 - No internet in CI.
 
 **Scale/Scope**: a handful of owners, up to 50 feeds each
@@ -62,49 +61,52 @@
 
 | Principle | How this feature complies |
 |---|---|
-| I. Control plane is the only trusted zone | Fetching, the address filter, scoping and the store are all in the gateway. Feed content is untrusted. |
-| II. One way out | Agents reach feeds only through the `feeds` connector. Every feed is operator configuration or a person's approval, and inspectable with `sesh feed list`. |
-| III. Agents never see secrets | Feeds need no credentials; none is read. |
-| IV. Per-user isolation | Scope comes from the owner (`owners::Scope.readable`); cross-owner negative tests. |
-| V. Side effects need approval | `feeds.add` is gated: a new outbound address is a side effect (an exfiltration channel). |
-| VI. Agent content never trusted | Feed text is returned as data only; an agent can't write the feed list, only ask; the injected-instruction item is tested in the eval. |
-| VII. Local-first | **Exception, justified below**: feeds the household chose are fetched from their publishers, with no household data sent (a plain GET). |
-| VIII. Adopt before build | `quick-xml` is adopted for XML; the SSRF guard is a small module because no maintained Rust crate does pinned, re-checked fetching for reqwest. |
+| I. Control plane is the only trusted zone | Scoping, approvals and audit are in the gateway. Miniflux is untrusted; its results are filtered again by owner. Feed content is untrusted. |
+| II. One way out | Agents reach feeds only through the `feeds` connector. Miniflux sits on an internal network shared only with the gateway. Every feed is operator configuration or a person's approval, and inspectable with `sesh feed list`. |
+| III. Agents never see secrets | The Miniflux admin password and per-owner passwords stay in the gateway. |
+| IV. Per-user isolation | One Miniflux user per owner; scope from the owner; cross-owner negative tests. |
+| V. Side effects need approval | `feeds.add` is gated: a new address fetched for the owner is a side effect. |
+| VI. Agent content never trusted | Feed text is returned as data only; an agent can only ask to add a feed; the injected-instruction item is tested in the stack test and the eval. |
+| VII. Local-first | Feed publishers are a named exception, reached only through the feed service (constitution 1.3.0). |
+| VIII. Adopt before build | Miniflux is adopted for fetching, parsing and storage, reached through one module. |
 | IX. Swappable inference | Unaffected. |
-| X. Every guarantee is executable | Unit and stack negative tests for every refused range, redirect, cap and cross-owner read. |
+| X. Every guarantee is executable | Unit tests for owner filtering against a fake that ignores scope; stack tests for isolation, approval and network reach. |
 
-**Component boundary and threat model change:** **ADR 0009** (a new
-outbound path to arbitrary public hosts). The architecture document's
-catalog, connector table and diagram gain feeds.
+**Component boundary change:** **ADR 0009** (a new adopted component and
+three networks). The architecture document's catalog, connector table
+and diagram gain feeds (Miniflux).
 
-Gate: **pass**, with the VII exception below.
+Gate: **pass**.
 
 ## Project Structure
 
 ```text
-crates/sesh-core/src/lib.rs           # feed settings in GatewaySettings; valid_feed_name
+crates/sesh-core/src/lib.rs           # upstreams.miniflux; feeds_max_per_owner; valid_feed_name
 crates/sesh-gateway/src/
-├── feeds.rs                          # store: Postgres or memory (one table)
-├── connectors/feeds.rs               # seam: URL rules, address filter, guarded fetch, parse, cache, connector
+├── connectors/feeds.rs               # seam: Miniflux (admin, users per owner, feeds, entries), the connector
 ├── connectors/mod.rs                 # + feeds descriptor
 ├── calls.rs                          # precheck before the gate; owner-scoped dispatch
 ├── pages.rs                          # /admin/feeds, /admin/feeds/add, /admin/feeds/remove
-└── lib.rs, main.rs                   # Gateway.feeds, .feed_cache; allow-hosts only with test connectors
+└── lib.rs, main.rs                   # Gateway.miniflux
 crates/sesh-cli/src/
 ├── feed.rs                           # sesh feed add|remove|list
-├── doctor.rs                         # feeds check
-├── up.rs                             # stub mode: feeds_allow_hosts = ["stub-llm"]
-└── eval/…                            # suite v4; eval adds its feed
-crates/sesh-stub-llm/src/fake_feeds.rs
+├── doctor.rs                         # feeds check; miniflux among the services
+├── secrets.rs                        # MINIFLUX_ADMIN_PASSWORD
+└── eval/…                            # suite v4; the eval adds its feed
+crates/sesh-stub-llm/src/fake_feeds.rs     # the fake publisher
+crates/sesh-stub-llm/src/fake_miniflux.rs  # the eval's fake Miniflux
 crates/sesh-cli/tests/stack.rs        # feeds_stack
-deploy/postgres/gateway.sql           # + feeds table
+deploy/compose.yaml                   # + miniflux; networks feeds, feeds-egress, feeds-db
+deploy/compose.stub.yaml              # stub-llm on feeds-egress
+deploy/postgres/gateway.sql           # + miniflux database
 .github/workflows/ci.yml              # + feeds_stack
+.specify/memory/constitution.md       # VII amended, 1.3.0
 docs/decisions/0009-rss-feeds.md
 docs/architecture/{solutions-architecture.md,diagram.jsx}, docs/architecture.svg
 ```
 
 ## Complexity Tracking
 
-| Exception | Why | Simpler alternative rejected because |
-|---|---|---|
-| VII: fetching feeds from their publishers | Feeds are only useful from their source. A plain GET sends no household data (no cookies, no credentials, a generic user agent); the publisher sees the server's address, as with any reader. | A local mirror would still fetch from the publisher. Naming "feeds the household chose" in VII's exception list is a constitution amendment, left for the operator to decide (ADR 0009); until then this row is the recorded justification. |
+None. (A first draft recorded a VII exception for the gateway fetching
+feeds itself; the gateway no longer fetches, and VII names feed
+publishers behind the feed service.)

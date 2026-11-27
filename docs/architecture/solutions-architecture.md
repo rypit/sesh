@@ -107,11 +107,11 @@ sesh has 20 components across six zones. Three are custom builds (marked
 | SearXNG | Resources | Web search | SearXNG | Container | JSON output; reachable from the gateway only |
 | Kiwix | Resources | Offline Wikipedia | kiwix-serve + ZIM files | Container | Text-only English Wikipedia (~50GB); quarterly refresh |
 | Weather + maps | Resources | Forecasts, geocoding, places | Open-Meteo, OpenStreetMap | Gateway connector | No keys; home location fixed in the gateway |
-| Feeds | Resources | News and updates the household follows | RSS and Atom from any public host, fetched by the gateway (ADR 0009) | Gateway connector | Feeds per owner, chosen by people; agent adds need approval; private addresses refused, redirects re-checked; 2 MB, 10 s, 15-minute cache |
+| Miniflux | Resources | Feeds (RSS, Atom) the household follows | Miniflux (ADR 0009) | Container | User per owner, managed by the gateway; reachable from the gateway only (`feeds` network); its own egress network to publishers and its own route to Postgres, never `default`; agent adds need approval; web UI not published |
 | Paperless-ngx | Resources | Household documents: OCR, search | Paperless-ngx (+ Paperless-AI if needed) | Container | User per agent scope; search, read and upload via the gateway; a mail rule imports a Gmail "To file" label; embeddings on CPU |
 | Browser | Resources | Logged-in browsing, live view, `read(url)` | Chromium (Playwright build), headful | sbx microVM per session | Profile per agent; fresh context per read; private addresses blocked (**build**: `login(site)`, `read(url)`) |
 | Mem0 | Resources | Long-term memory per user + household | Mem0 OSS, pgvector, BM25 | Container | `infer=False` at first; CPU embeddings; `user_id` set by the gateway |
-| Postgres + Redis | Resources | Shared storage | Postgres 16 + pgvector, Redis | Container | Backs Mem0, Paperless, Infisical and the audit log |
+| Postgres + Redis | Resources | Shared storage | Postgres 16 + pgvector, Redis | Container | Backs Mem0, Paperless, Miniflux, Infisical and the audit log |
 | Inference server | Inference | Serves models behind aliases (OpenAI-compatible API) | Any OpenAI-compatible server (for example oMLX, Ollama, llama.cpp, vLLM) | Bare metal | Alias `agent-main` |
 | embed | Inference | Embeddings for Mem0 and Paperless | Small embedding model | In-container CPU | Same model for both; never swapped without re-embedding |
 | LiteLLM | Inference | The alias router every client calls (ADR 0005) | LiteLLM | Container | Always present; clients get alias-only keys; later: failover, a second engine |
@@ -182,9 +182,8 @@ and the audit log.
 - The gateway labels returned content as untrusted.
 - `read(url)` blocks private, LAN and Tailscale addresses, and limits
   size and time.
-- Feed fetches do the same in the gateway (ADR 0009): every address a
-  host resolves to is checked, again on each redirect, and feed text
-  comes back as quoted, capped data.
+- Feeds are fetched by Miniflux on its own networks, never by the
+  gateway (ADR 0009); feed text comes back as quoted, capped data.
 
 **Audit log**
 
@@ -379,8 +378,7 @@ small browser controller. Everything else is configuration.
   to Infisical.
 - **Audit writer:** an insert-only Postgres table.
 - **Egress guard:** blocks private, LAN, Tailscale and localhost targets
-  for feed fetches (in the gateway's feeds module, ADR 0009), and for
-  `read(url)` and browser navigation.
+  for `read(url)` and browser navigation.
 - **Snippet store (later):** named scripts with search, if regenerating
   scripts becomes common.
 
@@ -500,14 +498,14 @@ is a feature under `specs/`.
        user's documents, without its bytes entering model context;
      - user A's agent can't reach user B's mail or documents (negative
        tests).
-6. **RSS feeds:** the `feeds` connector; feeds per owner, added by
-   people with `sesh feed add`, or by an agent with approval; the
-   gateway fetches them behind an address filter (ADR 0009).
+6. **RSS feeds:** Miniflux behind the gateway's `feeds` connector, with
+   a Miniflux user per owner; feeds added by people with `sesh feed
+   add`, or by an agent with approval (ADR 0009).
    - Accept:
      - each agent reads its owner's and the Household's feeds, never
        another user's (negative tests);
-     - a feed address or redirect to a private, loopback or link-local
-       address is refused;
+     - Miniflux can't reach the gateway or Postgres on `default`, and no
+       executor can reach Miniflux;
      - an agent's `feeds.add` runs only after approval.
 7. **Google Docs (read-only):** search and read the owner's Google Docs
    through their existing Google grant, with a read-only scope.
@@ -564,7 +562,7 @@ before or during its phase.
 | Hermes memory provider interface fits a gateway-backed plugin | Open question | Read the provider ABC; prototype against the `memory` connector | 9 |
 | Browser server choice (Auto Browser, easi.run, Nod, or build) | Open question | Vet code and isolation; confirm CDP fill and field-read blocking | 10 |
 | Paperless built-in AI covers semantic search | Open question | Check the current release; add Paperless-AI only if needed | 5 |
-| Feed addresses used for server-side request forgery or exfiltration | Risk | Gateway address filter on every hop; agent adds need approval; no proxy; caps and cache (ADR 0009) | 6 |
+| Feed addresses used for server-side request forgery or exfiltration | Risk | Only Miniflux fetches, off `default` on its own networks; agent adds need approval (ADR 0009) | 6 |
 | Prompt injection via email, pages, documents or other agents | Risk | Untrusted labels, approvals, domain-pinned login, egress guard, audit alerts | 4–11 |
 | Mem0 add-only accumulates stale facts | Risk | Scheduled cleanup; per-user memory editing page | 8 |
 | sbx requires a Docker sign-in (cloud dependency) | Risk | Review login and telemetry terms; fall back to containers if unacceptable | 10 |
