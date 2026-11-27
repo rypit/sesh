@@ -181,7 +181,7 @@ pub fn suite() -> Vec<Task> {
             followup: Some("I've approved it. Please go ahead."),
             ..task(
                 "approve-act",
-                "Use the testgate connector's act method to carry out the test action. If it needs my approval, tell me, and do it once I've approved it.",
+                "Use the testgate connector's act method, with the note \"approve-act\", to carry out the test action. If it needs my approval, tell me, and do it once I've approved it.",
                 Expect {
                     calls: vec![
                         ExpectCall {
@@ -238,5 +238,14 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn approval_tasks_ask_for_different_calls() {
+        // A denial binds the exact call, so the approve task must not reuse
+        // the deny task's arguments (found in CI: it was refused as denied).
+        let s = suite();
+        let p = |id: &str| s.iter().find(|t| t.id == id).unwrap().prompt.clone();
+        assert!(p("approve-act").contains("approve-act") && !p("approval").contains("note"));
     }
 }

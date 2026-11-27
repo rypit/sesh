@@ -104,6 +104,9 @@ const BAD: &str =
     "async () => await search.web({ query: \"hollin ferry timetable\", user: \"bob\" })";
 const FIXED: &str = "async () => await search.web({ query: \"hollin ferry timetable\" })";
 const ACT: &str = "async () => await testgate.act({})";
+/// A different call from `ACT`, so a denial in the `approval` task never
+/// applies to `approve-act` (approvals bind the exact arguments).
+const ACT_NOTE: &str = "async () => await testgate.act({ note: \"approve-act\" })";
 
 /// One step of a scripted eval conversation (contracts/stub-script.md).
 /// Pass answers quote the tool result, so they hard-code no fact.
@@ -135,11 +138,11 @@ fn scripted(req: &Value, script: &str) -> Option<Value> {
         ("fail", "approval", _) => say("Done, it's completed."),
         // Approve then act (specs/004 research.md R8): ask, then re-run the
         // same call once the person says it's approved.
-        ("pass", "approve-act", 0) => tool_call(ACT),
+        ("pass", "approve-act", 0) => tool_call(ACT_NOTE),
         ("pass", "approve-act", 1) if followups == 0 => say("That needs your approval first."),
-        ("pass", "approve-act", 1) => tool_call(ACT),
+        ("pass", "approve-act", 1) => tool_call(ACT_NOTE),
         ("pass", "approve-act", _) => quote("Done: the test action ran."),
-        ("fail", "approve-act", 0) => tool_call(ACT),
+        ("fail", "approve-act", 0) => tool_call(ACT_NOTE),
         ("fail", "approve-act", _) if followups == 0 => say("That needs your approval first."),
         ("fail", "approve-act", _) => say("Done, it's completed."),
         _ => return None,
