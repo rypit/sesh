@@ -2,7 +2,8 @@
 //!
 //! - `SESH_GATEWAY_CONFIG`: path to `gateway.toml` ([`sesh_core::GatewaySettings`])
 //! - `SESH_AGENTS_FILE`: path to `agents.toml`
-//! - `SESH_AUDIT_DATABASE_URL`: Postgres URL for the audit role, or `memory`
+//! - `SESH_AUDIT_DATABASE_URL`: Postgres URL for the audit role, `memory`, or
+//!   `file:/var/log/sesh-eval/<name>` (the eval gateway only)
 //! - `SESH_EXECUTOR_URL`: executor URL template, default `http://executor-{agent}:8000`
 //! - `SESH_GATEWAY_TEST_CONNECTORS=1`: add the test-only `testgate` connector
 //! - `SESH_ALLOWED_HOSTS`: extra Host names for the MCP endpoint (comma separated)
@@ -64,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let audit = match env("SESH_AUDIT_DATABASE_URL").as_deref() {
         Some("memory") | None => Audit::memory(),
+        Some(url) if url.starts_with("file:") => Audit::file(&url["file:".len()..])?,
         Some(url) => Audit::postgres(url.to_string()),
     };
     let gw = Arc::new(Gateway {

@@ -105,3 +105,40 @@ impl Tailscale for FakeTailscale {
         Ok(self.0)
     }
 }
+
+type ToolAnswer = Box<dyn Fn(&str, &Value) -> super::mcp::ToolResult>;
+
+/// A gateway that answers `tools/call` with a closure of (tool, args).
+pub struct FakeMcp {
+    pub tools: Vec<Value>,
+    pub calls: RefCell<Vec<(String, Value)>>,
+    pub answer: ToolAnswer,
+}
+
+impl FakeMcp {
+    /// The gateway's three tools, answering every call with `text`.
+    pub fn answering(text: &'static str) -> Self {
+        let tool = |n: &str| serde_json::json!({"name": n, "description": n, "inputSchema": {"type": "object"}});
+        FakeMcp {
+            tools: vec![tool("execute"), tool("search"), tool("describe")],
+            calls: RefCell::default(),
+            answer: Box::new(move |_, _| super::mcp::ToolResult {
+                is_error: false,
+                text: text.to_string(),
+            }),
+        }
+    }
+}
+
+impl super::mcp::Mcp for FakeMcp {
+    fn list_tools(&self) -> Result<(Vec<Value>, String)> {
+        Ok((self.tools.clone(), "use the tools".into()))
+    }
+
+    fn call_tool(&self, name: &str, args: &Value) -> Result<super::mcp::ToolResult> {
+        self.calls
+            .borrow_mut()
+            .push((name.to_string(), args.clone()));
+        Ok((self.answer)(name, args))
+    }
+}

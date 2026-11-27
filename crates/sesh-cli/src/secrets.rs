@@ -25,6 +25,8 @@ pub const GENERATED: [&str; 7] = [
 
 /// The restricted router key for Open WebUI, created by `sesh up`.
 pub const WEBUI_ROUTER_KEY: &str = "WEBUI_ROUTER_KEY";
+/// The router key `sesh eval` uses; limited to the aliases (specs/003 R9).
+pub const EVAL_ROUTER_KEY: &str = "EVAL_ROUTER_KEY";
 pub const WEBUI_ADMIN_EMAIL: &str = "WEBUI_ADMIN_EMAIL";
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -62,6 +64,11 @@ impl Secrets {
             out.push_str(&format!("{k}={v}\n"));
         }
         out
+    }
+
+    /// Every value, for redaction (never printed).
+    pub fn values(&self) -> Vec<String> {
+        self.values.values().cloned().collect()
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {

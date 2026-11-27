@@ -212,14 +212,21 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
         .unwrap_or_default()
         .to_string();
     let url = router_url(&config);
-    match secrets.get(secrets::WEBUI_ROUTER_KEY) {
-        None => {
-            let key = create_client_key(http, &url, &master, "open-webui", &aliases)?;
-            secrets.set(secrets::WEBUI_ROUTER_KEY, &key);
-            secrets.save(dir)?;
-            report.push("created Open WebUI's router key (limited to the aliases)".into());
+    // Open WebUI's key, and the one `sesh eval` uses (specs/003 research R9):
+    // both limited to the aliases, never printed.
+    for (name, label, who) in [
+        (secrets::WEBUI_ROUTER_KEY, "open-webui", "Open WebUI's"),
+        (secrets::EVAL_ROUTER_KEY, "sesh-eval", "the eval's"),
+    ] {
+        match secrets.get(name) {
+            None => {
+                let key = create_client_key(http, &url, &master, label, &aliases)?;
+                secrets.set(name, &key);
+                secrets.save(dir)?;
+                report.push(format!("created {who} router key (limited to the aliases)"));
+            }
+            Some(key) => update_client_key(http, &url, &master, key, &aliases)?,
         }
-        Some(key) => update_client_key(http, &url, &master, key, &aliases)?,
     }
 
     compose.up(&["open-webui"])?;
@@ -325,6 +332,11 @@ mod tests {
         );
         assert_eq!(
             Secrets::load(&dir).unwrap().get("WEBUI_ROUTER_KEY"),
+            Some("sk-client")
+        );
+        // The eval's own alias-only key (specs/003 R9).
+        assert_eq!(
+            Secrets::load(&dir).unwrap().get("EVAL_ROUTER_KEY"),
             Some("sk-client")
         );
         let g = std::fs::read_to_string(dir.join("gateway/gateway.toml")).unwrap();

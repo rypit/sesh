@@ -3,6 +3,7 @@
 
 pub mod compose;
 pub mod http;
+pub mod mcp;
 pub mod tailscale;
 
 #[cfg(test)]
