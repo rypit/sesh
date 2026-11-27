@@ -13,17 +13,9 @@ use std::time::Duration;
 
 const CONTENT_CAP: usize = 20_000;
 
-pub const UPLOAD_TYPES: [&str; 9] = [
-    "application/pdf",
-    "image/png",
-    "image/jpeg",
-    "image/tiff",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    "application/vnd.oasis.opendocument.text",
-];
+/// PDF and images only: Office files need Tika and Gotenberg, which sesh
+/// doesn't run (specs/005 research.md R6).
+pub const UPLOAD_TYPES: [&str; 4] = ["application/pdf", "image/png", "image/jpeg", "image/tiff"];
 
 pub fn descriptor() -> ConnectorDescriptor {
     let s = |min: u64, max: u64| json!({"type": "string", "minLength": min, "maxLength": max});

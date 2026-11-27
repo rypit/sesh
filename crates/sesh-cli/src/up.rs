@@ -90,6 +90,17 @@ pub fn effective_gateway(config: &Config) -> GatewaySettings {
         ] {
             *u = STUB_UPSTREAM.into();
         }
+        // Fake Google (specs/005 research.md R7); Paperless stays real.
+        g.upstreams.google_auth = format!("{STUB_UPSTREAM}/fake/google/auth");
+        g.upstreams.google_token = format!("{STUB_UPSTREAM}/fake/google/token");
+        g.upstreams.google_revoke = format!("{STUB_UPSTREAM}/fake/google/revoke");
+        for u in [
+            &mut g.upstreams.gmail,
+            &mut g.upstreams.calendar,
+            &mut g.upstreams.people,
+        ] {
+            *u = format!("{STUB_UPSTREAM}/fake/google");
+        }
         g.home.get_or_insert(Home {
             latitude: 59.91,
             longitude: 10.75,
@@ -221,6 +232,7 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
         "searxng",
         "infisical",
         "ntfy",
+        "paperless",
         "gateway",
     ];
     base.extend(executors.iter().map(String::as_str));
@@ -381,7 +393,7 @@ mod tests {
             vec![
                 "up postgres",
                 "sql sesh",
-                "up redis litellm searxng infisical ntfy gateway executor-alice stub-llm",
+                "up redis litellm searxng infisical ntfy paperless gateway executor-alice stub-llm",
                 "restart gateway",
                 "up open-webui"
             ]

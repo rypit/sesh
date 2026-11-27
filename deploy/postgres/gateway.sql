@@ -6,6 +6,8 @@
 SELECT 'CREATE DATABASE gateway' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'gateway') \gexec
 -- Infisical's own database (specs/004 research.md R5).
 SELECT 'CREATE DATABASE infisical' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'infisical') \gexec
+-- Paperless-ngx's own database (specs/005 research.md R6).
+SELECT 'CREATE DATABASE paperless' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'paperless') \gexec
 
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sesh_gateway') THEN
@@ -18,6 +20,7 @@ REVOKE CONNECT ON DATABASE gateway FROM PUBLIC;
 REVOKE CONNECT ON DATABASE openwebui FROM PUBLIC;
 REVOKE CONNECT ON DATABASE litellm FROM PUBLIC;
 REVOKE CONNECT ON DATABASE infisical FROM PUBLIC;
+REVOKE CONNECT ON DATABASE paperless FROM PUBLIC;
 GRANT CONNECT ON DATABASE gateway TO sesh_gateway;
 
 \c gateway

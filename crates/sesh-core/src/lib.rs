@@ -452,7 +452,7 @@ fn d_gmail() -> String {
     "https://gmail.googleapis.com".into()
 }
 fn d_gcal() -> String {
-    "https://www.googleapis.com/calendar".into()
+    "https://www.googleapis.com".into()
 }
 fn d_people() -> String {
     "https://people.googleapis.com".into()

@@ -8,6 +8,7 @@ mod config;
 mod credential;
 mod doctor;
 mod eval;
+mod google;
 mod host;
 mod infisical;
 mod init;
@@ -86,6 +87,11 @@ enum Command {
         #[command(subcommand)]
         command: CredentialCommand,
     },
+    /// Connect or disconnect a user's (or the Household's) Google account.
+    Google {
+        #[command(subcommand)]
+        command: GoogleCommand,
+    },
     /// Manage household users (each has their own approval topic).
     User {
         #[command(subcommand)]
@@ -106,6 +112,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum GoogleCommand {
+    /// Print a one-time consent link for a user, or household.
+    Connect { owner: String },
+    /// Revoke and remove the grant.
+    Disconnect { owner: String },
 }
 
 #[derive(Subcommand)]
@@ -147,7 +161,7 @@ enum AgentCommand {
     /// Add an agent and generate its token (never printed).
     Add {
         name: String,
-        /// Connectors the agent may use, comma-separated (search, geo).
+        /// Connectors the agent may use, comma-separated (search, geo, mail, calendar, contacts, docs).
         #[arg(long, value_delimiter = ',', required = true)]
         connectors: Vec<String>,
         /// Whose agent this is: a user (`sesh user add`), or household.
@@ -267,6 +281,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     credential::request(&dir, &http, &connector, &name)?
                 }
                 CredentialCommand::List => credential::list(&dir, &http)?,
+            };
+            for line in lines {
+                println!("{line}");
+            }
+        }
+        Command::Google { command } => {
+            let http = UreqHttp::new(Duration::from_secs(30));
+            let lines = match command {
+                GoogleCommand::Connect { owner } => google::connect(&dir, &http, &owner)?,
+                GoogleCommand::Disconnect { owner } => {
+                    vec![google::disconnect(&dir, &http, &owner)?]
+                }
             };
             for line in lines {
                 println!("{line}");

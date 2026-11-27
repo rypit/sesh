@@ -55,13 +55,14 @@ impl Check {
     }
 }
 
-const SERVICES: [&str; 8] = [
+const SERVICES: [&str; 9] = [
     "postgres",
     "redis",
     "litellm",
     "searxng",
     "infisical",
     "ntfy",
+    "paperless",
     "gateway",
     "open-webui",
 ];
@@ -81,6 +82,8 @@ pub fn run(
     checks.extend(stack_checks(config, agents, compose));
     checks.push(gateway_check(http));
     checks.push(credentials_check(secrets, http));
+    checks.push(google_check(secrets, http));
+    checks.push(paperless_check(secrets, http));
     checks.push(audit_check(compose));
     checks.push(match tailscale.serves_port(config.ports.webui) {
         Ok(Some(true)) => Check::pass("tailscale-serve", "Open WebUI is served on the tailnet"),
@@ -316,6 +319,96 @@ fn credentials_check(secrets: &Secrets, http: &dyn Http) -> Check {
     }
 }
 
+/// specs/005 contracts/cli.md: each owner's Google connection. Missing is
+/// fine (not everyone uses Google); revoked needs a new consent.
+fn google_check(secrets: &Secrets, http: &dyn Http) -> Check {
+    let Some(token) = secrets.get("SESH_GATEWAY_ADMIN_TOKEN") else {
+        return Check::warn("google", "no gateway admin token yet", "run `sesh init`");
+    };
+    match http.get(
+        &format!("{}/google/status", crate::credential::admin_url()),
+        Some(token),
+    ) {
+        Ok(r) if r.status == 200 => {
+            let all: Vec<(String, String)> = r
+                .body
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|c| {
+                    (
+                        c["owner"].as_str().unwrap_or("?").to_string(),
+                        c["state"].as_str().unwrap_or("?").to_string(),
+                    )
+                })
+                .collect();
+            let revoked: Vec<&str> = all
+                .iter()
+                .filter(|(_, s)| s == "revoked")
+                .map(|(o, _)| o.as_str())
+                .collect();
+            let connected: Vec<&str> = all
+                .iter()
+                .filter(|(_, s)| s == "connected")
+                .map(|(o, _)| o.as_str())
+                .collect();
+            if !revoked.is_empty() {
+                Check::warn(
+                    "google",
+                    format!("Google access was revoked for: {}", revoked.join(", ")),
+                    "sesh google connect <user>",
+                )
+            } else if connected.is_empty() {
+                Check::pass("google", "no one has connected Google")
+            } else {
+                Check::pass("google", format!("connected: {}", connected.join(", ")))
+            }
+        }
+        Ok(r) => Check::warn(
+            "google",
+            format!("the gateway answered {}", r.status),
+            "run `sesh up`",
+        ),
+        Err(e) => Check::warn(
+            "google",
+            format!("can't reach the gateway: {e}"),
+            "run `sesh up`",
+        ),
+    }
+}
+
+fn paperless_check(secrets: &Secrets, http: &dyn Http) -> Check {
+    let Some(token) = secrets.get("SESH_GATEWAY_ADMIN_TOKEN") else {
+        return Check::warn("paperless", "no gateway admin token yet", "run `sesh init`");
+    };
+    match http.get(
+        &format!("{}/paperless", crate::credential::admin_url()),
+        Some(token),
+    ) {
+        Ok(r) if r.status == 200 && r.body["state"] == "ok" => {
+            Check::pass("paperless", "the gateway can reach the document service")
+        }
+        Ok(r) if r.status == 200 => Check::warn(
+            "paperless",
+            format!(
+                "the document service: {}",
+                r.body["message"].as_str().unwrap_or("unavailable")
+            ),
+            "check `docker compose logs paperless`, then `sesh up`",
+        ),
+        Ok(r) => Check::warn(
+            "paperless",
+            format!("the gateway answered {}", r.status),
+            "run `sesh up`",
+        ),
+        Err(e) => Check::warn(
+            "paperless",
+            format!("can't reach the gateway: {e}"),
+            "run `sesh up`",
+        ),
+    }
+}
+
 /// Warns when an agent had many refusals in the last hour (FR-016).
 fn audit_check(compose: &dyn Compose) -> Check {
     let sql = format!(
@@ -444,6 +537,7 @@ mod tests {
             ("searxng", None),
             ("infisical", Some(("127.0.0.1", 8222))),
             ("ntfy", Some(("127.0.0.1", 8090))),
+            ("paperless", None),
             ("gateway", Some(("127.0.0.1", 7000))),
             ("open-webui", Some(("127.0.0.1", 3000))),
         ])
@@ -537,7 +631,7 @@ mod tests {
     fn open_port_fails_and_names_the_service() {
         let (c, s) = setup(false);
         let stack = healthy_stack();
-        stack.services.borrow_mut()[7].published[0].address = "0.0.0.0".into();
+        stack.services.borrow_mut()[8].published[0].address = "0.0.0.0".into();
         let checks = run(
             &c,
             &s,
