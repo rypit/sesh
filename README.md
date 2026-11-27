@@ -2,8 +2,6 @@
 
 [![ci](https://github.com/rypit/sesh/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rypit/sesh/actions/workflows/ci.yml?query=branch%3Amain)
 
-> *sesh* (Egyptian: "scribe"). The scribe writes; it doesn't hold the keys.
-
 A local-first AI agent platform for one household. Each person gets an
 always-on agent, plus a shared Household agent, that can handle email,
 calendar, documents, browsing and errands. Every agent reaches the world
@@ -29,8 +27,9 @@ anything with side effects waits for a person's yes.
 
 Agents are untrusted; the gateway is their only way out. Approvals and
 one-time links go from the gateway to people through ntfy, never through
-an agent. The diagram is generated from the Solutions Architecture
-document; see [`docs/architecture/`](docs/architecture/) to update it.
+an agent. The design is in the
+[Solutions Architecture](docs/architecture/solutions-architecture.md);
+see [`docs/architecture/`](docs/architecture/) to update the diagram.
 
 ## Guarantees
 
@@ -49,8 +48,9 @@ The [constitution](.specify/memory/constitution.md) is binding. In short:
 **Building.** Features 001 to 003 (foundation stack, gateway core, model evals) are
 done; feature 004 (secrets and approvals,
 [`specs/004-secrets-approvals/`](specs/004-secrets-approvals/)) is in
-progress. The design is in the sesh Solutions
-Architecture document; decisions are in [`docs/decisions/`](docs/decisions/)
+progress. The design is in the
+[Solutions Architecture](docs/architecture/solutions-architecture.md);
+decisions are in [`docs/decisions/`](docs/decisions/)
 and reference notes in [`docs/research/`](docs/research/). The build
 follows the architecture's nine phases (foundation, gateway core, model
 evals, secrets and approvals, Google and Paperless, memory, one agent,
