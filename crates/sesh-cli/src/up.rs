@@ -1,9 +1,11 @@
 //! `sesh up` and `sesh down` (contracts/cli.md of features 001 and 002).
 //!
-//! Order: postgres → audit migration → redis, the alias router, search,
-//! the gateway and one executor per agent → the restricted router key
-//! for Open WebUI → Open WebUI. Open WebUI never receives the router's
-//! master key; executors receive no secrets at all.
+//! Order: missing passwords → postgres → the migration (the service
+//! logins, their databases, the audit log, then each service database
+//! handed to its login: specs/007) → each service's Redis, the alias
+//! router, search, the gateway and one executor per agent → the
+//! restricted router key for Open WebUI → Open WebUI. Open WebUI never
+//! receives the router's master key; executors receive no secrets at all.
 
 use crate::agent;
 use crate::config::Config;
@@ -21,9 +23,22 @@ pub const COMPOSE_YAML: &str = include_str!("../../../deploy/compose.yaml");
 pub const COMPOSE_STUB_YAML: &str = include_str!("../../../deploy/compose.stub.yaml");
 pub const POSTGRES_INIT_SQL: &str = include_str!("../../../deploy/postgres/init.sql");
 pub const GATEWAY_SQL: &str = include_str!("../../../deploy/postgres/gateway.sql");
+/// Run in each service database after [`GATEWAY_SQL`] (specs/007 R2).
+pub const OWNERS_SQL: &str = include_str!("../../../deploy/postgres/owners.sql");
 pub const SEARXNG_SETTINGS: &str = include_str!("../../../deploy/searxng/settings.yml");
 
 const KIWIX_IMAGE: &str = "ghcr.io/kiwix/kiwix-serve:3.8.2@sha256:e478554a9920412eeb5ce1d73f24e4b28445ebed233187cdd03c623c32be46a5";
+/// Each adopted service with its own Postgres login (specs/007 R1,
+/// ADR 0010): the role, which is also its database's name, and the
+/// `secrets.env` key of its password. `gateway.sql` makes each one.
+pub const SERVICE_DATABASES: [(&str, &str); 5] = [
+    ("openwebui", "OPENWEBUI_DB_PASSWORD"),
+    ("litellm", "LITELLM_DB_PASSWORD"),
+    ("infisical", "INFISICAL_DB_PASSWORD"),
+    ("paperless", "PAPERLESS_DB_PASSWORD"),
+    ("miniflux", "MINIFLUX_DB_PASSWORD"),
+];
+
 /// Where the stub serves the fake upstreams (stub mode only).
 const STUB_UPSTREAM: &str = "http://stub-llm:8000";
 
@@ -162,9 +177,25 @@ fn apply_if_changed(
 }
 
 /// The migration with its passwords as psql variables, for stdin only:
-/// never a command line or a file.
-pub fn migration_sql(gateway_pw: &str, miniflux_pw: &str) -> String {
-    format!("\\set gateway_pw '{gateway_pw}'\n\\set miniflux_pw '{miniflux_pw}'\n{GATEWAY_SQL}")
+/// never a command line or a file. `services` is (role, password); after
+/// the migration, each role's database is handed to it.
+pub fn migration_sql(gateway_pw: &str, services: &[(&str, &str)]) -> Result<String> {
+    let mut out = String::new();
+    for (name, pw) in std::iter::once(("gateway", gateway_pw)).chain(services.iter().copied()) {
+        // A value that could end the psql literal or line is refused, so
+        // a hand-edited secrets.env can't inject SQL.
+        if pw.is_empty() || pw.contains(['\'', '\\', '\n', '\r']) {
+            bail!(
+                "the {name} database password in secrets.env is empty or has a quote, backslash or line break; remove it and run `sesh up` to generate a new one"
+            );
+        }
+        out.push_str(&format!("\\set {name}_pw '{pw}'\n"));
+    }
+    out.push_str(GATEWAY_SQL);
+    for (role, _) in services {
+        out.push_str(&format!("\\c {role}\n{OWNERS_SQL}"));
+    }
+    Ok(out)
 }
 
 /// Runs `sesh up`; returns lines to print.
@@ -179,6 +210,13 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
     };
     let gateway_pw = gateway_pw.to_string();
     let mut report = Vec::new();
+    // An install from before a feature lacks that feature's passwords
+    // (specs/007 FR-007): make them, so upgrading is `sesh up` alone.
+    let made = secrets.fill_missing()?;
+    if !made.is_empty() {
+        secrets.save(dir)?;
+        report.extend(made.iter().map(|k| format!("generated {k}")));
+    }
 
     let rendered = render::litellm_config(&config);
     std::fs::write(dir.join(render::FILE_NAME), &rendered)?;
@@ -221,12 +259,17 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
     let agents = agent::load(dir)?;
 
     compose.up(&["postgres"])?;
-    // The password goes in on stdin as a psql variable, never on a command line.
-    let miniflux_pw = secrets
-        .get("MINIFLUX_DB_PASSWORD")
-        .context("MINIFLUX_DB_PASSWORD missing; run `sesh init`")?
-        .to_string();
-    compose.exec_sql("sesh", &migration_sql(&gateway_pw, &miniflux_pw))?;
+    // Passwords go in on stdin as psql variables, never on a command line.
+    let service_pws = SERVICE_DATABASES
+        .iter()
+        .map(|(role, key)| {
+            secrets
+                .get(key)
+                .map(|pw| (*role, pw))
+                .with_context(|| format!("{key} missing; run `sesh init`"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    compose.exec_sql("sesh", &migration_sql(&gateway_pw, &service_pws)?)?;
 
     let executors: Vec<String> = agents
         .agents
@@ -234,7 +277,9 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
         .map(|a| format!("executor-{}", a.name))
         .collect();
     let mut base: Vec<&str> = vec![
-        "redis",
+        "redis-openwebui",
+        "redis-infisical",
+        "redis-paperless",
         "litellm",
         "searxng",
         "infisical",
@@ -359,35 +404,261 @@ fn update_client_key(
 
 #[cfg(test)]
 mod tests {
-    use super::migration_sql;
+    use super::*;
+
+    fn passwords() -> Vec<(&'static str, String)> {
+        SERVICE_DATABASES
+            .iter()
+            .enumerate()
+            .map(|(i, (role, _))| (*role, format!("pw-{role}-{i}")))
+            .collect()
+    }
 
     #[test]
-    fn the_migration_gives_miniflux_its_own_role_and_passes_passwords_as_variables() {
-        let sql = migration_sql("gw-pw-1", "mf-pw-2");
-        let (head, body) = sql
-            .split_once(crate::up::GATEWAY_SQL)
+    fn the_migration_gives_every_service_its_own_role_and_passes_passwords_as_variables() {
+        let pws = passwords();
+        let refs: Vec<(&str, &str)> = pws.iter().map(|(r, p)| (*r, p.as_str())).collect();
+        let sql = migration_sql("gw-pw-1", &refs).unwrap();
+        let (head, rest) = sql
+            .split_once(GATEWAY_SQL)
             .expect("the migration follows the variables");
+        assert!(head.contains("\\set gateway_pw 'gw-pw-1'\n"), "{head}");
+        assert_eq!(sql.matches("gw-pw-1").count(), 1);
+        for (role, pw) in &refs {
+            assert!(
+                head.contains(&format!("\\set {role}_pw '{pw}'\n")),
+                "{head}"
+            );
+            assert_eq!(
+                sql.matches(pw).count(),
+                1,
+                "{role}'s password appears only in its \\set line"
+            );
+            assert!(
+                rest.contains(&format!("\\c {role}\n{OWNERS_SQL}")),
+                "specs/007 R2: the hand-over runs in {role}'s database"
+            );
+        }
+        let m = GATEWAY_SQL;
+        for (role, _) in SERVICE_DATABASES {
+            for needle in [
+                format!("CREATE ROLE {role} LOGIN;"),
+                format!(
+                    "ALTER ROLE {role} LOGIN PASSWORD :'{role}_pw' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;"
+                ),
+                format!(
+                    "SELECT 'CREATE DATABASE {role} OWNER {role}' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{role}') \\gexec"
+                ),
+                format!("ALTER DATABASE {role} OWNER TO {role};"),
+                format!("REVOKE CONNECT ON DATABASE {role} FROM PUBLIC;"),
+                format!("GRANT CONNECT ON DATABASE {role} TO {role};"),
+            ] {
+                assert!(m.contains(&needle), "specs/007 R1: {needle}");
+            }
+        }
+        // The roles exist before their databases are created or handed over.
         assert!(
-            head.contains("\\set gateway_pw 'gw-pw-1'")
-                && head.contains("\\set miniflux_pw 'mf-pw-2'"),
-            "{head}"
+            m.find("CREATE ROLE openwebui").unwrap() < m.find("CREATE DATABASE openwebui").unwrap()
         );
-        assert!(body.is_empty());
-        let m = crate::up::GATEWAY_SQL;
         assert!(
-            m.contains("CREATE ROLE miniflux LOGIN"),
-            "specs/006: Miniflux has its own role"
-        );
-        assert!(m.contains("ALTER ROLE miniflux PASSWORD :'miniflux_pw'"));
-        assert!(m.contains("ALTER DATABASE miniflux OWNER TO miniflux"));
-        assert!(m.contains("GRANT CONNECT ON DATABASE miniflux TO miniflux"));
-        assert!(
-            !m.contains("mf-pw-2") && !m.contains("gw-pw-1"),
+            !m.contains("pw-") && !m.contains("gw-pw-1"),
             "no password in the file"
+        );
+        assert!(
+            !m.contains("REASSIGN OWNED") && !OWNERS_SQL.contains("REASSIGN OWNED"),
+            "R2: never REASSIGN OWNED"
+        );
+        // FR-009: the gateway's login keeps exactly its rights.
+        let grants: Vec<&str> = m
+            .lines()
+            .filter(|l| l.contains("TO sesh_gateway"))
+            .collect();
+        assert_eq!(
+            grants,
+            vec![
+                "GRANT CONNECT ON DATABASE gateway TO sesh_gateway;",
+                "GRANT INSERT ON audit TO sesh_gateway;",
+                "GRANT USAGE ON SEQUENCE audit_id_seq TO sesh_gateway;",
+                "GRANT INSERT, SELECT, UPDATE ON approvals, credential_forms TO sesh_gateway;",
+            ]
         );
     }
 
-    use super::*;
+    #[test]
+    fn the_hand_over_covers_every_kind_of_object_in_its_database_only() {
+        let o = OWNERS_SQL;
+        for needle in [
+            "current_database()",
+            "rolsuper",
+            "SET lock_timeout",
+            "ALTER SCHEMA %I OWNER TO %I",
+            "'TABLE'",
+            "'VIEW'",
+            "'MATERIALIZED VIEW'",
+            "'FOREIGN TABLE'",
+            "ALTER SEQUENCE %s OWNER TO %I",
+            "ALTER ROUTINE %s OWNER TO %I",
+            "'TYPE'",
+            "'DOMAIN'",
+            // Extension members and linked sequences are left alone.
+            "d.deptype = 'e'",
+            "d.deptype IN ('a', 'i') AND d.refclassid = 'pg_class'::regclass",
+        ] {
+            assert!(o.contains(needle), "specs/007 R2: {needle}");
+        }
+        assert!(!o.contains("\\c "), "it never changes database itself");
+        assert!(!o.contains(":'"), "it takes no variables");
+    }
+
+    #[test]
+    fn unsafe_passwords_are_refused() {
+        for bad in ["a'b", "a\\b", "a\nb", ""] {
+            assert!(
+                migration_sql("ok", &[("openwebui", bad)]).is_err(),
+                "{bad:?}"
+            );
+            assert!(migration_sql(bad, &[]).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn every_service_password_is_generated() {
+        for (_, key) in SERVICE_DATABASES {
+            assert!(secrets::GENERATED.contains(&key), "{key}");
+        }
+        for key in [
+            "REDIS_OPENWEBUI_PASSWORD",
+            "REDIS_INFISICAL_PASSWORD",
+            "REDIS_PAPERLESS_PASSWORD",
+        ] {
+            assert!(secrets::GENERATED.contains(&key), "{key}");
+        }
+        assert!(
+            !secrets::GENERATED.contains(&"REDIS_PASSWORD"),
+            "the shared Redis is gone"
+        );
+    }
+
+    /// The text of one top-level service (or network) in the Compose file.
+    fn block<'a>(y: &'a str, name: &str) -> &'a str {
+        let header = format!("\n  {name}:\n");
+        let start = y.find(&header).unwrap_or_else(|| panic!("no {name}")) + header.len();
+        let rest = &y[start..];
+        let mut end = rest.len();
+        let mut at = 0;
+        for line in rest.split_inclusive('\n') {
+            let top = !line.trim().is_empty() && !line.starts_with("   ");
+            if top {
+                end = at;
+                break;
+            }
+            at += line.len();
+        }
+        &rest[..end]
+    }
+
+    fn members(y: &str, network: &str) -> Vec<String> {
+        let services = &y[y.find("\nservices:\n").unwrap()..y.find("\nvolumes:\n").unwrap()];
+        let mut out = vec![];
+        let mut current = String::new();
+        for line in services.lines() {
+            if let Some(name) = line.strip_prefix("  ").and_then(|l| l.strip_suffix(':'))
+                && !name.starts_with(' ')
+            {
+                current = name.to_string();
+            }
+            if let Some(list) = line.trim().strip_prefix("networks: [")
+                && list.trim_end_matches(']').split(", ").any(|n| n == network)
+            {
+                out.push(current.clone());
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn every_service_has_its_own_login_and_its_own_redis() {
+        let y = COMPOSE_YAML;
+        assert!(
+            !y.contains("://sesh:") && !y.contains("DBUSER: sesh"),
+            "specs/007 FR-001: no service logs in as the superuser"
+        );
+        for (service, url) in [
+            (
+                "litellm",
+                "postgresql://litellm:${LITELLM_DB_PASSWORD:?run sesh init}@postgres:5432/litellm",
+            ),
+            (
+                "open-webui",
+                "postgresql://openwebui:${OPENWEBUI_DB_PASSWORD:?run sesh init}@postgres:5432/openwebui",
+            ),
+            (
+                "infisical",
+                "postgresql://infisical:${INFISICAL_DB_PASSWORD:?run sesh init}@postgres:5432/infisical",
+            ),
+            (
+                "miniflux",
+                "postgres://miniflux:${MINIFLUX_DB_PASSWORD:?run sesh init}@postgres:5432/miniflux",
+            ),
+        ] {
+            assert!(block(y, service).contains(url), "{service}: {url}");
+        }
+        let p = block(y, "paperless");
+        assert!(p.contains("PAPERLESS_DBUSER: paperless\n"));
+        assert!(p.contains("PAPERLESS_DBPASS: ${PAPERLESS_DB_PASSWORD:?run sesh init}\n"));
+        assert!(!y.contains("\n  redis:\n"), "the shared Redis is gone");
+        assert!(!y.contains("@redis:"));
+        for (client, redis, network, key) in [
+            (
+                "open-webui",
+                "redis-openwebui",
+                "openwebui-redis",
+                "REDIS_OPENWEBUI_PASSWORD",
+            ),
+            (
+                "infisical",
+                "redis-infisical",
+                "infisical-redis",
+                "REDIS_INFISICAL_PASSWORD",
+            ),
+            (
+                "paperless",
+                "redis-paperless",
+                "paperless-redis",
+                "REDIS_PAPERLESS_PASSWORD",
+            ),
+        ] {
+            assert!(
+                block(y, client).contains(&format!(
+                    "redis://:${{{key}:?run sesh init}}@{redis}:6379/0\n"
+                )),
+                "{client} uses {redis}"
+            );
+            let r = block(y, redis);
+            assert!(r.contains(&format!("REDIS_PASSWORD: ${{{key}:?run sesh init}}\n")));
+            assert!(r.contains(&format!("networks: [{network}]\n")), "{redis}");
+            assert!(r.contains(&format!("{redis}-data:/data")));
+            assert_eq!(
+                block(y, network).trim(),
+                "internal: true",
+                "{network} is internal"
+            );
+            let mut m = members(y, network);
+            m.sort();
+            let mut want = vec![client.to_string(), redis.to_string()];
+            want.sort();
+            assert_eq!(
+                m, want,
+                "FR-008: only {client} and {redis} are on {network}"
+            );
+            assert!(
+                block(y, client).contains(&format!(
+                    "      {redis}:\n        condition: service_healthy"
+                )),
+                "{client} waits for {redis}"
+            );
+        }
+    }
     use crate::host::fake::{FakeCompose, FakeHttp};
     use crate::init::{self, InitOptions};
 
@@ -429,7 +700,7 @@ mod tests {
             vec![
                 "up postgres",
                 "sql sesh",
-                "up redis litellm searxng infisical ntfy paperless miniflux gateway executor-alice stub-llm",
+                "up redis-openwebui redis-infisical redis-paperless litellm searxng infisical ntfy paperless miniflux gateway executor-alice stub-llm",
                 "restart gateway",
                 "up open-webui"
             ]
@@ -448,6 +719,31 @@ mod tests {
             g.contains("http://stub-llm:8000"),
             "stub mode points upstreams at the fakes"
         );
+    }
+
+    #[test]
+    fn up_generates_the_passwords_an_older_install_lacks() {
+        let dir = ready("upgrade");
+        let mut s = Secrets::load(&dir).unwrap();
+        for k in ["OPENWEBUI_DB_PASSWORD", "REDIS_PAPERLESS_PASSWORD"] {
+            s.remove(k);
+        }
+        s.save(&dir).unwrap();
+        let compose = FakeCompose::default();
+        let report = run(&dir, &compose, &router()).unwrap();
+        for k in ["OPENWEBUI_DB_PASSWORD", "REDIS_PAPERLESS_PASSWORD"] {
+            assert!(
+                report.contains(&format!("generated {k}")),
+                "specs/007 FR-007: {report:?}"
+            );
+        }
+        let s = Secrets::load(&dir).unwrap();
+        let pw = s.get("OPENWEBUI_DB_PASSWORD").expect("saved");
+        assert!(!report.iter().any(|l| l.contains(pw)), "never printed");
+        assert_eq!(compose.calls.borrow()[1], "sql sesh", "before services");
+        // Nothing missing: nothing generated.
+        let report = run(&dir, &FakeCompose::default(), &router()).unwrap();
+        assert!(!report.iter().any(|l| l.starts_with("generated")));
     }
 
     #[test]

@@ -10,6 +10,22 @@
 
 name: sesh
 
+# Redis, one instance per client (specs/007 research.md R3, ADR 0010):
+# each has its own password, volume and internal network shared only
+# with that client, and is on no other network.
+x-redis: &redis
+  image: redis:7.4-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+  command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
+  healthcheck:
+    test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+    interval: 5s
+    timeout: 5s
+    retries: 20
+  restart: unless-stopped
+
+# Every service that stores data in Postgres logs in as its own role, which
+# owns only its database; never as the superuser `sesh` (specs/007).
+
 services:
   postgres:
     image: pgvector/pgvector:0.8.7-pg16@sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f
@@ -29,26 +45,36 @@ services:
       retries: 20
     restart: unless-stopped
 
-  redis:
-    image: redis:7.4-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+  redis-openwebui:
+    <<: *redis
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?run sesh init}
-    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
+      REDIS_PASSWORD: ${REDIS_OPENWEBUI_PASSWORD:?run sesh init}
     volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    restart: unless-stopped
+      - redis-openwebui-data:/data
+    networks: [openwebui-redis]
+
+  redis-infisical:
+    <<: *redis
+    environment:
+      REDIS_PASSWORD: ${REDIS_INFISICAL_PASSWORD:?run sesh init}
+    volumes:
+      - redis-infisical-data:/data
+    networks: [infisical-redis]
+
+  redis-paperless:
+    <<: *redis
+    environment:
+      REDIS_PASSWORD: ${REDIS_PAPERLESS_PASSWORD:?run sesh init}
+    volumes:
+      - redis-paperless-data:/data
+    networks: [paperless-redis]
 
   litellm:
     image: ghcr.io/berriai/litellm:v1.111.0@sha256:ce00096d012719d58c52cecfa373f7c6256dd1b0ff08f6fa607e10e9628f1f46
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?run sesh init}
-      DATABASE_URL: postgresql://sesh:${POSTGRES_PASSWORD}@postgres:5432/litellm
+      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD:?run sesh init}@postgres:5432/litellm
       SESH_INFERENCE_API_KEY: ${SESH_INFERENCE_API_KEY:-none}
       LITELLM_TELEMETRY: "False"
       STORE_MODEL_IN_DB: "False"
@@ -85,8 +111,8 @@ services:
       OPENAI_API_KEY: ${WEBUI_ROUTER_KEY:-pending}
       BYPASS_MODEL_ACCESS_CONTROL: "True"
       TASK_MODEL_EXTERNAL: agent-main
-      DATABASE_URL: postgresql://sesh:${POSTGRES_PASSWORD}@postgres:5432/openwebui
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      DATABASE_URL: postgresql://openwebui:${OPENWEBUI_DB_PASSWORD:?run sesh init}@postgres:5432/openwebui
+      REDIS_URL: redis://:${REDIS_OPENWEBUI_PASSWORD:?run sesh init}@redis-openwebui:6379/0
       WEBSOCKET_MANAGER: redis
       # Local-first: no telemetry, no model downloads.
       OFFLINE_MODE: "True"
@@ -98,6 +124,7 @@ services:
       - open-webui-data:/app/backend/data
     ports:
       - "127.0.0.1:${SESH_WEBUI_PORT:-3000}:8080"
+    networks: [default, openwebui-redis]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health >/dev/null"]
       interval: 10s
@@ -106,7 +133,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      redis-openwebui:
         condition: service_healthy
       litellm:
         condition: service_healthy
@@ -171,8 +198,8 @@ services:
       ENCRYPTION_KEY: ${INFISICAL_ENCRYPTION_KEY:?run sesh init}
       AUTH_SECRET: ${INFISICAL_AUTH_SECRET:?run sesh init}
       INSTANCE_SETUP_TOKEN: ${INFISICAL_SETUP_TOKEN:?run sesh init}
-      DB_CONNECTION_URI: postgresql://sesh:${POSTGRES_PASSWORD:?run sesh init}@postgres:5432/infisical
-      REDIS_URL: redis://:${REDIS_PASSWORD:?run sesh init}@redis:6379/1
+      DB_CONNECTION_URI: postgresql://infisical:${INFISICAL_DB_PASSWORD:?run sesh init}@postgres:5432/infisical
+      REDIS_URL: redis://:${REDIS_INFISICAL_PASSWORD:?run sesh init}@redis-infisical:6379/0
       SITE_URL: http://127.0.0.1:${SESH_INFISICAL_PORT:-8222}
       HOST: 0.0.0.0
       PORT: "8080"
@@ -180,6 +207,7 @@ services:
       DISABLE_UPDATE_CHECK: "true"
     ports:
       - "127.0.0.1:${SESH_INFISICAL_PORT:-8222}:8080"
+    networks: [default, infisical-redis]
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8080/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 5s
@@ -189,7 +217,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      redis-infisical:
         condition: service_healthy
     restart: unless-stopped
 
@@ -211,16 +239,17 @@ services:
     restart: unless-stopped
 
   # Documents (specs/005, ADR 0008). Reachable only from the gateway (the
-  # `docs` network is internal); it reaches Postgres and Redis on `default`.
+  # `docs` network is internal); it reaches Postgres on `default` and its
+  # own Redis on `paperless-redis`.
   paperless:
     image: paperlessngx/paperless-ngx:3.5.1@sha256:8508853b8a0f8394074260957d0be186c8c64f346973b24a7583de4580f306b9
     environment:
-      PAPERLESS_REDIS: redis://:${REDIS_PASSWORD:?run sesh init}@redis:6379/2
+      PAPERLESS_REDIS: redis://:${REDIS_PAPERLESS_PASSWORD:?run sesh init}@redis-paperless:6379/0
       PAPERLESS_DBENGINE: postgresql
       PAPERLESS_DBHOST: postgres
       PAPERLESS_DBNAME: paperless
-      PAPERLESS_DBUSER: sesh
-      PAPERLESS_DBPASS: ${POSTGRES_PASSWORD:?run sesh init}
+      PAPERLESS_DBUSER: paperless
+      PAPERLESS_DBPASS: ${PAPERLESS_DB_PASSWORD:?run sesh init}
       PAPERLESS_SECRET_KEY: ${PAPERLESS_SECRET_KEY:?run sesh init}
       PAPERLESS_ADMIN_USER: sesh-gateway
       PAPERLESS_ADMIN_PASSWORD: ${PAPERLESS_ADMIN_PASSWORD:?run sesh init}
@@ -231,7 +260,7 @@ services:
     volumes:
       - paperless-data:/usr/src/paperless/data
       - paperless-media:/usr/src/paperless/media
-    networks: [default, docs]
+    networks: [default, docs, paperless-redis]
     healthcheck:
       test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/ | grep -qE '^(200|301|302|401|403)$$'"]
       interval: 10s
@@ -241,7 +270,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      redis-paperless:
         condition: service_healthy
     restart: unless-stopped
 
@@ -294,7 +323,9 @@ services:
 
 volumes:
   postgres-data:
-  redis-data:
+  redis-openwebui-data:
+  redis-infisical-data:
+  redis-paperless-data:
   open-webui-data:
   ntfy-data:
   paperless-data:
@@ -311,4 +342,11 @@ networks:
     internal: true
   feeds-egress: {}
   feeds-db:
+    internal: true
+  # Each service's own Redis (specs/007 research.md R3).
+  openwebui-redis:
+    internal: true
+  infisical-redis:
+    internal: true
+  paperless-redis:
     internal: true
