@@ -110,6 +110,26 @@ pub struct ConnectorDescriptor {
     pub name: String,
     pub instructions: String,
     pub methods: BTreeMap<String, MethodDescriptor>,
+    /// Credentials the connector needs, by name (specs/004 data-model.md).
+    /// Only the gateway ever holds their values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credentials: Vec<String>,
+}
+
+/// A credential name: `[A-Z][A-Z0-9_]{0,63}`.
+pub fn valid_credential_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some('A'..='Z'))
+        && name.len() <= 64
+        && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Where a credential lives in the secret store: `<CONNECTOR>__<NAME>`.
+pub fn credential_key(connector: &str, name: &str) -> String {
+    format!(
+        "{}__{name}",
+        connector.to_ascii_uppercase().replace('-', "_")
+    )
 }
 
 #[cfg(test)]
@@ -162,6 +182,39 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
+
+    #[test]
+    fn credential_names_and_keys() {
+        assert!(valid_credential_name("TOKEN") && valid_credential_name("API_KEY_2"));
+        for bad in ["", "token", "1TOKEN", "TO-KEN", &"A".repeat(65)] {
+            assert!(!valid_credential_name(bad), "{bad}");
+        }
+        assert_eq!(credential_key("testcred", "TOKEN"), "TESTCRED__TOKEN");
+    }
+
+    #[test]
+    fn approval_settings_default_and_validate() {
+        let s = GatewaySettings::default();
+        assert_eq!(s.approvals_base_url, "http://127.0.0.1:7002");
+        assert_eq!((s.approval_ttl_secs, s.form_ttl_secs), (900, 1800));
+        assert_eq!((s.approvals_pending_max, s.approvals_per_hour), (10, 30));
+        assert!(s.validate().is_ok());
+        let bad = GatewaySettings {
+            ntfy_topic: "a b".into(),
+            ..GatewaySettings::default()
+        };
+        assert!(bad.validate().is_err());
+        let bad = GatewaySettings {
+            approval_ttl_secs: 1,
+            ..GatewaySettings::default()
+        };
+        assert!(bad.validate().is_err());
+        let old: GatewaySettings = toml::from_str("deadline_secs = 30").unwrap();
+        assert_eq!(
+            old.approval_ttl_secs, 900,
+            "older gateway.toml files still load"
+        );
+    }
 }
 
 /// Gateway settings (data-model.md, Gateway settings). The CLI keeps them in
@@ -179,6 +232,20 @@ pub struct GatewaySettings {
     pub home: Option<Home>,
     #[serde(default)]
     pub upstreams: Upstreams,
+    /// Base of the approval and form links the person opens (specs/004).
+    #[serde(default = "d_approvals_base")]
+    pub approvals_base_url: String,
+    #[serde(default = "d_approval_ttl")]
+    pub approval_ttl_secs: u64,
+    #[serde(default = "d_form_ttl")]
+    pub form_ttl_secs: u64,
+    #[serde(default = "d_pending_max")]
+    pub approvals_pending_max: u32,
+    #[serde(default = "d_per_hour")]
+    pub approvals_per_hour: u32,
+    /// The person's ntfy topic; empty until `sesh init` generates one.
+    #[serde(default)]
+    pub ntfy_topic: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -199,6 +266,9 @@ pub struct Upstreams {
     pub open_meteo: String,
     #[serde(default = "d_nominatim")]
     pub nominatim: String,
+    /// The test connectors' upstream (stub mode only).
+    #[serde(default = "d_test")]
+    pub test: String,
 }
 
 fn d_deadline() -> u64 {
@@ -222,6 +292,24 @@ fn d_open_meteo() -> String {
 fn d_nominatim() -> String {
     "https://nominatim.openstreetmap.org".into()
 }
+fn d_test() -> String {
+    "http://stub-llm:8000".into()
+}
+fn d_approvals_base() -> String {
+    "http://127.0.0.1:7002".into()
+}
+fn d_approval_ttl() -> u64 {
+    900
+}
+fn d_form_ttl() -> u64 {
+    1800
+}
+fn d_pending_max() -> u32 {
+    10
+}
+fn d_per_hour() -> u32 {
+    30
+}
 
 impl Default for Upstreams {
     fn default() -> Self {
@@ -230,6 +318,7 @@ impl Default for Upstreams {
             kiwix: d_kiwix(),
             open_meteo: d_open_meteo(),
             nominatim: d_nominatim(),
+            test: d_test(),
         }
     }
 }
@@ -242,6 +331,12 @@ impl Default for GatewaySettings {
             max_result_bytes: d_result(),
             home: None,
             upstreams: Upstreams::default(),
+            approvals_base_url: d_approvals_base(),
+            approval_ttl_secs: d_approval_ttl(),
+            form_ttl_secs: d_form_ttl(),
+            approvals_pending_max: d_pending_max(),
+            approvals_per_hour: d_per_hour(),
+            ntfy_topic: String::new(),
         }
     }
 }
@@ -256,6 +351,27 @@ impl GatewaySettings {
         }
         if !(1024..=1_048_576).contains(&self.max_result_bytes) {
             bail!("gateway.max_result_bytes must be 1 KiB-1 MiB");
+        }
+        if !(self.approvals_base_url.starts_with("http://")
+            || self.approvals_base_url.starts_with("https://"))
+        {
+            bail!("gateway.approvals_base_url must be an http(s) URL");
+        }
+        if !(10..=86_400).contains(&self.approval_ttl_secs)
+            || !(10..=86_400).contains(&self.form_ttl_secs)
+        {
+            bail!("gateway.approval_ttl_secs and form_ttl_secs must be 10 s-1 day");
+        }
+        if self.approvals_pending_max == 0 || self.approvals_per_hour == 0 {
+            bail!("gateway approval limits must be at least 1");
+        }
+        if !self.ntfy_topic.is_empty()
+            && !self
+                .ntfy_topic
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            bail!("gateway.ntfy_topic may hold only letters, digits, - and _");
         }
         if let Some(h) = &self.home
             && (!(-90.0..=90.0).contains(&h.latitude) || !(-180.0..=180.0).contains(&h.longitude))

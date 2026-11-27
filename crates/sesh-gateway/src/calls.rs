@@ -3,6 +3,7 @@
 //! is untrusted, so everything is checked again here.
 
 use crate::Gateway;
+use crate::approvals::{self, Ask, Gate};
 use crate::audit::Entry;
 use crate::capability::Refusal;
 use crate::redact::summarize;
@@ -75,28 +76,84 @@ pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Rep
                 "connector not granted to this agent",
             ));
         }
-        let Some(desc) = gw
-            .connectors
-            .iter()
-            .find(|c| c.name == connector)
-            .and_then(|c| c.methods.get(&method))
-        else {
+        let Some(cdesc) = gw.connectors.iter().find(|c| c.name == connector) else {
             break 'checks Err(refused(&mut entry, 404, "no such method"));
         };
-        if desc.requires_approval {
-            // No approval channel yet (Phase 5): refuse whatever the executor claims.
-            break 'checks Err(refused(
-                &mut entry,
-                403,
-                "approval required and no approval channel is available",
-            ));
-        }
+        let Some(desc) = cdesc.methods.get(&method) else {
+            break 'checks Err(refused(&mut entry, 404, "no such method"));
+        };
         if let Err(problem) = schema::validate(&desc.input, &args) {
             break 'checks Err(refused(&mut entry, 400, &problem));
         }
-        match gw.upstream.call(&connector, &method, &args).await {
+        // Credentials the connector declares, read only here (FR-011).
+        let mut creds = std::collections::BTreeMap::new();
+        for name in &cdesc.credentials {
+            match gw
+                .secrets
+                .get(&sesh_core::credential_key(&connector, name))
+                .await
+            {
+                Ok(Some(v)) => {
+                    creds.insert(name.clone(), v);
+                }
+                Ok(None) => {
+                    break 'checks Err(refused(
+                        &mut entry,
+                        409,
+                        &format!("{connector} is not set up yet (credential {name} is missing)"),
+                    ));
+                }
+                Err(_) => {
+                    break 'checks Err(refused(&mut entry, 503, "credential store unavailable"));
+                }
+            }
+        }
+        // Approval-gated methods: the gateway decides, whatever the executor
+        // claims (ADR 0007).
+        let mut approved = None;
+        if desc.requires_approval {
+            let ask = Ask {
+                agent: &grant.agent,
+                connector: &connector,
+                method: &method,
+                description: &desc.description,
+                args: &args,
+            };
+            match approvals::gate(
+                &gw.approvals,
+                &gw.notifier,
+                &gw.approval_limits(),
+                &ask,
+                approvals::now(),
+            )
+            .await
+            {
+                Gate::Run(r) => approved = Some(r.id),
+                Gate::Pending(r) => {
+                    gw.note_pending(&grant.execution, &r);
+                    entry.reason = Some(format!("approval pending {}", r.id));
+                    break 'checks Err((
+                        202,
+                        format!(
+                            "{connector}.{method} needs the person's approval; they have been asked (request {})",
+                            r.id
+                        ),
+                    ));
+                }
+                Gate::Refused(why) => break 'checks Err(refused(&mut entry, 403, &why)),
+            }
+        }
+        match gw.upstream.call(&connector, &method, &args, &creds).await {
             Ok(v) => {
                 entry.outcome = "allowed";
+                let mut notes = vec![];
+                if let Some(id) = &approved {
+                    notes.push(format!("approved {id}"));
+                }
+                for name in creds.keys() {
+                    notes.push(format!("credential {connector}/{name}"));
+                }
+                entry.reason = (!notes.is_empty()).then(|| notes.join("; "));
                 Ok(v)
             }
             Err(e) => {
@@ -139,7 +196,7 @@ pub mod tests {
         Gateway {
             agents: Agents::fixed(AgentsFile {
                 agents: vec![
-                    agent("alice", &["search", "geo", "testgate"]),
+                    agent("alice", &["search", "geo", "testgate", "testcred"]),
                     agent("bob", &["search"]),
                 ],
             }),
@@ -149,6 +206,11 @@ pub mod tests {
             upstream: Upstream::new(settings.clone()).unwrap(),
             settings,
             executor_url: "http://executor-{agent}:8000".into(),
+            approvals: crate::approvals::Store::memory(),
+            notifier: crate::notify::Notifier::memory(),
+            secrets: crate::secrets::SecretStore::memory(),
+            admin_token: Some("admin-token".into()),
+            pending: Default::default(),
         }
     }
 
@@ -162,6 +224,7 @@ pub mod tests {
         };
         s.upstreams.open_meteo = base.into();
         s.upstreams.searxng = base.into();
+        s.upstreams.test = base.into();
         s
     }
 
@@ -172,6 +235,18 @@ pub mod tests {
                 "/search",
                 get(|| async {
                     Json(json!({"results": [{"title": "T", "url": "u", "content": "c"}]}))
+                }),
+            )
+            .route(
+                "/testcred",
+                get(|h: axum::http::HeaderMap| async move {
+                    let ok = h.get("authorization").and_then(|v| v.to_str().ok())
+                        == Some("Bearer right-value");
+                    if ok {
+                        axum::http::StatusCode::OK
+                    } else {
+                        axum::http::StatusCode::UNAUTHORIZED
+                    }
                 }),
             )
             .route(
@@ -254,8 +329,8 @@ pub mod tests {
             (
                 Some(alice.as_str()),
                 call("testgate", "act", json!({"approved": true})),
-                403,
-                "approval",
+                400,
+                "not allowed",
             ),
             (
                 Some(alice.as_str()),
@@ -319,5 +394,75 @@ pub mod tests {
         let r = handle(&broken, Some(&cap), &call("geo", "forecast", json!({}))).await;
         assert_eq!(r.status, 503);
         assert!(r.body.get("result").is_none());
+    }
+
+    #[tokio::test]
+    async fn gated_calls_wait_then_run_once() {
+        let gw = gateway(Audit::memory(), settings_with(&fake_upstream().await));
+        let cap = gw.caps.issue("alice", "exec_g", Duration::from_secs(30));
+        let act = call("testgate", "act", json!({"note": "hi"}));
+        let r = handle(&gw, Some(&cap), &act).await;
+        assert_eq!(r.status, 202, "{:?}", r.body);
+        assert_eq!(gw.notifier.sent().len(), 1);
+        let pending = gw.take_pending("exec_g");
+        assert_eq!(pending.len(), 1);
+        let id = pending[0].id.clone();
+        let secret = gw.notifier.sent()[0]
+            .link
+            .rsplit('#')
+            .next()
+            .unwrap()
+            .to_string();
+        crate::approvals::decide(&gw.approvals, &id, &secret, true, crate::approvals::now())
+            .await
+            .unwrap();
+        let r = handle(&gw, Some(&cap), &act).await;
+        assert_eq!(r.body["result"]["done"], true, "{:?}", r.body);
+        let r = handle(&gw, Some(&cap), &act).await;
+        assert_eq!(r.status, 202, "an approval runs once");
+        let e = gw.audit.entries();
+        assert_eq!(
+            e[0].reason.as_deref(),
+            Some(format!("approval pending {id}").as_str())
+        );
+        assert_eq!(e[1].outcome, "allowed");
+        assert_eq!(
+            e[1].reason.as_deref(),
+            Some(format!("approved {id}").as_str())
+        );
+        assert!(!format!("{e:?}").contains(&secret));
+    }
+
+    #[tokio::test]
+    async fn credentials_reach_only_their_upstream() {
+        let gw = gateway(Audit::memory(), settings_with(&fake_upstream().await));
+        let cap = gw.caps.issue("alice", "exec_c", Duration::from_secs(30));
+        let check = call("testcred", "check", json!({}));
+        let r = handle(&gw, Some(&cap), &check).await;
+        assert_eq!(r.status, 409);
+        assert!(r.body["error"].as_str().unwrap().contains("not set up yet"));
+        gw.secrets
+            .put("TESTCRED__TOKEN", "right-value")
+            .await
+            .unwrap();
+        let r = handle(&gw, Some(&cap), &check).await;
+        assert_eq!(r.body, json!({"ok": true, "result": {"ok": true}}));
+        assert!(!r.body.to_string().contains("right-value"));
+        let e = gw.audit.entries();
+        assert_eq!(e[1].reason.as_deref(), Some("credential testcred/TOKEN"));
+        assert!(!format!("{e:?}").contains("right-value"));
+        let mut broken = gateway(Audit::memory(), settings_with("http://127.0.0.1:9"));
+        broken.secrets = crate::secrets::SecretStore::broken();
+        let cap = broken
+            .caps
+            .issue("alice", "exec_d", Duration::from_secs(30));
+        let r = handle(&broken, Some(&cap), &check).await;
+        assert_eq!(
+            (r.status, r.body["error"].as_str().unwrap()),
+            (503, "credential store unavailable")
+        );
+        // Calls that need no credential still work without the store.
+        let r = handle(&broken, Some(&cap), &call("geo", "forecast", json!({}))).await;
+        assert_ne!(r.status, 503);
     }
 }

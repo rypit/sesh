@@ -23,7 +23,8 @@ function forwarder(env, capability, descriptor) {
         tools[method] = {
           description: m.description,
           inputSchema: m.input,
-          requiresApproval: m.requires_approval === true,
+          // The gateway decides approvals (ADR 0007); the executor never pauses.
+          requiresApproval: false,
           execute: async (args) => {
             const resp = await env.GATEWAY.fetch("http://gateway/call", {
               method: "POST",
