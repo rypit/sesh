@@ -40,6 +40,9 @@ services:
       SESH_GATEWAY_ADMIN_TOKEN: ${SESH_EVAL_ADMIN_TOKEN:-}
       SESH_PAPERLESS_USER: eval
       SESH_PAPERLESS_PASSWORD: eval
+      # The fake Miniflux keys on the user name; the password is a dummy.
+      SESH_MINIFLUX_USER: sesh-gateway
+      SESH_MINIFLUX_PASSWORD: eval
     volumes:
       - ${SESH_EVAL_DIR:?}/gateway:/etc/sesh:ro
       - ${SESH_EVAL_DIR:?}/audit:/var/log/sesh-eval

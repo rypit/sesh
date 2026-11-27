@@ -19,6 +19,8 @@ services:
   miniflux:
     environment:
       FETCHER_ALLOW_PRIVATE_NETWORKS: "1"
+      # Fetch errors are logged only at debug level.
+      LOG_LEVEL: debug
   # The test-only approval-gated connector, for negative tests.
   gateway:
     environment:

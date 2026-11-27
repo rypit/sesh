@@ -231,7 +231,9 @@ impl Miniflux {
     pub fn new(admin_user: &str, admin_password: &str) -> Self {
         Miniflux {
             http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(20))
+                // Above Miniflux's own 20 s fetch timeout: adding a feed waits
+                // for Miniflux to fetch it, so its error arrives first.
+                .timeout(Duration::from_secs(35))
                 .build()
                 .expect("http client"),
             admin_user: admin_user.into(),
@@ -257,9 +259,24 @@ impl Miniflux {
         if let Some(b) = body {
             r = r.json(&b);
         }
-        let resp = r.send().await.map_err(|_| UNAVAILABLE.to_string())?;
+        // Say how it failed (never the address or a credential), so an
+        // operator can tell a slow publisher from a stopped service.
+        let resp = r.send().await.map_err(|e| {
+            let how = if e.is_timeout() {
+                "timed out"
+            } else if e.is_connect() {
+                "couldn't connect"
+            } else {
+                "request failed"
+            };
+            tracing::warn!(path, how, "feed service request failed");
+            format!("{UNAVAILABLE} ({how})")
+        })?;
         let status = resp.status().as_u16();
-        let text = resp.text().await.map_err(|_| UNAVAILABLE.to_string())?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|_| format!("{UNAVAILABLE} (unreadable reply)"))?;
         Ok((status, serde_json::from_str(&text).unwrap_or(Value::Null)))
     }
 
@@ -451,7 +468,7 @@ impl Miniflux {
             .and_then(|c| c.first())
             .and_then(|c| c["id"].as_u64())
             .filter(|_| s == 200)
-            .ok_or(UNAVAILABLE)?;
+            .ok_or_else(|| format!("{UNAVAILABLE} (no category: {s})"))?;
         let (_, s, made) = self
             .as_owner(
                 base,
@@ -468,7 +485,9 @@ impl Miniflux {
                 cut(made["error_message"].as_str().unwrap_or("it refused"), 200)
             ));
         }
-        let id = made["feed_id"].as_u64().ok_or(UNAVAILABLE)?;
+        let id = made["feed_id"]
+            .as_u64()
+            .ok_or_else(|| format!("{UNAVAILABLE} (no feed id: {s})"))?;
         let (_, s, _) = self
             .as_owner(
                 base,
@@ -480,7 +499,7 @@ impl Miniflux {
             )
             .await?;
         if !(200..300).contains(&s) {
-            return Err(UNAVAILABLE.into());
+            return Err(format!("{UNAVAILABLE} (renaming answered {s})"));
         }
         Ok(id)
     }
@@ -1146,6 +1165,10 @@ pub mod tests {
         let mut gw = owners_gateway(seeded()).await;
         gw.settings.upstreams.miniflux = "http://127.0.0.1:9".into();
         let r = as_agent(&gw, "anabot", "list", json!({})).await;
-        assert_eq!(r.body["error"], UNAVAILABLE);
+        assert_eq!(
+            r.body["error"],
+            format!("{UNAVAILABLE} (couldn't connect)"),
+            "says how, never where"
+        );
     }
 }
