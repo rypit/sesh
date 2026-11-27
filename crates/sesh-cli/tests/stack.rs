@@ -1,8 +1,9 @@
 //! Stack tests for features 001 (specs/001-foundation/tasks.md T012–T023)
 //! 002 (specs/002-gateway-core/tasks.md T015–T022), 003
 //! (specs/003-model-evals/tasks.md T009–T024), 004
-//! (specs/004-secrets-approvals/tasks.md T007–T017) and 005
-//! (specs/005-google-paperless/tasks.md) and 006 (specs/006-rss-feeds/tasks.md).
+//! (specs/004-secrets-approvals/tasks.md T007–T017), 005
+//! (specs/005-google-paperless/tasks.md), 006 (specs/006-rss-feeds/tasks.md)
+//! and 007 (specs/007-service-isolation/tasks.md).
 //!
 //! They start the real stack with the stub model server, so they need
 //! Docker and the `sesh-stub-llm:dev`, `sesh-gateway:dev` and
@@ -50,6 +51,13 @@ impl Stack {
 
     /// `docker compose` with the same project, env file and files `sesh` uses.
     fn compose(&self, extra_files: &[&Path], env: &[(&str, &str)], args: &[&str]) -> Output {
+        self.compose_command(extra_files, env)
+            .args(args)
+            .output()
+            .expect("run docker compose")
+    }
+
+    fn compose_command(&self, extra_files: &[&Path], env: &[(&str, &str)]) -> Command {
         let c = self.dir.join("compose");
         let mut cmd = Command::new("docker");
         cmd.args(["compose", "-p", "sesh", "--env-file"])
@@ -70,7 +78,7 @@ impl Stack {
         for (k, v) in env {
             cmd.env(k, v);
         }
-        cmd.args(args).output().expect("run docker compose")
+        cmd
     }
 
     fn secret(&self, key: &str) -> String {
@@ -2331,4 +2339,536 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+// ---- Feature 007: service isolation ----
+
+/// Each adopted service's Postgres login, named like its database.
+const SERVICE_ROLES: [&str; 5] = ["openwebui", "litellm", "infisical", "paperless", "miniflux"];
+/// The services whose data the pre-007 fixture hands back to the superuser.
+const PRE_007_ROLES: [&str; 4] = ["openwebui", "litellm", "infisical", "paperless"];
+/// (client, its Redis, the network they alone share).
+const REDIS_CLIENTS: [(&str, &str, &str); 3] = [
+    ("open-webui", "redis-openwebui", "sesh_openwebui-redis"),
+    ("infisical", "redis-infisical", "sesh_infisical-redis"),
+    ("paperless", "redis-paperless", "sesh_paperless-redis"),
+];
+
+/// Objects in the current database that its owner doesn't own, other
+/// than an extension's and array types (which follow their element type).
+const NOT_OWNED_SQL: &str = "SELECT kind || ' ' || name || ' (' || pg_get_userbyid(owner) || ')' FROM ( \
+  SELECT 'schema' AS kind, n.oid, n.nspname::text AS name, n.nspowner AS owner FROM pg_namespace n \
+    WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' \
+      AND n.nspowner <> 'pg_database_owner'::regrole \
+  UNION ALL SELECT 'relation', c.oid, c.oid::regclass::text, c.relowner FROM pg_class c \
+    JOIN pg_namespace n ON n.oid = c.relnamespace \
+    WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' \
+  UNION ALL SELECT 'routine', p.oid, p.oid::regprocedure::text, p.proowner FROM pg_proc p \
+    JOIN pg_namespace n ON n.oid = p.pronamespace \
+    WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' \
+  UNION ALL SELECT 'type', t.oid, t.oid::regtype::text, t.typowner FROM pg_type t \
+    JOIN pg_namespace n ON n.oid = t.typnamespace \
+    WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' AND t.typcategory <> 'A' \
+) o WHERE o.owner <> (SELECT datdba FROM pg_database WHERE datname = current_database()) \
+  AND NOT EXISTS (SELECT FROM pg_depend d WHERE d.objid = o.oid AND d.deptype = 'e') \
+ORDER BY 1 LIMIT 20";
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+impl Stack {
+    /// psql as `role` over the Postgres container's local socket.
+    fn psql_as(&self, role: &str, db: &str, sql: &str) -> (bool, String) {
+        let out = self.compose(
+            &[],
+            &[],
+            &[
+                "exec",
+                "-T",
+                "postgres",
+                "psql",
+                "-U",
+                role,
+                "-d",
+                db,
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-Atc",
+                sql,
+            ],
+        );
+        (
+            out.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout).trim(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+        )
+    }
+
+    /// SQL as the superuser in `db`; panics on failure.
+    fn sql_in(&self, db: &str, sql: &str) -> String {
+        let (ok, out) = self.psql_as("sesh", db, sql);
+        assert!(ok, "{db}: {out}");
+        out
+    }
+
+    /// A SQL script on psql's stdin, as the superuser in `db`.
+    fn sql_script(&self, db: &str, script: &str) {
+        use std::io::Write;
+        let mut child = self
+            .compose_command(&[], &[])
+            .args([
+                "exec",
+                "-T",
+                "postgres",
+                "psql",
+                "-U",
+                "sesh",
+                "-d",
+                db,
+                "-q",
+                "-v",
+                "ON_ERROR_STOP=1",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("run docker compose exec");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(script.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "script in {db}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Paperless's API, as its admin, from inside its container (the
+    /// password never leaves it).
+    fn paperless_api(&self, args: &str) -> (bool, String) {
+        self.bash_in(
+            "paperless",
+            &format!(
+                "printf 'user = \"sesh-gateway:%s\"\\n' \"$PAPERLESS_ADMIN_PASSWORD\" | curl -fsS -K - {args}"
+            ),
+        )
+    }
+
+    /// FR-001–FR-003: each login opens its own database and no other, and
+    /// has no administrative rights.
+    fn assert_logins_isolated(&self, when: &str) {
+        let others = ["gateway", "sesh", "postgres"];
+        for role in SERVICE_ROLES {
+            let (ok, out) = self.psql_as(role, role, "SELECT 1");
+            assert!(ok, "{when}: {role} can't open its own database: {out}");
+            for db in SERVICE_ROLES.iter().chain(&others).filter(|d| **d != role) {
+                let (ok, _) = self.psql_as(role, db, "SELECT 1");
+                assert!(!ok, "{when}: SC-001: the {role} login opened {db}");
+            }
+            assert_eq!(
+                self.sql_in(
+                    "sesh",
+                    &format!(
+                        "SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls FROM pg_roles WHERE rolname = '{role}'"
+                    )
+                ),
+                "f",
+                "{when}: FR-002: {role} has administrative rights"
+            );
+        }
+        // FR-009: the gateway's login is as it was.
+        assert!(self.psql_as("sesh_gateway", "gateway", "SELECT 1").0);
+        for db in SERVICE_ROLES.iter().chain(&["sesh", "postgres"]) {
+            assert!(!self.psql_as("sesh_gateway", db, "SELECT 1").0, "{db}");
+        }
+    }
+
+    /// SC-002: every service database, and everything in it, is its role's.
+    fn assert_owned(&self, when: &str) {
+        for role in SERVICE_ROLES {
+            assert_eq!(
+                self.sql_in(
+                    role,
+                    "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = current_database()"
+                ),
+                role,
+                "{when}: the {role} database's owner"
+            );
+            let left = self.sql_in(role, NOT_OWNED_SQL);
+            assert!(left.is_empty(), "{when}: in {role}, not {role}'s: {left}");
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs Docker and the sesh images; run with `make stack-test`"]
+fn isolation_stack() {
+    let dir = std::env::temp_dir().join(format!("sesh-isolation-stack-{}", std::process::id()));
+    let stack = Stack { dir };
+    let kept = format!("cred-{}-kept", std::process::id());
+    let replaced = format!("cred-{}-replaced", std::process::id());
+    let cred_hash = sha256_hex(&kept);
+    let stub_env = [("STUB_TESTCRED_SHA256", cred_hash.as_str())];
+    let up = |what: &str| {
+        let out = stack.sesh_env(&stub_env, &["up"]);
+        assert!(
+            out.status.success(),
+            "{what}: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    stack.sesh_ok(&["init", "--stub", "--admin-email", "admin@sesh.test"]);
+    stack.sesh_ok(&["agent", "add", "alice", "--connectors", "testcred"]);
+    up("a fresh install");
+
+    // US1 on a fresh install.
+    stack.assert_logins_isolated("fresh install");
+    stack.assert_owned("fresh install");
+    let (_, checks) = stack.doctor();
+    assert_eq!(status_of(&checks, "db-isolation"), "pass", "{checks}");
+
+    // US2: back to how an install from before feature 007 ran: the four
+    // services stopped, their databases handed back to the superuser with
+    // probe objects of every kind, then started with the superuser's
+    // connection strings and one shared Redis.
+    let legacy = fixture("pre-007.compose.yaml");
+    let legacy_pw = sha256_hex(&format!(
+        "legacy-redis-{}-{:?}",
+        std::process::id(),
+        std::time::SystemTime::now()
+    ));
+    let legacy_env = [
+        ("LEGACY_REDIS_PASSWORD", legacy_pw.as_str()),
+        ("STUB_TESTCRED_SHA256", cred_hash.as_str()),
+    ];
+    let out = stack.compose(
+        &[],
+        &[],
+        &["stop", "open-webui", "litellm", "infisical", "paperless"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    stack.sql_script(
+        "sesh",
+        &std::fs::read_to_string(fixture("pre-007.sql")).unwrap(),
+    );
+    let objects = std::fs::read_to_string(fixture("pre-007-objects.sql")).unwrap();
+    for db in PRE_007_ROLES {
+        stack.sql_script(db, &objects);
+    }
+    let out = stack.compose(
+        &[&legacy],
+        &legacy_env,
+        &[
+            "up",
+            "-d",
+            "--wait",
+            "redis",
+            "litellm",
+            "infisical",
+            "paperless",
+            "open-webui",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "the pre-007 stack didn't start: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for db in PRE_007_ROLES {
+        assert_eq!(
+            stack.sql_in(
+                "sesh",
+                &format!("SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = '{db}'")
+            ),
+            "sesh",
+            "the fixture gave {db} back to the superuser"
+        );
+        assert_ne!(
+            stack.sql_in(
+                db,
+                "SELECT count(*) FROM pg_tables WHERE tableowner = 'sesh' AND schemaname = 'public'"
+            ),
+            "0",
+            "{db}'s own tables belong to the superuser before the upgrade"
+        );
+        assert!(
+            !stack.psql_as(db, db, "SELECT 1").0,
+            "the {db} login is gone before the upgrade"
+        );
+    }
+
+    // US4 (FR-010, SC-004): doctor fails on the pre-007 stack.
+    let (ok, checks) = stack.doctor();
+    assert!(!ok, "doctor passed on the pre-007 stack");
+    assert_eq!(status_of(&checks, "db-isolation"), "fail", "{checks}");
+    let detail = checks
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "db-isolation")
+        .unwrap()["detail"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        detail.contains("database litellm is owned by sesh"),
+        "{detail}"
+    );
+
+    // Data made in the pre-007 state: an Open WebUI user, a router key, a
+    // stored credential, a Paperless tag.
+    let admin = signin("admin@sesh.test", &stack.secret("WEBUI_ADMIN_PASSWORD"));
+    let (s, body) = call(
+        "POST",
+        &format!("{WEBUI}/api/v1/auths/add"),
+        Some(&admin),
+        Some(json!({"name": "Before", "email": "before@sesh.test",
+            "password": "before-password-1", "role": "user"})),
+    );
+    assert_eq!(s, 200, "creating a user failed: {body}");
+    let (s, body) = call(
+        "POST",
+        &format!("{ROUTER}/key/generate"),
+        Some(&stack.secret("LITELLM_MASTER_KEY")),
+        Some(json!({"key_alias": "isolation-before", "models": ["agent-main"]})),
+    );
+    assert_eq!(s, 200, "creating a router key failed: {body}");
+    let before_key = body["key"].as_str().expect("a key").to_string();
+    assert_eq!(chat("agent-main", &before_key).0, 200);
+    stack.fill_credential("testcred", "TOKEN", &kept);
+    let mut alice = Mcp::connect(&stack.token("alice")).expect("alice connects");
+    let out = alice.execute("async () => await testcred.check({})");
+    assert!(
+        out.contains("\"ok\":true"),
+        "the pre-007 secret store: {out}"
+    );
+    let (ok, out) = stack.paperless_api(
+        "-H 'Content-Type: application/json' -d '{\"name\":\"isolation-before\"}' http://127.0.0.1:8000/api/tags/",
+    );
+    assert!(ok, "creating a Paperless tag failed: {out}");
+
+    // US2: the upgrade is `sesh up` alone. A pre-007 secrets.env has none
+    // of the new passwords (they were only needed until now to interpolate
+    // the current Compose file), so `sesh up` makes them.
+    let new_keys = [
+        "OPENWEBUI_DB_PASSWORD",
+        "LITELLM_DB_PASSWORD",
+        "INFISICAL_DB_PASSWORD",
+        "PAPERLESS_DB_PASSWORD",
+        "REDIS_OPENWEBUI_PASSWORD",
+        "REDIS_INFISICAL_PASSWORD",
+        "REDIS_PAPERLESS_PASSWORD",
+    ];
+    let path = stack.dir.join("secrets.env");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let kept_lines: Vec<&str> = text
+        .lines()
+        .filter(|l| !new_keys.iter().any(|k| l.starts_with(&format!("{k}="))))
+        .collect();
+    std::fs::write(&path, kept_lines.join("\n") + "\n").unwrap();
+    let printed = up("the upgrade");
+    for key in new_keys {
+        assert!(
+            printed.contains(&format!("generated {key}")),
+            "FR-007: {printed}"
+        );
+    }
+    stack.assert_owned("after the upgrade");
+    for db in PRE_007_ROLES {
+        assert_eq!(
+            stack.sql_in(db, "SELECT body FROM sesh_probe.notes"),
+            "made before 007",
+            "SC-002: {db}'s probe row"
+        );
+        let (ok, out) = stack.psql_as(
+            db,
+            db,
+            "INSERT INTO sesh_probe.notes (mood, body) VALUES ('ok', 'after'); \
+             CREATE OR REPLACE VIEW sesh_probe.recent AS SELECT * FROM sesh_probe.notes; \
+             CREATE OR REPLACE FUNCTION public.sesh_probe_fn() RETURNS int LANGUAGE sql AS 'SELECT 2'; \
+             REFRESH MATERIALIZED VIEW sesh_probe.counts; SELECT n FROM sesh_probe.counts",
+        );
+        assert!(
+            ok && out.ends_with('2'),
+            "{db}'s login can't change its own objects: {out}"
+        );
+    }
+    let gone = Command::new("docker")
+        .args([
+            "ps",
+            "-aq",
+            "--filter",
+            "label=com.docker.compose.project=sesh",
+            "--filter",
+            "label=com.docker.compose.service=redis",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&gone.stdout).trim().is_empty(),
+        "the shared Redis is still there after the upgrade"
+    );
+
+    // The services work, with their earlier data.
+    let admin = signin("admin@sesh.test", &stack.secret("WEBUI_ADMIN_PASSWORD"));
+    signin("before@sesh.test", "before-password-1");
+    let (s, body) = call(
+        "POST",
+        &format!("{WEBUI}/api/chat/completions"),
+        Some(&admin),
+        Some(json!({"model": "agent-main", "stream": false,
+            "messages": [{"role": "user", "content": "hello"}]})),
+    );
+    assert_eq!(s, 200, "Open WebUI chat after the upgrade: {body}");
+    assert_eq!(
+        chat("agent-main", &before_key).0,
+        200,
+        "the earlier router key"
+    );
+    assert_eq!(chat("agent-main", &stack.secret("WEBUI_ROUTER_KEY")).0, 200);
+    let mut alice = Mcp::connect(&stack.token("alice")).expect("alice connects");
+    let out = alice.execute("async () => await testcred.check({})");
+    assert!(out.contains("\"ok\":true"), "the stored credential: {out}");
+    stack.fill_credential("testcred", "TOKEN", &replaced);
+    let out = alice.execute("async () => await testcred.check({})");
+    assert!(
+        out.contains("\"ok\":false"),
+        "a credential written after the upgrade is read back: {out}"
+    );
+    let (ok, out) =
+        stack.paperless_api("'http://127.0.0.1:8000/api/tags/?name__iexact=isolation-before'");
+    assert!(
+        ok && out.contains("isolation-before"),
+        "the earlier tag: {out}"
+    );
+    let (ok, out) = stack.paperless_api(
+        "-H 'Content-Type: application/json' -d '{\"name\":\"isolation-after\"}' http://127.0.0.1:8000/api/tags/",
+    );
+    assert!(ok, "Paperless can't write after the upgrade: {out}");
+    let (_, checks) = stack.doctor();
+    for id in [
+        "db-isolation",
+        "services-healthy",
+        "paperless",
+        "credentials",
+    ] {
+        assert_eq!(
+            status_of(&checks, id),
+            "pass",
+            "{id} after the upgrade: {checks}"
+        );
+    }
+
+    // US2: a second `sesh up` changes nothing.
+    let again = up("a second run");
+    assert!(!again.contains("generated "), "{again}");
+    stack.assert_owned("after a second run");
+
+    // US1 after the upgrade.
+    stack.assert_logins_isolated("after the upgrade");
+
+    // US3 (FR-008, SC-003): each service reaches only its own Redis.
+    for (_, redis, network) in REDIS_CLIENTS {
+        let nets = stack.networks_of(redis);
+        let names: Vec<&str> = nets
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(names, vec![network], "{redis}'s networks");
+        let out = stack.compose(&[], &[], &["exec", "-T", redis, "redis-cli", "ping"]);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            text.contains("NOAUTH"),
+            "{redis} answers without its password: {text}"
+        );
+    }
+    let address = |redis: &str, network: &str| {
+        stack.networks_of(redis)[network]["IPAddress"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{redis} has no address on {network}"))
+            .to_string()
+    };
+    for (client, own, _) in REDIS_CLIENTS {
+        assert!(
+            stack.probe_from(client, &format!("{own}:6379")),
+            "control: {client} can't reach {own}, so the probe is broken"
+        );
+        for (_, other, network) in REDIS_CLIENTS.iter().filter(|(_, r, _)| *r != own) {
+            assert!(
+                !stack.probe_from(client, &format!("{other}:6379")),
+                "SC-003: {client} reached {other} by name"
+            );
+            assert!(
+                !stack.probe_from(client, &format!("{}:6379", address(other, network))),
+                "SC-003: {client} reached {other} by address"
+            );
+        }
+    }
+    for (_, redis, network) in REDIS_CLIENTS {
+        assert!(
+            !stack.probe_from("gateway", &format!("{}:6379", address(redis, network))),
+            "the gateway reached {redis}"
+        );
+    }
+
+    // SC-005: no login password outside secrets.env, sesh's output or the
+    // Postgres and gateway logs.
+    let logs = String::from_utf8_lossy(
+        &stack
+            .compose(&[], &[], &["logs", "--no-color", "postgres", "gateway"])
+            .stdout,
+    )
+    .into_owned();
+    for key in [
+        "OPENWEBUI_DB_PASSWORD",
+        "LITELLM_DB_PASSWORD",
+        "INFISICAL_DB_PASSWORD",
+        "PAPERLESS_DB_PASSWORD",
+        "MINIFLUX_DB_PASSWORD",
+        "REDIS_OPENWEBUI_PASSWORD",
+        "REDIS_INFISICAL_PASSWORD",
+        "REDIS_PAPERLESS_PASSWORD",
+    ] {
+        let pw = stack.secret(key);
+        assert!(!logs.contains(&pw), "SC-005: {key} is in the logs");
+        assert!(
+            !printed.contains(&pw) && !again.contains(&pw),
+            "SC-005: sesh up printed {key}"
+        );
+        for entry in walk(&stack.dir) {
+            if entry.file_name().is_some_and(|n| n == "secrets.env") {
+                continue;
+            }
+            if let Ok(text) = std::fs::read_to_string(&entry) {
+                assert!(
+                    !text.contains(&pw),
+                    "SC-005: {key} is in {}",
+                    entry.display()
+                );
+            }
+        }
+    }
 }

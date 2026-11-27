@@ -1,14 +1,17 @@
 name: ci
 
-# Push runs only: their checks show on a PR's head commit too, so a
-# pull_request trigger would only run everything twice. A newer push to
-# the same branch cancels the run it supersedes.
+# A push to any branch runs the quick `check` (fmt, clippy, unit tests,
+# cargo-deny, diagram and Compose checks). The images and stack tests run
+# only for pull requests, pushes to main, and on demand (workflow_dispatch),
+# so intermediate pushes to a branch without a PR stay cheap. A newer run
+# for the same branch or PR cancels the one it supersedes.
 on:
   push:
+  pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -21,6 +24,8 @@ jobs:
   # push can't skip testing code from a run it cancelled. main always runs
   # everything.
   changes:
+    # Stack tests: pull requests, main and manual runs only.
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.diff.outputs.code }}
@@ -46,6 +51,8 @@ jobs:
           fi
 
   check:
+    # On a PR, the push run's `check` already covers the head commit.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,16 +107,22 @@ jobs:
           path: /tmp/sesh-*.tar
           retention-days: 1
 
-  # One job per stack test, in parallel; each starts its own stack.
+  # Stack tests in three parallel groups, balanced by duration; the tests in
+  # a group run one after another, each starting and removing its own
+  # stack. Fewer jobs pay the setup (disk, toolchain, cache, images) fewer
+  # times. A new stack test goes in the lightest group.
   stack:
     needs: images
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
-        test: [foundation_stack, gateway_stack, eval_stack, secrets_stack, google_docs_stack, feeds_stack]
-    name: stack (${{ matrix.test }})
+        tests:
+          - isolation_stack secrets_stack
+          - eval_stack gateway_stack
+          - foundation_stack google_docs_stack feeds_stack
+    name: stack (${{ matrix.tests }})
     steps:
       - uses: actions/checkout@v4
       # The stack's images (Open WebUI, LiteLLM, Infisical, the three built
@@ -144,7 +157,7 @@ jobs:
       - name: Stack test
         env:
           SESH_TEST_NO_INTERNET: "1"
-        run: make stack-test STACK_TESTS=${{ matrix.test }}
+        run: make stack-test STACK_TESTS="${{ matrix.tests }}"
       - name: Disk usage
         if: failure()
         run: df -h / && docker system df || true
