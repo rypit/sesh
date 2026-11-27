@@ -1,6 +1,6 @@
 # 0011. No shared network; each database login bound to its own network
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-27
 - Feature: specs/008-network-isolation
 
