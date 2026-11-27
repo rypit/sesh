@@ -1,0 +1,95 @@
+# Contract: the network layout
+
+## Networks
+
+| Network | Internal | Members |
+|---|---|---|
+| `litellm-db` | yes | postgres, litellm |
+| `openwebui-db` | yes | postgres, open-webui |
+| `gateway-db` | yes | postgres, gateway |
+| `infisical-db` | yes | postgres, infisical |
+| `paperless-db` | yes | postgres, paperless |
+| `feeds-db` | yes | postgres, miniflux (feature 006, unchanged) |
+| `models` | yes | open-webui, litellm |
+| `secrets` | yes | gateway, infisical |
+| `notify` | yes | gateway, ntfy |
+| `webui-edge` | no | open-webui |
+| `litellm-edge` | no | litellm |
+| `gateway-edge` | no | gateway |
+| `infisical-edge` | no | infisical |
+| `ntfy-edge` | no | ntfy |
+| `search` | yes | gateway, searxng, kiwix (unchanged) |
+| `searxng-egress` | no | searxng (unchanged) |
+| `docs` | yes | gateway, paperless (unchanged) |
+| `feeds` | yes | gateway, miniflux (unchanged) |
+| `feeds-egress` | no | miniflux; stub-llm in stub mode (unchanged) |
+| `openwebui-redis`, `infisical-redis`, `paperless-redis` | yes | each Redis and its client (feature 007, unchanged) |
+| `exec-<agent>` | yes | gateway, executor-<agent> (unchanged) |
+| `stub` (stub mode only) | yes | stub-llm, litellm, gateway |
+
+## Services
+
+| Service | Networks |
+|---|---|
+| postgres | litellm-db, openwebui-db, gateway-db, infisical-db, paperless-db, feeds-db |
+| litellm | litellm-db, models, litellm-edge (+ stub) |
+| open-webui | openwebui-db, models, openwebui-redis, webui-edge |
+| gateway | gateway-db, secrets, notify, search, docs, feeds, gateway-edge, exec-* (+ stub) |
+| infisical | infisical-db, infisical-redis, infisical-edge |
+| ntfy | notify, ntfy-edge |
+| paperless | paperless-db, docs, paperless-redis |
+| miniflux | feeds, feeds-egress, feeds-db |
+| searxng | search, searxng-egress |
+| redis-* | its own `*-redis` |
+| executor-<agent> | exec-<agent> |
+| stub-llm (stub mode) | stub, feeds-egress |
+
+## Allowed paths (within the stack)
+
+| From | To |
+|---|---|
+| litellm | postgres:5432 |
+| open-webui | postgres:5432, litellm:4000, redis-openwebui:6379 |
+| gateway | postgres:5432, infisical:8080, ntfy:80, searxng:8080, paperless:8000, miniflux:8080, kiwix:8080, executor-*:8000 |
+| infisical | postgres:5432, redis-infisical:6379 |
+| paperless | postgres:5432, redis-paperless:6379 |
+| miniflux | postgres:5432 |
+| executor-<agent> | gateway:7001 |
+| litellm (stub mode) | stub-llm:8000 |
+| gateway (stub mode) | stub-llm:8000 |
+| miniflux (stub mode) | stub-llm:8000 |
+
+These are the paths the stack **uses**.
+
+**The rule the test checks:** a network carries traffic both ways, so
+reachability is symmetric within a shared network.
+- (A, B, port) **connects if and only if** A and B share a network and B
+  listens on that port there. The one exception is the gateway's `:7000`
+  and `:7002`, which listen only on loopback and `gateway-edge`, so no
+  other container reaches them.
+- Some reverse paths are reachable but unused. For example, LiteLLM can
+  reach `open-webui:8080` over `models`, Postgres can reach its clients'
+  ports, and Infisical, ntfy, Paperless, Miniflux and SearXNG can reach
+  `gateway:7001`, where every call is refused unless it comes from the
+  calling agent's executor. They're listed in the layout table as
+  `reverse` paths, so the test expects them, and a change to them shows
+  up.
+- **Every pair that doesn't share a network is refused**, probed by
+  every address the destination has.
+
+**Note on the gateway's internal networks:** the gateway's ports are
+reachable on any network it shares. Its agent (`:7000`) and approvals
+(`:7002`) listeners bind only loopback plus `gateway-edge`. The
+executor listener (`:7001`) accepts a connection on any of them, but
+rejects every call that doesn't come from the calling agent's own
+executor (ADR 0009, decision 5).
+
+## Published ports (loopback only, unchanged)
+
+| Service | Port | Through |
+|---|---|---|
+| open-webui | 3000 → 8080 | webui-edge |
+| litellm | 4000 | litellm-edge |
+| gateway | 7000, 7002 | gateway-edge |
+| infisical | 8222 → 8080 | infisical-edge |
+| ntfy | 8090 → 80 | ntfy-edge |
