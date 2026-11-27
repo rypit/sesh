@@ -39,6 +39,9 @@ no-instance-data:
 	@if git ls-files | grep -E '(^|/)(secrets\.env|litellm\.yaml|sesh\.toml)$$'; then \
 	  echo "instance data is tracked in git; remove it" >&2; exit 1; fi
 
+# STACK_TESTS picks stack tests by exact name (CI runs one per job), e.g.
+#   make stack-test STACK_TESTS=secrets_stack
+STACK_TESTS ?=
 stack-test:
 	cargo build --workspace
-	cargo test -p sesh-cli --test stack -- --ignored --test-threads=1
+	cargo test -p sesh-cli --test stack -- --ignored --test-threads=1 $(if $(STACK_TESTS),--exact $(STACK_TESTS))
