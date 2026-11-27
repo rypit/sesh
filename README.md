@@ -1,5 +1,7 @@
 # sesh
 
+[![ci](https://github.com/rypit/sesh/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rypit/sesh/actions/workflows/ci.yml?query=branch%3Amain)
+
 > *sesh* (Egyptian: "scribe"). The scribe writes; it doesn't hold the keys.
 
 A local-first AI agent platform for one household. Each person gets an
