@@ -494,7 +494,8 @@ small browser controller. Everything else is configuration.
 - A controller inside the sbx browser VM:
   - a persistent context per agent, and a fresh context per `read(url)`;
   - CDP fill for `login(site)`;
-  - a noVNC live view;
+  - a live view and takeover streamed through the gateway into the
+    Open WebUI chat (phase 10);
   - Readability extraction to Markdown.
 - Evaluate adopting Auto Browser, easi.run or Nod's browser before
   building.
@@ -610,17 +611,31 @@ is a feature under `specs/`.
      - `sesh doctor` fails when a service is on a network outside its
        row.
 9. **One agent end to end:** one Hermes profile in a container, with
-   built-in tools off, the gateway as its only MCP server, and a memory
-   provider plugin backed by the gateway; Open WebUI connected to it.
+   built-in tools off and the gateway as its only MCP server; Open WebUI
+   connected to it. Memory comes in phase 11.
    - Accept: chatting in Open WebUI, the agent answers a weather and a
-     search question, and uses mail, documents and memory via the
+     search question, and uses mail, documents and feeds via the
      gateway; attempts to use terminal or file tools fail.
 10. **Browser:** the sbx browser VM, a persistent profile per agent,
-   `read(url)`, `login(site)`, and a live-view link via ntfy.
+   `read(url)` and `login(site)`, and a live view **in the Open WebUI
+   chat**, not a one-time link:
+   - when an agent uses the browser, a small live window appears in its
+     chat message, view-only;
+   - clicking it opens a larger window with controls, so the person can
+     take over;
+   - while the person is in control the agent's browser calls wait;
+     closing the window hands control back to the agent;
+   - only the Open WebUI user who owns the agent can watch or drive,
+     with a short-lived token the agent never sees; view and input pass
+     through the gateway; what the person types is never shown to the
+     agent.
    - Accept: `read(url)` returns Markdown and refuses a LAN address;
      `login(site)` refuses on a lookalike domain; the agent can't read a
-     filled password field.
-11. **Memory:** Mem0 (CPU embeddings, `infer=False`) behind the gateway's
+     filled password field; the live window shows the session, takeover
+     pauses the agent and closing returns control; another user can't
+     open the view.
+11. **Memory:** the agent's memory provider plugin, backed by the
+   gateway; Mem0 (CPU embeddings, `infer=False`) behind the gateway's
    `memory` connector, scoped per user; cross-store recall with
    documents. Mem0 gets its own login; the migration creates the
    `vector` extension, which needs the superuser.
