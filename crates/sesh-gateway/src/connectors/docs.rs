@@ -148,6 +148,19 @@ impl Paperless {
             .map_err(|_| "the document service sent an unreadable reply".to_string())
     }
 
+    /// Doctor: the gateway can sign in and list documents.
+    pub async fn check(&self, base: &str) -> Result<(), String> {
+        self.req(
+            base,
+            reqwest::Method::GET,
+            "/api/documents/",
+            &[("page_size", "1".into())],
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// The Paperless user id for an owner, created the first time.
     pub async fn owner_id(&self, base: &str, owner: &str) -> Result<u64, String> {
         if let Some(id) = self.ids.lock().await.get(owner) {
@@ -457,5 +470,174 @@ pub async fn call(
             Ok(json!({"id": id, "title": title}))
         }
         _ => Err(format!("docs.{method} has no upstream")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audit::Audit;
+    use crate::calls::tests::gateway;
+    use crate::refs::Attachment;
+    use axum::extract::{Path, Query};
+    use axum::routing::{get, post};
+    use axum::{Json, Router};
+    use sesh_core::GatewaySettings;
+
+    /// A Paperless that, unhelpfully, returns everyone's documents: the
+    /// gateway must filter them itself.
+    async fn fake_paperless() -> String {
+        let docs = || {
+            vec![
+                json!({"id": 10, "owner": 1, "title": "household lease", "content": "lease", "tags": [], "created": "2026-01-01"}),
+                json!({"id": 11, "owner": 2, "title": "ana payslip", "content": "pay", "tags": [], "created": "2026-01-01"}),
+                json!({"id": 12, "owner": 3, "title": "ben medical", "content": "private", "tags": [], "created": "2026-01-01"}),
+            ]
+        };
+        let app = Router::new()
+            .route(
+                "/api/token/",
+                post(|| async { Json(json!({"token": "ptok"})) }),
+            )
+            .route(
+                "/api/users/",
+                get(|Query(q): Query<HashMap<String, String>>| async move {
+                    let id = match q.get("username__iexact").map(String::as_str) {
+                        Some("sesh-household") => 1,
+                        Some("sesh-ana") => 2,
+                        Some("sesh-ben") => 3,
+                        _ => return Json(json!({"results": []})),
+                    };
+                    Json(json!({"results": [{"id": id}]}))
+                }),
+            )
+            .route(
+                "/api/documents/",
+                get(move || async move { Json(json!({"results": docs()})) }),
+            )
+            .route(
+                "/api/documents/{id}/",
+                get(move |Path(id): Path<u64>| async move {
+                    Json(
+                        docs()
+                            .into_iter()
+                            .find(|d| d["id"] == id)
+                            .unwrap_or(json!({})),
+                    )
+                }),
+            );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, app).await });
+        url
+    }
+
+    async fn gw() -> Gateway {
+        let mut s = GatewaySettings::default();
+        s.upstreams.paperless = fake_paperless().await;
+        let mut g = gateway(Audit::memory(), s);
+        g.paperless = Paperless::new("sesh-gateway", "pw");
+        g
+    }
+
+    fn ana() -> Scope {
+        Scope {
+            owner: "ana".into(),
+            topic: "t".into(),
+            readable: vec!["ana".into(), HOUSEHOLD.into()],
+        }
+    }
+
+    #[tokio::test]
+    async fn a_user_sees_their_own_and_the_household_documents_only() {
+        let g = gw().await;
+        let found = call(&g, &ana(), "alice", "search", &json!({"query": "x"}))
+            .await
+            .unwrap();
+        let ids: Vec<u64> = found
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["id"].as_u64().unwrap())
+            .collect();
+        assert_eq!(ids, vec![10, 11]);
+        assert_eq!(found[0]["owner"], "household");
+        assert_eq!(found[1]["owner"], "you");
+        assert!(
+            call(&g, &ana(), "alice", "get", &json!({"id": 11}))
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            call(&g, &ana(), "alice", "get", &json!({"id": 12}))
+                .await
+                .unwrap_err(),
+            "document not found",
+            "another user's document looks like no document"
+        );
+        let household = Scope {
+            owner: HOUSEHOLD.into(),
+            topic: "t".into(),
+            readable: vec![HOUSEHOLD.into()],
+        };
+        assert!(
+            call(&g, &household, "alice", "get", &json!({"id": 11}))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_takes_only_this_agents_live_reference() {
+        let g = gw().await;
+        let r = g.refs.issue(
+            Attachment {
+                agent: "bob".into(),
+                owner: "ana".into(),
+                message_id: "m".into(),
+                attachment_id: "a".into(),
+                filename: "x.pdf".into(),
+                mime: "application/pdf".into(),
+                size: 10,
+            },
+            std::time::Duration::from_secs(3600),
+        );
+        let args = json!({"ref": r, "title": "t"});
+        assert_eq!(
+            call(&g, &ana(), "alice", "upload", &args)
+                .await
+                .unwrap_err(),
+            "unknown or expired attachment reference"
+        );
+        let r = g.refs.issue(
+            Attachment {
+                agent: "alice".into(),
+                owner: "ana".into(),
+                message_id: "m".into(),
+                attachment_id: "a".into(),
+                filename: "x.exe".into(),
+                mime: "application/x-msdownload".into(),
+                size: 10,
+            },
+            std::time::Duration::from_secs(3600),
+        );
+        assert_eq!(
+            call(
+                &g,
+                &ana(),
+                "alice",
+                "upload",
+                &json!({"ref": r, "title": "t"})
+            )
+            .await
+            .unwrap_err(),
+            "file type not allowed"
+        );
+    }
+
+    #[test]
+    fn cut_respects_char_boundaries() {
+        assert_eq!(cut("abc", 5), "abc");
+        assert_eq!(cut("ééé", 3), "é… [cut]");
     }
 }

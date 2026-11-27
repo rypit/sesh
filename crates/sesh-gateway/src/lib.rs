@@ -96,6 +96,14 @@ impl Users {
     }
 
     pub fn get(&self, name: &str) -> Option<User> {
+        self.current().get(name).cloned()
+    }
+
+    pub fn all(&self) -> Vec<User> {
+        self.current().users
+    }
+
+    fn current(&self) -> UsersFile {
         let mut c = self.cached.lock().expect("lock");
         if let Some(path) = &self.path {
             let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
@@ -106,7 +114,7 @@ impl Users {
                 }
             }
         }
-        c.1.get(name).cloned()
+        c.1.clone()
     }
 }
 
