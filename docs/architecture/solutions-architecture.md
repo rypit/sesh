@@ -545,6 +545,19 @@ is a feature under `specs/`.
    through their existing Google grant, with a read-only scope.
    - Accept: an agent reads its owner's documents, never another
      user's; nothing can be written.
+   - Later extensions (flagged 2026-11-27, not in scope):
+     - **Approved edits:** `create`, `append` and `replace`, each
+       approval-gated with the exact change shown. Edits apply only at
+       the revision the agent read. This needs the `documents` scope and
+       a one-time re-consent. The connector would be named `gdocs`, since
+       `docs` is Paperless.
+     - **Google's hosted Workspace MCP servers** (`docsmcp`, `drivemcp`
+       and `gmailmcp` on googleapis.com, generally available on
+       2026-11-24): the gateway could call them as an MCP client in place
+       of the REST APIs, behind the same single module.
+     - **Unverified:** a report that, from 2027-02-01, AI tools must use
+       those servers instead of the REST APIs. If confirmed, move Gmail,
+       Calendar and Docs over together. Check this before February 2027.
 10. **Memory:** Mem0 (CPU embeddings, `infer=False`) behind the gateway's
    `memory` connector, scoped per user; cross-store recall with
    documents. Mem0 gets its own login; the migration creates the
