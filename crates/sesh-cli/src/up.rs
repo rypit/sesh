@@ -359,6 +359,14 @@ fn update_client_key(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_the_stub_lets_miniflux_fetch_private_addresses() {
+        // ADR 0009: the household stack keeps Miniflux's default refusal
+        // of private, loopback and link-local addresses.
+        assert!(!super::COMPOSE_YAML.contains("FETCHER_ALLOW_PRIVATE_NETWORKS"));
+        assert!(super::COMPOSE_STUB_YAML.contains("FETCHER_ALLOW_PRIVATE_NETWORKS"));
+    }
+
     use super::migration_sql;
 
     #[test]
