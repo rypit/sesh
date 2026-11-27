@@ -121,3 +121,13 @@ agents' skills repos; those live on the server (ADR 0003).
 Spec-driven, using [GitHub Spec Kit](https://github.github.com/spec-kit/):
 constitution → specify → clarify → plan → tasks → implement. The `/speckit-*`
 skills live in `.claude/skills/`, templates and scripts in `.specify/`.
+
+## License
+
+sesh is licensed under the [Apache License 2.0](LICENSE). If you
+redistribute it, keep the license and the attribution in [NOTICE](NOTICE),
+and mark the files you changed.
+
+The components sesh runs (Open WebUI, LiteLLM, Infisical, ntfy, SearXNG,
+Paperless-ngx, Miniflux, Postgres, Redis and the rest) keep their own
+licenses: sesh pulls their published images and doesn't redistribute them.
