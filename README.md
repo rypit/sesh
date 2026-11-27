@@ -44,11 +44,10 @@ The [constitution](.specify/memory/constitution.md) is binding. In short:
 
 ## Status
 
-**Building.** Features 001 (foundation stack,
-[`specs/001-foundation/`](specs/001-foundation/)) and 002 (gateway core,
-[`specs/002-gateway-core/`](specs/002-gateway-core/)) are done; feature
-003 (model evals, [`specs/003-model-evals/`](specs/003-model-evals/)) is
-in progress. The design is in the sesh Solutions
+**Building.** Features 001 to 003 (foundation stack, gateway core, model evals) are
+done; feature 004 (secrets and approvals,
+[`specs/004-secrets-approvals/`](specs/004-secrets-approvals/)) is in
+progress. The design is in the sesh Solutions
 Architecture document; decisions are in [`docs/decisions/`](docs/decisions/)
 and reference notes in [`docs/research/`](docs/research/). The build
 follows the architecture's nine phases (foundation, gateway core, model
@@ -80,6 +79,21 @@ http://127.0.0.1:7000/mcp; the test agent's token is in
 quickstarts for [001](specs/001-foundation/quickstart.md),
 [002](specs/002-gateway-core/quickstart.md) and
 [003](specs/003-model-evals/quickstart.md).
+
+**Approvals and credentials:**
+- **Approvals:** a side effect waits for a yes. The gateway sends an ntfy
+  notification to your private topic, `ntfy_topic` in `sesh.toml`.
+  Tapping it opens a page that shows exactly what will run. Approve, and
+  the agent's identical call runs once.
+- **Credentials:** they reach the secret store, Infisical, only through
+  a one-time form, created with
+  `sesh credential request <connector> <NAME>`. Only the gateway can
+  read them.
+- **Your phone:** run `tailscale serve` for ports 7002 (approvals) and
+  8090 (ntfy), and set `approvals_base_url` in `sesh.toml`. Then
+  subscribe in the ntfy app as `person`, with `NTFY_PERSON_PASSWORD` from
+  `secrets.env`. See
+  [004's quickstart](specs/004-secrets-approvals/quickstart.md).
 
 `sesh eval` runs a fixed set of tasks against a model through its alias.
 Each run uses its own short-lived gateway with fake resources, so it

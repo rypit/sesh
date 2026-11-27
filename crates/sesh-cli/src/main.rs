@@ -5,10 +5,13 @@
 
 mod agent;
 mod config;
+mod credential;
 mod doctor;
 mod eval;
 mod host;
+mod infisical;
 mod init;
+mod ntfy;
 mod render;
 mod secrets;
 mod up;
@@ -77,6 +80,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Ask for a credential through a one-time form, or list credentials.
+    Credential {
+        #[command(subcommand)]
+        command: CredentialCommand,
+    },
     /// Manage the agents the gateway accepts.
     Agent {
         #[command(subcommand)]
@@ -92,6 +100,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum CredentialCommand {
+    /// Print a one-time link where the person pastes a credential (never shown here).
+    Request { connector: String, name: String },
+    /// List the credentials connectors need, and whether each is set.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -152,6 +168,10 @@ fn compose_for(dir: &Path) -> Result<DockerCompose> {
         "SESH_EXECUTOR_IMAGE",
         "STUB_SCRIPT",
         "STUB_TOOLS",
+        "STUB_TESTCRED_SHA256",
+        "SESH_APPROVALS_PORT",
+        "SESH_INFISICAL_PORT",
+        "SESH_NTFY_PORT",
     ] {
         if let Ok(value) = std::env::var(var) {
             vars.push((var.to_string(), value));
@@ -220,6 +240,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 json,
             };
             return eval_command(&dir, command, opts);
+        }
+        Command::Credential { command } => {
+            let http = UreqHttp::new(Duration::from_secs(15));
+            let lines = match command {
+                CredentialCommand::Request { connector, name } => {
+                    credential::request(&dir, &http, &connector, &name)?
+                }
+                CredentialCommand::List => credential::list(&dir, &http)?,
+            };
+            for line in lines {
+                println!("{line}");
+            }
         }
         Command::Agent { command } => match command {
             AgentCommand::Add { name, connectors } => {

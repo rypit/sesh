@@ -8,6 +8,8 @@ services:
       STUB_TOOLS: ${STUB_TOOLS:-on}
       # Scripted eval conversations (specs/003-model-evals/contracts/stub-script.md).
       STUB_SCRIPT: ${STUB_SCRIPT:-}
+      # The hash of the credential the test connector should present (specs/004).
+      STUB_TESTCRED_SHA256: ${STUB_TESTCRED_SHA256:-}
     restart: unless-stopped
   # The test-only approval-gated connector, for negative tests.
   gateway:

@@ -117,10 +117,23 @@ services:
       SESH_AGENTS_FILE: /etc/sesh/agents.toml
       SESH_AUDIT_DATABASE_URL: postgresql://sesh_gateway:${GATEWAY_DB_PASSWORD:?run sesh init}@postgres:5432/gateway
       SESH_GATEWAY_TEST_CONNECTORS: ${SESH_GATEWAY_TEST_CONNECTORS:-0}
+      # Approvals and credentials (specs/004, ADR 0007).
+      SESH_GATEWAY_ADMIN_TOKEN: ${SESH_GATEWAY_ADMIN_TOKEN:?run sesh init}
+      SESH_NTFY_URL: http://ntfy:80
+      SESH_NTFY_USER: sesh-gateway
+      SESH_NTFY_PASSWORD: ${NTFY_GATEWAY_PASSWORD:?run sesh init}
+      SESH_INFISICAL_URL: http://infisical:8080
+      # Set by `sesh up` once it has bootstrapped Infisical.
+      SESH_INFISICAL_CLIENT_ID: ${INFISICAL_GATEWAY_CLIENT_ID:-}
+      SESH_INFISICAL_CLIENT_SECRET: ${INFISICAL_GATEWAY_CLIENT_SECRET:-}
+      SESH_INFISICAL_PROJECT_ID: ${INFISICAL_PROJECT_ID:-}
     volumes:
       - ${SESH_DATA_DIR:?}/gateway:/etc/sesh:ro
     ports:
       - "127.0.0.1:${SESH_GATEWAY_PORT:-7000}:7000"
+      # Approval pages and credential forms; reach them from a phone with
+      # `tailscale serve` (specs/004 quickstart.md).
+      - "127.0.0.1:${SESH_APPROVALS_PORT:-7002}:7002"
     networks: [default, search]
     read_only: true
     cap_drop: [ALL]
@@ -135,6 +148,56 @@ services:
         condition: service_healthy
       searxng:
         condition: service_healthy
+      ntfy:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # The secret store (specs/004 research.md R5). Only the gateway's machine
+  # identity can read credentials; `sesh up` bootstraps it over the
+  # loopback port.
+  infisical:
+    image: infisical/infisical:v0.167.14@sha256:ef645c5c17c61f928a75a18c1192cb0b24a5140fb7de6bfa24e717714c8fa8dd
+    environment:
+      ENCRYPTION_KEY: ${INFISICAL_ENCRYPTION_KEY:?run sesh init}
+      AUTH_SECRET: ${INFISICAL_AUTH_SECRET:?run sesh init}
+      INSTANCE_SETUP_TOKEN: ${INFISICAL_SETUP_TOKEN:?run sesh init}
+      DB_CONNECTION_URI: postgresql://sesh:${POSTGRES_PASSWORD:?run sesh init}@postgres:5432/infisical
+      REDIS_URL: redis://:${REDIS_PASSWORD:?run sesh init}@redis:6379/1
+      SITE_URL: http://127.0.0.1:${SESH_INFISICAL_PORT:-8222}
+      HOST: 0.0.0.0
+      PORT: "8080"
+      TELEMETRY_ENABLED: "false"
+      DISABLE_UPDATE_CHECK: "true"
+    ports:
+      - "127.0.0.1:${SESH_INFISICAL_PORT:-8222}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8080/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # The approval channel (specs/004 research.md R3): the gateway may only
+  # publish to the person's topic, the person may only read it.
+  ntfy:
+    image: binwiederhier/ntfy:v2.38.2@sha256:ca35419d29a834824db2440fa9320897fbe40b026c5fc2360c76ed3501b5e716
+    command: ["serve", "--config", "/etc/ntfy/server.yml"]
+    volumes:
+      - ${SESH_DATA_DIR:?}/compose/ntfy-server.yml:/etc/ntfy/server.yml:ro
+      - ntfy-data:/var/lib/ntfy
+    ports:
+      - "127.0.0.1:${SESH_NTFY_PORT:-8090}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/v1/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     restart: unless-stopped
 
   # Web search. Reachable only from the gateway (the `search` network is
@@ -157,6 +220,7 @@ volumes:
   postgres-data:
   redis-data:
   open-webui-data:
+  ntfy-data:
 
 networks:
   default: {}

@@ -111,12 +111,16 @@
   `secrets.env`. The client id and secret are passed only to the gateway
   container.
 - **The gateway:** logs in with universal auth, caches the access token
-  until shortly before expiry, and reads or writes secrets at
-  `/connectors/<connector>/<NAME>` in `prod`.
-- **Network:** Infisical is on a new internal network, `secrets`, shared
-  only with the gateway. The CLI reaches it through `docker compose
-  exec` (curl inside the Infisical container), the way it already reaches
-  Postgres. No port is published.
+  until shortly before expiry, and reads or writes secrets at the root
+  path of `prod`, keyed `<CONNECTOR>__<NAME>`. Infisical refuses secrets
+  under folders that don't exist yet, so this layout needs no folders.
+- **Network:** Infisical is on the stack's default network, because it
+  needs Postgres and Redis. Its port is published on loopback only
+  (`127.0.0.1:8222`), like the router's, so the Rust CLI can bootstrap it
+  over HTTP without running code inside the container.
+  - Other stack services can reach it, but they hold no identity that
+    can read a credential.
+  - Agents and executors aren't on that network.
 - **Endpoints:** exact paths (v1, v3 or v4 secrets API) are pinned to the
   chosen image and checked by the stack test. The bootstrap API is
   documented: `docs/self-hosting/guides/automated-bootstrapping.mdx`.

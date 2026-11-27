@@ -28,11 +28,17 @@ services:
       SESH_AUDIT_DATABASE_URL: file:/var/log/sesh-eval/audit.jsonl
       SESH_GATEWAY_TEST_CONNECTORS: "1"
       SESH_EXECUTOR_URL: http://executor-eval:8000
+      # The eval's own approval channel (specs/004 research.md R8); the
+      # household's is never used.
+      SESH_NTFY_URL: http://ntfy-eval:80
+      SESH_NTFY_USER: sesh-gateway
+      SESH_NTFY_PASSWORD: ${SESH_EVAL_NTFY_GATEWAY_PASSWORD:-}
     volumes:
       - ${SESH_EVAL_DIR:?}/gateway:/etc/sesh:ro
       - ${SESH_EVAL_DIR:?}/audit:/var/log/sesh-eval
     ports:
       - "127.0.0.1:${SESH_EVAL_PORT:-7100}:7000"
+      - "127.0.0.1:${SESH_EVAL_APPROVALS_PORT:-7102}:7002"
     networks: [eval-edge, eval-exec, eval-fakes]
     read_only: true
     cap_drop: [ALL]
@@ -45,6 +51,24 @@ services:
     depends_on:
       fakes:
         condition: service_healthy
+      ntfy-eval:
+        condition: service_healthy
+
+  # The eval's approval channel; `sesh eval` reads it and answers for the person.
+  ntfy-eval:
+    image: binwiederhier/ntfy:v2.38.2@sha256:ca35419d29a834824db2440fa9320897fbe40b026c5fc2360c76ed3501b5e716
+    command: ["serve", "--config", "/etc/ntfy/server.yml"]
+    volumes:
+      - ${SESH_EVAL_DIR:?}/ntfy-server.yml:/etc/ntfy/server.yml:ro
+    tmpfs: [/var/lib/ntfy]
+    ports:
+      - "127.0.0.1:${SESH_EVAL_NTFY_PORT:-7190}:80"
+    networks: [eval-edge]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/v1/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
 
   # The untrusted executor: its only network holds the eval gateway (ADR 0004).
   executor-eval:

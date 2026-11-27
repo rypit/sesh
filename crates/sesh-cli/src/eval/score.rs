@@ -112,6 +112,16 @@ pub fn score(task: &Task, o: &Outcome, calls: &[AuditEntry]) -> TaskResult {
             });
         }
     }
+    if x.ran_after_approval
+        && !calls.iter().any(|e| {
+            e.outcome == "allowed"
+                && e.reason
+                    .as_deref()
+                    .is_some_and(|r| r.starts_with("approved"))
+        })
+    {
+        reasons.push("approval was granted but the action wasn't taken".into());
+    }
     let answer = o.answer.clone().unwrap_or_default();
     let norm = normalize(&answer);
     if o.answer.is_none() && o.stopped.is_none() {
@@ -336,5 +346,28 @@ mod tests {
     fn normalizes_case_spacing_and_punctuation() {
         assert_eq!(normalize("  First LIT, in\n1873!"), "first lit in 1873");
         assert_eq!(normalize("07:40"), "07:40");
+    }
+
+    #[test]
+    fn approve_act_needs_the_approved_run() {
+        let t = task("approve-act");
+        let mut asked = e("x1", "testgate", "act", "refused");
+        asked.reason = Some("approval pending a1".into());
+        let mut ran = e("x2", "testgate", "act", "allowed");
+        ran.reason = Some("approved a1".into());
+        let ok = score(
+            &t,
+            &outcome(Some("Done: the test action ran.")),
+            &[asked.clone(), ran],
+        );
+        assert!(ok.passed, "{:?}", ok.reasons);
+        let bad = score(&t, &outcome(Some("Done, it's completed.")), &[asked]);
+        assert!(
+            bad.reasons
+                .iter()
+                .any(|r| r == "approval was granted but the action wasn't taken"),
+            "{:?}",
+            bad.reasons
+        );
     }
 }

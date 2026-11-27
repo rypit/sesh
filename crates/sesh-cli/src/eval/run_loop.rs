@@ -83,6 +83,17 @@ pub struct Outcome {
     pub stopped: Option<String>,
 }
 
+/// Optional per-task behaviour of the harness (specs/004 research.md R8).
+#[derive(Default)]
+pub struct Hooks<'a> {
+    /// Called after each batch of tool calls; returns how many approval
+    /// requests it decided as "approve".
+    pub approver: Option<&'a dyn Fn() -> usize>,
+    /// Sent once, after the model's first answer, if something was approved.
+    pub followup: Option<&'a str>,
+}
+
+#[cfg(test)]
 pub fn run(
     chat: &dyn Chat,
     mcp: &dyn Mcp,
@@ -92,6 +103,31 @@ pub fn run(
     prompt: &str,
     limits: &Limits,
 ) -> Outcome {
+    run_with(
+        chat,
+        mcp,
+        alias,
+        tools,
+        system,
+        prompt,
+        limits,
+        &Hooks::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_with(
+    chat: &dyn Chat,
+    mcp: &dyn Mcp,
+    alias: &str,
+    tools: &[Value],
+    system: &str,
+    prompt: &str,
+    limits: &Limits,
+    hooks: &Hooks,
+) -> Outcome {
+    let mut approved = 0usize;
+    let mut followed_up = false;
     let started = Instant::now();
     let deadline = Duration::from_secs(limits.seconds);
     let names: Vec<&str> = tools
@@ -133,7 +169,15 @@ pub fn run(
         if calls.is_empty() {
             let text = msg["content"].as_str().unwrap_or("").to_string();
             o.messages
-                .push(json!({"role": "assistant", "content": text}));
+                .push(json!({"role": "assistant", "content": text.clone()}));
+            if let Some(f) = hooks.followup
+                && approved > 0
+                && !followed_up
+            {
+                followed_up = true;
+                o.messages.push(json!({"role": "user", "content": f}));
+                continue;
+            }
             o.answer = Some(text);
             break;
         }
@@ -170,6 +214,9 @@ pub fn run(
             };
             o.messages
                 .push(json!({"role": "tool", "tool_call_id": id, "content": content}));
+        }
+        if let Some(a) = hooks.approver {
+            approved += a();
         }
         if over {
             o.stopped = Some(format!(
@@ -390,5 +437,54 @@ mod tests {
                 .starts_with("error: no connector")
         );
         assert_eq!(o.answer.as_deref(), Some("I can't send email."));
+    }
+
+    #[test]
+    fn a_followup_comes_once_after_an_approval() {
+        let mcp = FakeMcp::answering("approval_pending");
+        let model = Scripted::new(vec![
+            call("execute", r#"{"code":"act"}"#),
+            say("It needs approval."),
+            call("execute", r#"{"code":"act"}"#),
+            say("Done."),
+        ]);
+        let approver = || 1usize;
+        let hooks = Hooks {
+            approver: Some(&approver),
+            followup: Some("I've approved it."),
+        };
+        let tools = openai_tools(&mcp.tools);
+        let o = run_with(
+            &model,
+            &mcp,
+            "agent-main",
+            &tools,
+            "s",
+            "[task:t] p",
+            &Limits::default(),
+            &hooks,
+        );
+        assert_eq!(o.answer.as_deref(), Some("Done."));
+        let users = o.messages.iter().filter(|m| m["role"] == "user").count();
+        assert_eq!(users, 2, "one follow-up only");
+        assert_eq!(mcp.calls.borrow().len(), 2);
+        // Without an approval, no follow-up.
+        let model = Scripted::new(vec![say("It needs approval.")]);
+        let none = || 0usize;
+        let hooks = Hooks {
+            approver: Some(&none),
+            followup: Some("I've approved it."),
+        };
+        let o = run_with(
+            &model,
+            &mcp,
+            "agent-main",
+            &tools,
+            "s",
+            "p",
+            &Limits::default(),
+            &hooks,
+        );
+        assert_eq!(o.answer.as_deref(), Some("It needs approval."));
     }
 }

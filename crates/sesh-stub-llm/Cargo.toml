@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 serde_json.workspace = true
+sha2.workspace = true
 tiny_http.workspace = true
 
 [lints]

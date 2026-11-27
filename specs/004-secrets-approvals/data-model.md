@@ -28,8 +28,9 @@ Grants: `sesh_gateway` gets INSERT, SELECT and UPDATE, but not DELETE.
 
 ## Credential (in Infisical, project `sesh`, environment `prod`)
 
-The path is `/connectors/<connector>`, with key `<NAME>`. The value lives
-only in Infisical. The gateway keeps no copy beyond a call's lifetime.
+The key is `<CONNECTOR>__<NAME>`, for example `TESTCRED__TOKEN`, at path
+`/`. The value lives only in Infisical. The gateway keeps no copy beyond a
+call's lifetime.
 
 ## Connector credential declaration (`ConnectorDescriptor.credentials`)
 
