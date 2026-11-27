@@ -3228,7 +3228,7 @@ fn network_stack() {
     let (status, detail) = stack.network_layout_check();
     assert_eq!(status, "pass", "fresh install: {detail}");
 
-    // US5 (T019): a container attached to an extra network by hand fails
+    // US5 (FR-013, T019): a container attached to an extra network by hand fails
     // the doctor, which names the service and the network; detaching it
     // passes again.
     let webui = stack.container("open-webui");
@@ -3315,17 +3315,17 @@ fn network_stack() {
     );
     assert!(ok, "creating a Paperless tag failed: {out}");
 
-    // US3 (FR-011): the upgrade is `sesh up` alone. Compose recreates
+    // US3 (FR-012): the upgrade is `sesh up` alone. Compose recreates
     // every container whose networks changed, so none is left on
     // sesh_default and `sesh up` removes it.
     let printed = up("the upgrade");
     assert!(
         printed.contains("removed the old shared network sesh_default"),
-        "FR-011: {printed}"
+        "FR-012: {printed}"
     );
     assert!(
         !printed.contains("still used by"),
-        "FR-011: a container stayed on sesh_default: {printed}"
+        "FR-012: a container stayed on sesh_default: {printed}"
     );
     assert!(
         printed.contains("database login rules updated"),
