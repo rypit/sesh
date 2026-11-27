@@ -91,7 +91,7 @@ people through ntfy, never through an agent.
 
 ## Component catalog
 
-sesh has 19 components across six zones. Three are custom builds (marked
+sesh has 20 components across six zones. Three are custom builds (marked
 **build**); the rest are adopted and configured.
 
 | Component | Zone | Role | Technology | Runs as | Key configuration |
@@ -107,10 +107,11 @@ sesh has 19 components across six zones. Three are custom builds (marked
 | SearXNG | Resources | Web search | SearXNG | Container | JSON output; reachable from the gateway only |
 | Kiwix | Resources | Offline Wikipedia | kiwix-serve + ZIM files | Container | Text-only English Wikipedia (~50GB); quarterly refresh |
 | Weather + maps | Resources | Forecasts, geocoding, places | Open-Meteo, OpenStreetMap | Gateway connector | No keys; home location fixed in the gateway |
+| Miniflux | Resources | Feeds (RSS, Atom) the household follows | Miniflux (ADR 0009) | Container | User per owner, managed by the gateway; reachable from the gateway only (`feeds` network); its own egress network to publishers and its own route to Postgres, never `default`; agent adds need approval; web UI not published |
 | Paperless-ngx | Resources | Household documents: OCR, search | Paperless-ngx (+ Paperless-AI if needed) | Container | User per agent scope; search, read and upload via the gateway; a mail rule imports a Gmail "To file" label; embeddings on CPU |
 | Browser | Resources | Logged-in browsing, live view, `read(url)` | Chromium (Playwright build), headful | sbx microVM per session | Profile per agent; fresh context per read; private addresses blocked (**build**: `login(site)`, `read(url)`) |
 | Mem0 | Resources | Long-term memory per user + household | Mem0 OSS, pgvector, BM25 | Container | `infer=False` at first; CPU embeddings; `user_id` set by the gateway |
-| Postgres + Redis | Resources | Shared storage | Postgres 16 + pgvector, Redis | Container | Backs Mem0, Paperless, Infisical and the audit log |
+| Postgres + Redis | Resources | Shared storage | Postgres 16 + pgvector, Redis | Container | Backs Mem0, Paperless, Miniflux, Infisical and the audit log |
 | Inference server | Inference | Serves models behind aliases (OpenAI-compatible API) | Any OpenAI-compatible server (for example oMLX, Ollama, llama.cpp, vLLM) | Bare metal | Alias `agent-main` |
 | embed | Inference | Embeddings for Mem0 and Paperless | Small embedding model | In-container CPU | Same model for both; never swapped without re-embedding |
 | LiteLLM | Inference | The alias router every client calls (ADR 0005) | LiteLLM | Container | Always present; clients get alias-only keys; later: failover, a second engine |
@@ -181,6 +182,8 @@ and the audit log.
 - The gateway labels returned content as untrusted.
 - `read(url)` blocks private, LAN and Tailscale addresses, and limits
   size and time.
+- Feeds are fetched by Miniflux on its own networks, never by the
+  gateway (ADR 0009); feed text comes back as quoted, capped data.
 
 **Audit log**
 
@@ -340,6 +343,7 @@ small browser controller. Everything else is configuration.
 | `docs` | `docs.search`, `docs.get`, `docs.upload(ref, {tags, title})` | uploads to household documents notify both users |
 | `search` | `searxng.search`, `kiwix.search`, `kiwix.article` | none |
 | `geo` | `weather.forecast`, `maps.geocode`, `maps.nearby` | none |
+| `feeds` (ADR 0009) | `feeds.list`, `feeds.latest({feed, since?, limit?})`, `feeds.add({url, name?})` | add (a new outbound address) |
 | `browser` | `open`, `snapshot`, `click`, `type`, `login(site)`, `read(url)`, `liveViewLink()`, `download()` → download ID | purchases, form submits, first login per site |
 | `household` | `ask_household(task)` | as the Household agent decides |
 | `secrets` | `request_credential(site)` | the user fills the form |
@@ -446,7 +450,7 @@ Paperless-ngx, SearXNG, Kiwix, Postgres, Redis, sbx.
 
 ## Implementation plan
 
-Build in nine phases, each ending in a working end-to-end path. Don't
+Build in eleven phases, each ending in a working end-to-end path. Don't
 start a phase until the previous one's acceptance checks pass. Each phase
 is a feature under `specs/`.
 
@@ -494,24 +498,37 @@ is a feature under `specs/`.
        user's documents, without its bytes entering model context;
      - user A's agent can't reach user B's mail or documents (negative
        tests).
-6. **Memory:** Mem0 (CPU embeddings, `infer=False`) behind the gateway's
+6. **RSS feeds:** Miniflux behind the gateway's `feeds` connector, with
+   a Miniflux user per owner; feeds added by people with `sesh feed
+   add`, or by an agent with approval (ADR 0009).
+   - Accept:
+     - each agent reads its owner's and the Household's feeds, never
+       another user's (negative tests);
+     - Miniflux can't reach the gateway or Postgres on `default`, and no
+       executor can reach Miniflux;
+     - an agent's `feeds.add` runs only after approval.
+7. **Google Docs (read-only):** search and read the owner's Google Docs
+   through their existing Google grant, with a read-only scope.
+   - Accept: an agent reads its owner's documents, never another
+     user's; nothing can be written.
+8. **Memory:** Mem0 (CPU embeddings, `infer=False`) behind the gateway's
    `memory` connector, scoped per user; cross-store recall with
    documents.
    - Accept: a fact saved in one session is recalled in a later one;
      user A's agent can't recall user B's facts or documents (negative
      tests).
-7. **One agent end to end:** one Hermes profile in a container, with
+9. **One agent end to end:** one Hermes profile in a container, with
    built-in tools off, the gateway as its only MCP server, and a memory
    provider plugin backed by the gateway; Open WebUI connected to it.
    - Accept: chatting in Open WebUI, the agent answers a weather and a
      search question, and uses mail, documents and memory via the
      gateway; attempts to use terminal or file tools fail.
-8. **Browser:** the sbx browser VM, a persistent profile per agent,
+10. **Browser:** the sbx browser VM, a persistent profile per agent,
    `read(url)`, `login(site)`, and a live-view link via ntfy.
    - Accept: `read(url)` returns Markdown and refuses a LAN address;
      `login(site)` refuses on a lookalike domain; the agent can't read a
      filled password field.
-9. **Multi-user and household:** profiles for each user and Household,
+11. **Multi-user and household:** profiles for each user and Household,
    Telegram bots, `ask_household`, skills repositories with hourly
    commits, backups, health alerts, and the operator CLI with its Claude
    Code skills.
@@ -541,17 +558,18 @@ before or during its phase.
 | --- | --- | --- | --- |
 | `agent-main` tool-calling and memory quality on a ~30B local model | Risk | Benchmark candidate models on real tasks (`sesh eval`); keep prompts and tool docs short | 3 |
 | Code Mode durable runtime (snippets, replay) outside Cloudflare | Resolved | Verified under local workerd; it enforces no CPU limits, so one executor per agent and gateway-enforced deadlines | 2 |
-| Hermes skill writing still works with file and terminal tools off | Open question | Verify the skills tool writes only inside the profile's skills folder | 7 |
-| Hermes memory provider interface fits a gateway-backed plugin | Open question | Read the provider ABC; prototype against the `memory` connector | 7 |
-| Browser server choice (Auto Browser, easi.run, Nod, or build) | Open question | Vet code and isolation; confirm CDP fill and field-read blocking | 8 |
+| Hermes skill writing still works with file and terminal tools off | Open question | Verify the skills tool writes only inside the profile's skills folder | 9 |
+| Hermes memory provider interface fits a gateway-backed plugin | Open question | Read the provider ABC; prototype against the `memory` connector | 9 |
+| Browser server choice (Auto Browser, easi.run, Nod, or build) | Open question | Vet code and isolation; confirm CDP fill and field-read blocking | 10 |
 | Paperless built-in AI covers semantic search | Open question | Check the current release; add Paperless-AI only if needed | 5 |
-| Prompt injection via email, pages, documents or other agents | Risk | Untrusted labels, approvals, domain-pinned login, egress guard, audit alerts | 4–9 |
-| Mem0 add-only accumulates stale facts | Risk | Scheduled cleanup; per-user memory editing page | 6 |
-| sbx requires a Docker sign-in (cloud dependency) | Risk | Review login and telemetry terms; fall back to containers if unacceptable | 8 |
-| Telegram content passes Telegram servers | Risk | Convenience only; sensitive work in Open WebUI | 9 |
+| Feed addresses used for server-side request forgery or exfiltration | Risk | Only Miniflux fetches, off `default` on its own networks; agent adds need approval (ADR 0009) | 6 |
+| Prompt injection via email, pages, documents or other agents | Risk | Untrusted labels, approvals, domain-pinned login, egress guard, audit alerts | 4–11 |
+| Mem0 add-only accumulates stale facts | Risk | Scheduled cleanup; per-user memory editing page | 8 |
+| sbx requires a Docker sign-in (cloud dependency) | Risk | Review login and telemetry terms; fall back to containers if unacceptable | 10 |
+| Telegram content passes Telegram servers | Risk | Convenience only; sensitive work in Open WebUI | 11 |
 | Google OAuth app in production shows an unverified warning | Accepted | One-time click-through per user | 5 |
 | Operator can read other users' chats, sessions and logs | Policy | Turn off Open WebUI admin chat access; agree a household policy | 1 |
-| An embedding model change requires re-embedding all memories and documents | Constraint | Pick once; document the re-index procedure | 6 |
+| An embedding model change requires re-embedding all memories and documents | Constraint | Pick once; document the re-index procedure | 8 |
 
 ## References
 

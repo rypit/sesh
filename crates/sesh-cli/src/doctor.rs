@@ -55,7 +55,7 @@ impl Check {
     }
 }
 
-const SERVICES: [&str; 9] = [
+const SERVICES: [&str; 10] = [
     "postgres",
     "redis",
     "litellm",
@@ -63,6 +63,7 @@ const SERVICES: [&str; 9] = [
     "infisical",
     "ntfy",
     "paperless",
+    "miniflux",
     "gateway",
     "open-webui",
 ];
@@ -84,6 +85,7 @@ pub fn run(
     checks.push(credentials_check(secrets, http));
     checks.push(google_check(secrets, http));
     checks.push(paperless_check(secrets, http));
+    checks.push(feeds_check(secrets, http));
     checks.push(audit_check(compose));
     checks.push(match tailscale.serves_port(config.ports.webui) {
         Ok(Some(true)) => Check::pass("tailscale-serve", "Open WebUI is served on the tailnet"),
@@ -409,6 +411,76 @@ fn paperless_check(secrets: &Secrets, http: &dyn Http) -> Check {
     }
 }
 
+/// specs/006 contracts/cli.md: feeds per owner, from Miniflux through the
+/// gateway; warns when Miniflux is unreachable or a feed's last update
+/// failed (Miniflux is not a safety component, like Paperless).
+fn feeds_check(secrets: &Secrets, http: &dyn Http) -> Check {
+    let Some(token) = secrets.get("SESH_GATEWAY_ADMIN_TOKEN") else {
+        return Check::warn("feeds", "no gateway admin token yet", "run `sesh init`");
+    };
+    let r = match http.get(
+        &format!("{}/feeds", crate::credential::admin_url()),
+        Some(token),
+    ) {
+        Ok(r) if r.status == 200 => r,
+        Ok(r) => {
+            return Check::warn(
+                "feeds",
+                format!("the gateway answered {}", r.status),
+                "run `sesh up`",
+            );
+        }
+        Err(e) => {
+            return Check::warn(
+                "feeds",
+                format!("can't reach the gateway: {e}"),
+                "run `sesh up`",
+            );
+        }
+    };
+    if r.body["state"] != "ok" {
+        return Check::warn(
+            "feeds",
+            format!(
+                "the feed service: {}",
+                r.body["message"].as_str().unwrap_or("unavailable")
+            ),
+            "check `docker compose logs miniflux`, then `sesh up`",
+        );
+    }
+    let feeds: Vec<&Value> = r.body["feeds"].as_array().into_iter().flatten().collect();
+    let mut per_owner: std::collections::BTreeMap<&str, usize> = Default::default();
+    for f in &feeds {
+        *per_owner
+            .entry(f["owner"].as_str().unwrap_or("?"))
+            .or_default() += 1;
+    }
+    let failed: Vec<String> = feeds
+        .iter()
+        .filter_map(|f| {
+            f["error"].as_str().map(|e| {
+                format!(
+                    "{}/{} ({e})",
+                    f["owner"].as_str().unwrap_or("?"),
+                    f["name"].as_str().unwrap_or("?")
+                )
+            })
+        })
+        .collect();
+    if !failed.is_empty() {
+        return Check::warn(
+            "feeds",
+            format!("last update failed: {}", failed.join(", ")),
+            "check the address, or `sesh feed remove <owner> <name>`",
+        );
+    }
+    if per_owner.is_empty() {
+        return Check::pass("feeds", "no feeds yet");
+    }
+    let counts: Vec<String> = per_owner.iter().map(|(o, n)| format!("{o} {n}")).collect();
+    Check::pass("feeds", format!("feeds: {}", counts.join(", ")))
+}
+
 /// Warns when an agent had many refusals in the last hour (FR-016).
 fn audit_check(compose: &dyn Compose) -> Check {
     let sql = format!(
@@ -538,6 +610,7 @@ mod tests {
             ("infisical", Some(("127.0.0.1", 8222))),
             ("ntfy", Some(("127.0.0.1", 8090))),
             ("paperless", None),
+            ("miniflux", None),
             ("gateway", Some(("127.0.0.1", 7000))),
             ("open-webui", Some(("127.0.0.1", 3000))),
         ])
@@ -631,7 +704,7 @@ mod tests {
     fn open_port_fails_and_names_the_service() {
         let (c, s) = setup(false);
         let stack = healthy_stack();
-        stack.services.borrow_mut()[8].published[0].address = "0.0.0.0".into();
+        stack.services.borrow_mut()[9].published[0].address = "0.0.0.0".into();
         let checks = run(
             &c,
             &s,
@@ -713,5 +786,38 @@ mod tests {
         let a = checks.iter().find(|c| c.id == "alias-answers").unwrap();
         assert_eq!(a.status, Status::Fail);
         assert_eq!(a.fix.as_deref(), Some("run `sesh up`"));
+    }
+
+    #[test]
+    fn feeds_counts_per_owner_and_warns_on_failures() {
+        let mut s = Secrets::default();
+        s.set("SESH_GATEWAY_ADMIN_TOKEN", "admin");
+        let reply = |body: Value| {
+            FakeHttp::new(move |_, url, _| {
+                assert!(url.ends_with("/admin/feeds"));
+                (200, body.clone())
+            })
+        };
+        let ok = json!({"state": "ok", "feeds": [
+            {"owner": "ana", "name": "a", "error": null},
+            {"owner": "ana", "name": "b", "error": null},
+            {"owner": "household", "name": "h", "error": null}
+        ]});
+        let c = feeds_check(&s, &reply(ok));
+        assert_eq!(c.status, Status::Pass);
+        assert_eq!(c.detail, "feeds: ana 2, household 1");
+        let bad = json!({"state": "ok", "feeds": [{"owner": "ana", "name": "big", "error": "the feed answered 500"}]});
+        let c = feeds_check(&s, &reply(bad));
+        assert_eq!(c.status, Status::Warn);
+        assert!(
+            c.detail.contains("ana/big (the feed answered 500)"),
+            "{}",
+            c.detail
+        );
+        let down = json!({"state": "unavailable", "message": "the feed service is unavailable"});
+        let c = feeds_check(&s, &reply(down));
+        assert_eq!(c.status, Status::Warn);
+        let none = json!({"state": "ok", "feeds": []});
+        assert_eq!(feeds_check(&s, &reply(none)).detail, "no feeds yet");
     }
 }

@@ -132,6 +132,10 @@ pub struct Gateway {
     pub upstream: connectors::Upstream,
     /// `{agent}` is replaced by the agent's name.
     pub executor_url: String,
+    /// Accept a call only from the address the calling agent's executor
+    /// host resolves to (ADR 0009): a capability is useless from anywhere
+    /// else, such as an adopted service sharing a network with the gateway.
+    pub executor_peer_check: bool,
     /// Approval requests and credential forms (specs/004).
     pub approvals: approvals::Store,
     pub notifier: notify::Notifier,
@@ -141,6 +145,8 @@ pub struct Gateway {
     pub google: google::Google,
     pub refs: refs::Refs,
     pub paperless: connectors::docs::Paperless,
+    /// The feed service (specs/006): one Miniflux user per owner.
+    pub miniflux: connectors::feeds::Miniflux,
     /// Approvals a running execution is waiting for, by execution id.
     pub pending: Mutex<std::collections::HashMap<String, Vec<approvals::Request>>>,
 }

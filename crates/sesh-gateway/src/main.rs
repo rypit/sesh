@@ -19,6 +19,8 @@
 //! - `SESH_INFISICAL_URL`, `SESH_INFISICAL_CLIENT_ID`,
 //!   `SESH_INFISICAL_CLIENT_SECRET`, `SESH_INFISICAL_PROJECT_ID`: the secret store
 //! - `SESH_GATEWAY_ADMIN_TOKEN`: the operator's token for `/admin/*`
+//! - `SESH_MINIFLUX_USER`, `SESH_MINIFLUX_PASSWORD`: the feed service's
+//!   admin (specs/006)
 //! - `SESH_SECRET_STORE=memory`: an in-process secret store (the eval
 //!   project only; never the household stack)
 
@@ -44,6 +46,7 @@ fn env(k: &str) -> Option<String> {
 
 async fn call_handler(
     State(gw): State<Arc<Gateway>>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> (StatusCode, Json<Value>) {
@@ -57,7 +60,7 @@ async fn call_handler(
     let cap = headers
         .get("x-sesh-capability")
         .and_then(|v| v.to_str().ok());
-    let r = calls::handle(&gw, cap, &body).await;
+    let r = calls::handle_from(&gw, Some(peer.ip()), cap, &body).await;
     (
         StatusCode::from_u16(r.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
         Json(r.body),
@@ -114,6 +117,7 @@ async fn main() -> anyhow::Result<()> {
         Some(url) if url.starts_with("file:") => Audit::file(&url["file:".len()..])?,
         Some(url) => Audit::postgres(url.to_string()),
     };
+    let test_connectors = env("SESH_GATEWAY_TEST_CONNECTORS").as_deref() == Some("1");
     let users = sesh_gateway::Users::from_file(
         env("SESH_USERS_FILE")
             .unwrap_or_else(|| "/etc/sesh/users.toml".into())
@@ -122,7 +126,7 @@ async fn main() -> anyhow::Result<()> {
     let gw = Arc::new(Gateway {
         agents,
         users,
-        connectors: connectors::all(env("SESH_GATEWAY_TEST_CONNECTORS").as_deref() == Some("1")),
+        connectors: connectors::all(test_connectors),
         caps: Default::default(),
         audit,
         approvals,
@@ -132,6 +136,10 @@ async fn main() -> anyhow::Result<()> {
         pending: Default::default(),
         google: Default::default(),
         refs: Default::default(),
+        miniflux: connectors::feeds::Miniflux::new(
+            &env("SESH_MINIFLUX_USER").unwrap_or_default(),
+            &env("SESH_MINIFLUX_PASSWORD").unwrap_or_default(),
+        ),
         paperless: sesh_gateway::connectors::docs::Paperless::new(
             &env("SESH_PAPERLESS_USER").unwrap_or_default(),
             &env("SESH_PAPERLESS_PASSWORD").unwrap_or_default(),
@@ -140,6 +148,7 @@ async fn main() -> anyhow::Result<()> {
         settings,
         executor_url: env("SESH_EXECUTOR_URL")
             .unwrap_or_else(|| "http://executor-{agent}:8000".into()),
+        executor_peer_check: true,
     });
 
     let mut hosts = vec![
@@ -214,7 +223,13 @@ async fn main() -> anyhow::Result<()> {
         let app = approvals_app.clone();
         servers.spawn(async move { axum::serve(l, app).await });
     }
-    servers.spawn(async move { axum::serve(exec_listener, executor_app).await });
+    servers.spawn(async move {
+        axum::serve(
+            exec_listener,
+            executor_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+    });
     // Each server runs until it fails; one failing stops the gateway.
     if let Some(r) = servers.join_next().await {
         r??;

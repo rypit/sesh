@@ -20,6 +20,8 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ${SESH_DATA_DIR:?}/compose/postgres-init.sql:/docker-entrypoint-initdb.d/10-sesh.sql:ro
+    # `feeds-db`: Miniflux's own route to its database (specs/006 R2).
+    networks: [default, feeds-db]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sesh -d sesh"]
       interval: 5s
@@ -131,6 +133,10 @@ services:
       # admin and enforces owners itself.
       SESH_PAPERLESS_USER: sesh-gateway
       SESH_PAPERLESS_PASSWORD: ${PAPERLESS_ADMIN_PASSWORD:?run sesh init}
+      # Feeds (specs/006, ADR 0009): the gateway is Miniflux's admin and
+      # enforces owners itself.
+      SESH_MINIFLUX_USER: sesh-gateway
+      SESH_MINIFLUX_PASSWORD: ${MINIFLUX_ADMIN_PASSWORD:?run sesh init}
     volumes:
       - ${SESH_DATA_DIR:?}/gateway:/etc/sesh:ro
     ports:
@@ -138,7 +144,7 @@ services:
       # Approval pages and credential forms; reach them from a phone with
       # `tailscale serve` (specs/004 quickstart.md).
       - "127.0.0.1:${SESH_APPROVALS_PORT:-7002}:7002"
-    networks: [default, search, docs]
+    networks: [default, search, docs, feeds]
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -239,6 +245,37 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Feeds (specs/006, ADR 0009). Reachable only from the gateway (the
+  # `feeds` network is internal); `feeds-egress` lets it reach publishers,
+  # and the internal `feeds-db` reaches Postgres. Never on `default`.
+  miniflux:
+    image: miniflux/miniflux:2.3.5@sha256:8fd6c3c434ecc3d4083306f83e03c0bb74c632e0f8378da5ead7e1773b0b89c9
+    environment:
+      # Its own login, owning only its database (specs/006 research.md R2).
+      DATABASE_URL: postgres://miniflux:${MINIFLUX_DB_PASSWORD:?run sesh init}@postgres:5432/miniflux?sslmode=disable
+      RUN_MIGRATIONS: "1"
+      CREATE_ADMIN: "1"
+      ADMIN_USERNAME: sesh-gateway
+      ADMIN_PASSWORD: ${MINIFLUX_ADMIN_PASSWORD:?run sesh init}
+      LISTEN_ADDR: 0.0.0.0:8080
+      POLLING_FREQUENCY: "60"
+      METRICS_COLLECTOR: "0"
+    networks: [feeds, feeds-egress, feeds-db]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "/usr/bin/miniflux", "-healthcheck", "auto"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   # Web search. Reachable only from the gateway (the `search` network is
   # internal); its own `searxng-egress` network lets it reach search engines.
   searxng:
@@ -270,3 +307,8 @@ networks:
   docs:
     internal: true
   searxng-egress: {}
+  feeds:
+    internal: true
+  feeds-egress: {}
+  feeds-db:
+    internal: true

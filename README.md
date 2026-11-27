@@ -48,14 +48,16 @@ The [constitution](.specify/memory/constitution.md) is binding. In short:
 **Building.** Features 001 to 004 (foundation stack, gateway core, model
 evals, secrets and approvals) are done; feature 005 (Google and
 Paperless, with per-user identity,
-[`specs/005-google-paperless/`](specs/005-google-paperless/)) is in
-progress. The design is in the
+[`specs/005-google-paperless/`](specs/005-google-paperless/)) and
+feature 006 (RSS feeds, [`specs/006-rss-feeds/`](specs/006-rss-feeds/))
+are in progress. The design is in the
 [Solutions Architecture](docs/architecture/solutions-architecture.md);
 decisions are in [`docs/decisions/`](docs/decisions/)
 and reference notes in [`docs/research/`](docs/research/). The build
-follows the architecture's nine phases (foundation, gateway core, model
-evals, secrets and approvals, Google and Paperless, memory, one agent,
-browser, household), each a feature under `specs/`.
+follows the architecture's eleven phases (foundation, gateway core,
+model evals, secrets and approvals, Google and Paperless, RSS feeds,
+read-only Google Docs, memory, one agent, browser, household), each a
+feature under `specs/`.
 
 ## Try it
 

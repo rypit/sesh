@@ -26,6 +26,45 @@ fn refuse(status: u16, reason: &str) -> Reply {
 /// Handles one forwarded call. `capability` comes from the
 /// `X-Sesh-Capability` header; `body` is `{connector, method, args}`.
 pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Reply {
+    handle_from(gw, None, capability, body).await
+}
+
+/// Whether `peer` is the address of `agent`'s executor.
+async fn from_own_executor(gw: &Gateway, agent: &str, peer: Option<std::net::IpAddr>) -> bool {
+    let Some(peer) = peer else {
+        return false;
+    };
+    let url = gw.executor_url_for(agent);
+    let Some(host) = reqwest::Url::parse(&url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+    else {
+        return false;
+    };
+    let host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    match tokio::net::lookup_host((host.as_str(), 0)).await {
+        // An IPv4 peer can arrive as an IPv4-mapped IPv6 address.
+        Ok(addrs) => addrs.map(|a| a.ip()).any(|ip| {
+            ip == peer
+                || std::net::IpAddr::V6(match ip {
+                    std::net::IpAddr::V4(v4) => v4.to_ipv6_mapped(),
+                    std::net::IpAddr::V6(v6) => v6,
+                }) == peer
+        }),
+        Err(_) => false,
+    }
+}
+
+/// One executor call. `peer` is the connection's source address.
+pub async fn handle_from(
+    gw: &Gateway,
+    peer: Option<std::net::IpAddr>,
+    capability: Option<&str>,
+    body: &Value,
+) -> Reply {
     let connector = body["connector"].as_str().unwrap_or("").to_string();
     let method = body["method"].as_str().unwrap_or("").to_string();
     let args = body.get("args").cloned().unwrap_or(json!({}));
@@ -66,6 +105,13 @@ pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Rep
         };
         entry.agent = grant.agent.clone();
         entry.execution = Some(grant.execution.clone());
+        if gw.executor_peer_check && !from_own_executor(gw, &grant.agent, peer).await {
+            break 'checks Err(refused(
+                &mut entry,
+                403,
+                "call from outside the agent's executor",
+            ));
+        }
         let Some(agent) = gw.agents.get(&grant.agent) else {
             break 'checks Err(refused(&mut entry, 403, "agent no longer exists"));
         };
@@ -88,6 +134,13 @@ pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Rep
         };
         if let Err(problem) = schema::validate(&desc.input, &args) {
             break 'checks Err(refused(&mut entry, 400, &problem));
+        }
+        // A request that can't be granted never reaches a person
+        // (specs/006 research.md R8).
+        if connector == "feeds"
+            && let Err(why) = crate::connectors::feeds::precheck(gw, &scope, &method, &args).await
+        {
+            break 'checks Err(refused(&mut entry, 400, &why));
         }
         // Credentials the connector declares, read only here (FR-011).
         let mut creds = std::collections::BTreeMap::new();
@@ -161,6 +214,9 @@ pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Rep
                 .await
             }
             "docs" => crate::connectors::docs::call(gw, &scope, &grant.agent, &method, &args).await,
+            "feeds" => {
+                crate::connectors::feeds::call(gw, &scope, &grant.agent, &method, &args).await
+            }
             _ => gw.upstream.call(&connector, &method, &args, &creds).await,
         };
         match result {
@@ -173,7 +229,7 @@ pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Rep
                 for name in creds.keys() {
                     notes.push(format!("credential {connector}/{name}"));
                 }
-                if ["mail", "calendar", "contacts", "docs"].contains(&connector.as_str()) {
+                if ["mail", "calendar", "contacts", "docs", "feeds"].contains(&connector.as_str()) {
                     notes.push(format!("owner {}", scope.owner));
                 }
                 entry.reason = (!notes.is_empty()).then(|| notes.join("; "));
@@ -231,6 +287,7 @@ pub mod tests {
             settings,
             users: crate::Users::fixed(Default::default()),
             executor_url: "http://executor-{agent}:8000".into(),
+            executor_peer_check: false,
             approvals: crate::approvals::Store::memory(),
             notifier: crate::notify::Notifier::memory(),
             secrets: crate::secrets::SecretStore::memory(),
@@ -238,6 +295,7 @@ pub mod tests {
             google: Default::default(),
             refs: Default::default(),
             paperless: crate::connectors::docs::Paperless::new("", ""),
+            miniflux: crate::connectors::feeds::Miniflux::new("", ""),
             pending: Default::default(),
         }
     }
@@ -294,6 +352,35 @@ pub mod tests {
 
     fn call(c: &str, m: &str, args: Value) -> Value {
         json!({"connector": c, "method": m, "args": args})
+    }
+
+    #[tokio::test]
+    async fn a_call_is_accepted_only_from_the_agents_own_executor() {
+        let mut gw = gateway(Audit::memory(), settings_with(&fake_upstream().await));
+        gw.executor_peer_check = true;
+        // `localhost` stands in for `executor-<agent>`: it resolves to loopback.
+        gw.executor_url = "http://localhost:8000".into();
+        let body = call("geo", "forecast", json!({}));
+        let ours: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        let other: std::net::IpAddr = "172.30.0.7".parse().unwrap();
+        let cap = gw.caps.issue("alice", "exec_p", Duration::from_secs(30));
+        let r = handle_from(&gw, Some(other), Some(&cap), &body).await;
+        assert_eq!(r.status, 403, "{:?}", r.body);
+        assert_eq!(r.body["error"], "call from outside the agent's executor");
+        let r = handle_from(&gw, None, Some(&cap), &body).await;
+        assert_eq!(r.status, 403, "no peer address: refused");
+        let r = handle_from(&gw, Some(ours), Some(&cap), &body).await;
+        assert_eq!(r.status, 200, "{:?}", r.body);
+        let e = gw.audit.entries();
+        assert!(
+            e.iter()
+                .any(|x| x.reason.as_deref() == Some("call from outside the agent's executor")),
+            "refusals are audited"
+        );
+        assert!(
+            !format!("{e:?}").contains("172.30.0.7"),
+            "no address in the audit log"
+        );
     }
 
     #[tokio::test]

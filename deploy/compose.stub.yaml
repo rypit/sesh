@@ -10,7 +10,17 @@ services:
       STUB_SCRIPT: ${STUB_SCRIPT:-}
       # The hash of the credential the test connector should present (specs/004).
       STUB_TESTCRED_SHA256: ${STUB_TESTCRED_SHA256:-}
+    # The fake feed publisher (specs/006): Miniflux reaches it on
+    # feeds-egress, so stub mode needs no internet.
+    networks: [default, feeds-egress]
     restart: unless-stopped
+  # The fake publisher is on a private address: let Miniflux fetch it, in
+  # stub mode only, if this Miniflux release refuses private networks.
+  miniflux:
+    environment:
+      FETCHER_ALLOW_PRIVATE_NETWORKS: "1"
+      # Fetch errors are logged only at debug level.
+      LOG_LEVEL: debug
   # The test-only approval-gated connector, for negative tests.
   gateway:
     environment:

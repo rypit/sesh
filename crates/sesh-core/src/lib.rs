@@ -111,6 +111,14 @@ impl UsersFile {
     }
 }
 
+/// A feed's name (specs/006 data-model.md): `[a-z0-9][a-z0-9-]{0,31}`.
+pub fn valid_feed_name(name: &str) -> bool {
+    let mut c = name.chars();
+    matches!(c.next(), Some('a'..='z' | '0'..='9'))
+        && name.len() <= 32
+        && c.all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || x == '-')
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentsFile {
@@ -312,6 +320,24 @@ mod tests {
     }
 
     #[test]
+    fn feed_names_and_settings() {
+        assert!(valid_feed_name("harbour") && valid_feed_name("nrk-2") && valid_feed_name("9news"));
+        for bad in ["", "-x", "News", "a b", "a.b", &"a".repeat(33)] {
+            assert!(!valid_feed_name(bad), "{bad}");
+        }
+        let s = GatewaySettings::default();
+        assert_eq!(s.feeds_max_per_owner, 50);
+        assert_eq!(s.upstreams.miniflux, "http://miniflux:8080");
+        let bad = GatewaySettings {
+            feeds_max_per_owner: 0,
+            ..GatewaySettings::default()
+        };
+        assert!(bad.validate().is_err());
+        let old: GatewaySettings = toml::from_str("deadline_secs = 30").unwrap();
+        assert_eq!(old.feeds_max_per_owner, 50, "older gateway.toml files load");
+    }
+
+    #[test]
     fn approval_settings_default_and_validate() {
         let s = GatewaySettings::default();
         assert_eq!(s.approvals_base_url, "http://127.0.0.1:7002");
@@ -372,6 +398,9 @@ pub struct GatewaySettings {
     pub upload_max_bytes: u64,
     #[serde(default = "d_ref_ttl")]
     pub ref_ttl_secs: u64,
+    /// Feeds (specs/006 data-model.md, Gateway settings).
+    #[serde(default = "d_feeds_per_owner")]
+    pub feeds_max_per_owner: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -397,6 +426,9 @@ pub struct Upstreams {
     pub test: String,
     #[serde(default = "d_paperless")]
     pub paperless: String,
+    /// The feed service (specs/006 research.md R1).
+    #[serde(default = "d_miniflux")]
+    pub miniflux: String,
     /// Google's endpoints (specs/005 research.md R3); tests point them at fakes.
     #[serde(default = "d_google_auth")]
     pub google_auth: String,
@@ -481,6 +513,12 @@ fn d_upload_max() -> u64 {
 fn d_ref_ttl() -> u64 {
     3600
 }
+fn d_miniflux() -> String {
+    "http://miniflux:8080".into()
+}
+fn d_feeds_per_owner() -> u32 {
+    50
+}
 
 impl Default for Upstreams {
     fn default() -> Self {
@@ -491,6 +529,7 @@ impl Default for Upstreams {
             nominatim: d_nominatim(),
             test: d_test(),
             paperless: d_paperless(),
+            miniflux: d_miniflux(),
             google_auth: d_google_auth(),
             google_token: d_google_token(),
             google_revoke: d_google_revoke(),
@@ -518,6 +557,7 @@ impl Default for GatewaySettings {
             mail_results_max: d_mail_max(),
             upload_max_bytes: d_upload_max(),
             ref_ttl_secs: d_ref_ttl(),
+            feeds_max_per_owner: d_feeds_per_owner(),
         }
     }
 }
@@ -558,6 +598,9 @@ impl GatewaySettings {
             && (!(-90.0..=90.0).contains(&h.latitude) || !(-180.0..=180.0).contains(&h.longitude))
         {
             bail!("gateway.home is not a valid latitude/longitude");
+        }
+        if !(1..=1000).contains(&self.feeds_max_per_owner) {
+            bail!("gateway.feeds_max_per_owner must be 1-1000");
         }
         Ok(())
     }

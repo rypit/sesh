@@ -13,7 +13,7 @@ use std::path::Path;
 pub const FILE_NAME: &str = "secrets.env";
 
 /// Values `sesh init` generates when missing.
-pub const GENERATED: [&str; 16] = [
+pub const GENERATED: [&str; 18] = [
     "POSTGRES_PASSWORD",
     "GATEWAY_DB_PASSWORD",
     "SEARXNG_SECRET",
@@ -32,6 +32,10 @@ pub const GENERATED: [&str; 16] = [
     // Feature 005: Paperless-ngx (the gateway signs in as its admin).
     "PAPERLESS_ADMIN_PASSWORD",
     "PAPERLESS_SECRET_KEY",
+    // Feature 006: Miniflux (the gateway signs in as its admin).
+    "MINIFLUX_ADMIN_PASSWORD",
+    // Miniflux's own Postgres login (never the superuser).
+    "MINIFLUX_DB_PASSWORD",
 ];
 
 /// Set by `sesh up` when it bootstraps Infisical (specs/004 research.md R5).

@@ -29,7 +29,7 @@ pub const EVAL_APPROVALS_PORT: u16 = 7102;
 pub const EVAL_NTFY_PORT: u16 = 7190;
 pub const EVAL_TOPIC: &str = "sesh-eval-approvals";
 pub const EVAL_AGENT: &str = "eval";
-pub const EVAL_CONNECTORS: [&str; 5] = ["search", "geo", "testgate", "mail", "docs"];
+pub const EVAL_CONNECTORS: [&str; 6] = ["search", "geo", "testgate", "mail", "docs", "feeds"];
 const FAKES: &str = "http://fakes:8000";
 
 /// A missing prerequisite: exit code 3 (contracts/cli.md).
@@ -103,6 +103,7 @@ pub fn eval_gateway(config: &Config) -> GatewaySettings {
         &mut g.upstreams.nominatim,
         &mut g.upstreams.test,
         &mut g.upstreams.paperless,
+        &mut g.upstreams.miniflux,
     ] {
         *u = FAKES.into();
     }
@@ -319,6 +320,20 @@ pub fn connect_fake_google(http: &dyn Http, admin_token: &str) -> Result<()> {
     )?;
     if r.status != 200 {
         bail!("fake Google consent failed ({})", r.status);
+    }
+    Ok(())
+}
+
+/// The Household's `harbour` feed in fake Miniflux, added through the
+/// same admin endpoint as `sesh feed add` (specs/006 research.md R9).
+pub fn add_fake_feed(http: &dyn Http, admin_token: &str) -> Result<()> {
+    let r = http.post(
+        &format!("http://127.0.0.1:{EVAL_APPROVALS_PORT}/admin/feeds/add"),
+        Some(admin_token),
+        &json!({"owner": sesh_core::HOUSEHOLD, "url": format!("{FAKES}/fake/feeds/harbour.xml"), "name": "harbour"}),
+    )?;
+    if r.status != 200 {
+        bail!("adding the eval's feed failed ({}): {}", r.status, r.body);
     }
     Ok(())
 }
@@ -549,6 +564,7 @@ pub fn run(dir: &Path, opts: &Options) -> Result<bool> {
         .up(&[])
         .context("can't start the eval gateway (are the sesh images built?)")?;
     connect_fake_google(&http, &prepared.admin_token)?;
+    add_fake_feed(&http, &prepared.admin_token)?;
     let mcp = HttpMcp::connect(
         &format!("http://127.0.0.1:{EVAL_PORT}/mcp"),
         &token,
@@ -646,6 +662,7 @@ mod tests {
         assert_eq!(g.upstreams.open_meteo, FAKES);
         // specs/005: Google and Paperless are the fakes too; nothing real.
         assert_eq!(g.upstreams.paperless, FAKES);
+        assert_eq!(g.upstreams.miniflux, FAKES, "fake Miniflux");
         for u in [
             &g.upstreams.google_token,
             &g.upstreams.gmail,

@@ -1,3 +1,19 @@
+<!--
+Sync Impact Report
+- Version: 1.2.1 → 1.3.0 (MINOR: principle VII's named outbound
+  exceptions are expanded).
+- Modified principle: VII. Local-first. The search exception now also
+  covers feed publishers, reached only through the feed service
+  (Miniflux, feature 006, ADR 0009).
+- Added or removed sections: none.
+- Templates: .specify/templates/plan-template.md,
+  spec-template.md and tasks-template.md need no change (the
+  Constitution Check lists principles by number).
+- Checks: feeds_stack's network tests (Miniflux alone reaches
+  publishers; it isn't on `default`, so it can't reach the gateway or
+  Postgres there; agents and executors can't reach it).
+- Follow-up: none.
+-->
 # sesh Constitution
 
 sesh ("scribe") is a local-first agent platform for one household: AI
@@ -83,8 +99,9 @@ waiting; promoting them must be a human decision.
 ### VII. Local-first
 
 All inference and household data stay on the home server. Exceptions are
-named and minimal: Google APIs via OAuth, search engines behind the
-search service, and content-free push wake-ups. No outbound telemetry
+named and minimal: Google APIs via OAuth, search engines and feed
+publishers, reached only through the search and feed services, and
+content-free push wake-ups. No outbound telemetry
 from sesh's own code.
 
 *Rationale*: the household's data is the thing being protected.
@@ -180,4 +197,4 @@ updates any affected checks and templates. Versioning:
 
 All reviews check compliance with this constitution.
 
-**Version**: 1.2.1 | **Ratified**: 2026-11-26 | **Last Amended**: 2026-11-27
+**Version**: 1.3.0 | **Ratified**: 2026-11-26 | **Last Amended**: 2026-11-27

@@ -2,6 +2,7 @@
 //! dispatch to each upstream. One module per upstream family.
 
 pub mod docs;
+pub mod feeds;
 pub mod geo;
 pub mod google;
 pub mod search;
@@ -118,6 +119,7 @@ pub fn all(test_connectors: bool) -> Vec<ConnectorDescriptor> {
     ];
     out.extend(google::descriptors());
     out.push(docs::descriptor());
+    out.push(feeds::descriptor());
     if test_connectors {
         out.push(connector(
             "testgate",
