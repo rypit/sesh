@@ -121,7 +121,7 @@ description: "Task list for feature 008: network isolation"
 - [x] T014 [US3] Unit tests, then the code.
   - `Compose::remove_network_if_unused(name) -> Result<Option<Vec<String>>>`, returning the containers still attached, if any. Implemented with `docker network inspect` and `docker network rm` in `crates/sesh-cli/src/host/compose.rs`, plus the fake in `host/fake.rs`.
   - `up::run` calls it for `sesh_default` after the services are up and reports per contracts/cli.md: removed, still in use, or absent (silent).
-- [ ] T015 [US3] Stack steps in `network_stack`:
+- [x] T015 [US3] Stack steps in `network_stack`:
   - Rewind to the pre-008 layout: a fixture override that puts every service back on `default`, in `crates/sesh-cli/tests/fixtures/pre-008.compose.yaml`.
   - Create data: an Open WebUI account, a router key, a credential and a document tag, reusing `isolation_stack`'s helpers.
   - Run the new `sesh up`.
@@ -137,7 +137,7 @@ description: "Task list for feature 008: network isolation"
 **Independent test**: the stub-mode stack tests and `eval_stack` pass with containers' internet blocked.
 
 - [x] T016 [US4] `deploy/compose.stub.yaml`: an internal `stub` network (`Network.stub_only`) joining `stub-llm`, `litellm` and `gateway`. `stub-llm` moves from `default` to `[stub, feeds-egress]`. `network_stack` checks that LiteLLM, the gateway and Miniflux reach `stub-llm:8000`.
-- [ ] T017 [P] [US4] Confirm the eval project (`deploy/eval/compose.yaml`) is unaffected. It has no `default` and no reference to household networks. Add a unit test in `crates/sesh-cli/src/eval/mod.rs` asserting it never names a household network.
+- [x] T017 [P] [US4] Confirm the eval project (`deploy/eval/compose.yaml`) is unaffected. It has no `default` and no reference to household networks. Add a unit test in `crates/sesh-cli/src/eval/mod.rs` asserting it never names a household network.
 
 ---
 
@@ -150,13 +150,13 @@ description: "Task list for feature 008: network isolation"
 - [x] T018 [US5] Unit tests, then the `network-layout` check in `crates/sesh-cli/src/doctor.rs`, per contracts/cli.md.
   - It reads each running sesh container's networks through `Compose` and compares them with `layout.rs` (`Network.members`). It also checks whether `sesh_default` exists. It also checks that `pg_hba_file_rules` matches the current subnets: each login only on its own network, no network rule for `sesh`, and a final reject (contracts/cli.md).
   - The fake compose in `host/fake.rs` gains network data.
-- [ ] T019 [US5] Stack step in `network_stack`: `docker network connect sesh_secrets <open-webui>`. The doctor fails, naming `open-webui` and `secrets`. Then disconnect, and the doctor passes again.
+- [x] T019 [US5] Stack step in `network_stack`: `docker network connect sesh_secrets <open-webui>`. The doctor fails, naming `open-webui` and `secrets`. Then disconnect, and the doctor passes again.
 
 ---
 
 ## Phase 8: Polish
 
-- [ ] T020 [P] Architecture doc: a network-layout section (the networks and the reachability rule), and updates to the deployment table and the security section. `diagram.jsx` and `docs/architecture.svg`: update them if the diagram shows networks or shared links; the diagram check in `make check` keeps them identical.
+- [x] T020 [P] Architecture doc: a network-layout section (the networks and the reachability rule), and updates to the deployment table and the security section. `diagram.jsx` and `docs/architecture.svg`: update them if the diagram shows networks or shared links; the diagram check in `make check` keeps them identical. (The diagram shows logical links only, none of which changed, so it is unchanged.)
 - [x] T021 [P] `.github/workflows/ci.yml`: add `network_stack` to the lightest stack group.
 - [ ] T022 Record CI results in `specs/008-network-isolation/research.md`
 

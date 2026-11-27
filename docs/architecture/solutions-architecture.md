@@ -107,7 +107,7 @@ sesh has 20 components across six zones. Three are custom builds (marked
 | SearXNG | Resources | Web search | SearXNG | Container | JSON output; reachable from the gateway only |
 | Kiwix | Resources | Offline Wikipedia | kiwix-serve + ZIM files | Container | Text-only English Wikipedia (~50GB); quarterly refresh |
 | Weather + maps | Resources | Forecasts, geocoding, places | Open-Meteo, OpenStreetMap | Gateway connector | No keys; home location fixed in the gateway |
-| Miniflux | Resources | Feeds (RSS, Atom) the household follows | Miniflux (ADR 0009) | Container | User per owner, managed by the gateway; reachable from the gateway only (`feeds` network); its own egress network to publishers and its own route to Postgres, never `default`; agent adds need approval; web UI not published |
+| Miniflux | Resources | Feeds (RSS, Atom) the household follows | Miniflux (ADR 0009) | Container | User per owner, managed by the gateway; reachable from the gateway only (`feeds` network); its own egress network to publishers and its own database network to Postgres (see Network layout); agent adds need approval; web UI not published |
 | Paperless-ngx | Resources | Household documents: OCR, search | Paperless-ngx (+ Paperless-AI if needed) | Container | User per agent scope; search, read and upload via the gateway; a mail rule imports a Gmail "To file" label; embeddings on CPU |
 | Browser | Resources | Logged-in browsing, live view, `read(url)` | Chromium (Playwright build), headful | sbx microVM per session | Profile per agent; fresh context per read; private addresses blocked (**build**: `login(site)`, `read(url)`) |
 | Mem0 | Resources | Long-term memory per user + household | Mem0 OSS, pgvector, BM25 | Container | `infer=False` at first; CPU embeddings; `user_id` set by the gateway |
@@ -207,13 +207,26 @@ and the audit log.
   fails if a service is connected as the superuser.
 - Each service that uses Redis has its own instance, on an internal
   network shared only with it.
+- Each database login is accepted only from its own service's database
+  network, and the superuser only over the local socket (ADR 0011; see
+  Network layout).
 
 **Network**
 
-- All services listen on the Docker network or localhost. People reach
-  Open WebUI and ntfy over Tailscale only.
-- Containers and sandboxes may reach the inference server and the
-  gateway. Only the gateway and named resources reach the internet.
+- Services share no catch-all network. Each is on only the networks for
+  its own links, so a compromised service reaches only its neighbours
+  (ADR 0011; see Network layout).
+- Published ports are on loopback only. People reach Open WebUI and ntfy
+  over Tailscale only.
+- Agents reach only the gateway. LiteLLM reaches the inference server;
+  the gateway, SearXNG and Miniflux reach the internet for their named
+  resources, each from its own edge or egress network.
+- Open WebUI and Infisical keep outbound access through their edge
+  networks, which they need for their published ports; Compose can't
+  filter egress, so host firewall rules are a recorded follow-up.
+- `sesh doctor` (`network-layout`) fails when a container is on a
+  network outside its row, when the old shared network exists, or when
+  the database login rules don't match the networks' ranges.
 
 ## Users, agents and household model
 
@@ -299,7 +312,7 @@ that touches untrusted content runs in sbx microVMs.
 | Placement | Components | Why |
 | --- | --- | --- |
 | Bare metal (macOS) | Inference server, when it needs the GPU (for example oMLX) | Needs the Metal GPU |
-| Docker (Compose) | Open WebUI, Hermes (container per profile), gateway, workerd executor per agent (no network), Infisical, ntfy, Mem0, Paperless, Miniflux, SearXNG, Kiwix, LiteLLM, Postgres, Redis (one per service) | Long-lived services; one Compose file moves to the Mac mini unchanged |
+| Docker (Compose) | Open WebUI, Hermes (container per profile), gateway, workerd executor per agent (only its own network to the gateway), Infisical, ntfy, Mem0, Paperless, Miniflux, SearXNG, Kiwix, LiteLLM, Postgres, Redis (one per service) | Long-lived services; one Compose file moves to the Mac mini unchanged; no shared network (see Network layout) |
 | sbx microVM | Browser sessions | VM boundary for code execution and untrusted web content |
 
 **Memory budget on a 64GB Mac mini (estimates)**
@@ -335,6 +348,60 @@ that touches untrusted content runs in sbx microVMs.
 - Update monthly, in a set window. Health checks alert via ntfy.
 - Schedule large document imports overnight, since they share the GPU
   with chat.
+
+## Network layout
+
+Services share no catch-all network: Compose's `default` network is gone
+(ADR 0011). Each service is on exactly the networks its row names in
+`crates/sesh-cli/src/layout.rs`, the one source of truth for the Compose
+files' unit test, `sesh doctor` and the `network_stack` stack test
+(specs/008 contracts/networks.md).
+
+**Three kinds of network**
+
+| Kind | Internal | Members | Examples |
+| --- | --- | --- | --- |
+| Database | yes | Postgres and one storing service | `litellm-db`, `openwebui-db`, `gateway-db`, `infisical-db`, `paperless-db`, `feeds-db` |
+| Pair | yes | the two ends of one link | `models` (Open WebUI, LiteLLM), `secrets` (gateway, Infisical), `notify` (gateway, ntfy) |
+| Edge | no | one service only, for its published port and outbound access | `webui-edge`, `litellm-edge`, `gateway-edge`, `infisical-edge`, `ntfy-edge` |
+
+- The resource networks (`search`, `docs`, `feeds`), the egress
+  networks (`searxng-egress`, `feeds-egress`), each Redis's own network
+  and each executor's `exec-<agent>` network are as before.
+- Postgres is on database networks only. No service is on more than
+  one non-internal network, so its only way out is unambiguous.
+- In stub mode only, an internal `stub` network joins the stub model
+  server with LiteLLM and the gateway.
+
+**The reachability rule**
+
+- A network carries traffic both ways, so reachability is symmetric
+  within a shared network: A reaches B's port if and only if they share
+  a network and B listens there. Unused reverse paths (for example,
+  LiteLLM to Open WebUI over `models`) are listed in the layout table,
+  so the stack test expects them and notices a change.
+- The one exception is the gateway's agent (`:7000`) and approvals
+  (`:7002`) listeners, which bind only loopback and `gateway-edge`, so no
+  other container reaches them. Its executor listener (`:7001`) accepts
+  connections on its other networks but refuses every call that isn't
+  from the calling agent's own executor (ADR 0009).
+- Every other pair is refused, probed by every address the destination
+  has.
+
+**Database login rules**
+
+- `sesh up` writes Postgres's login rules (`pg_hba.conf`, in
+  `${SESH_DATA_DIR}/postgres-conf`) after starting Postgres, from the
+  subnets Docker assigned to each database network, and reloads it
+  without a restart.
+- Each service's login is accepted only from its own database network's
+  subnets; the superuser only over the container's local socket; every
+  other connection is rejected.
+- No subnet is fixed in configuration. If one can't be read, `sesh up`
+  fails and that login stays refused.
+- An install from before this layout moves with `sesh up`: Compose
+  recreates each container on its new networks, and `sesh up` removes
+  `sesh_default` once nothing uses it.
 
 ## Build vs adopt
 
@@ -517,8 +584,9 @@ is a feature under `specs/`.
    - Accept:
      - each agent reads its owner's and the Household's feeds, never
        another user's (negative tests);
-     - Miniflux can't reach the gateway or Postgres on `default`, and no
-       executor can reach Miniflux;
+     - Miniflux can't reach the gateway or Postgres on `default` (the
+       shared network then; phase 8 removed it), and no executor can
+       reach Miniflux;
      - an agent's `feeds.add` runs only after approval.
 7. **Service isolation:** a Postgres login per adopted service, owning
    only its database, and a Redis per service on its own network;
@@ -541,7 +609,35 @@ is a feature under `specs/`.
        superuser over any network;
      - `sesh doctor` fails when a service is on a network outside its
        row.
-9. **Google Docs (read-only):** search and read the owner's Google Docs
+9. **Memory:** Mem0 (CPU embeddings, `infer=False`) behind the gateway's
+   `memory` connector, scoped per user; cross-store recall with
+   documents. Mem0 gets its own login; the migration creates the
+   `vector` extension, which needs the superuser.
+   - Accept: a fact saved in one session is recalled in a later one;
+     user A's agent can't recall user B's facts or documents (negative
+     tests).
+10. **One agent end to end:** one Hermes profile in a container, with
+   built-in tools off, the gateway as its only MCP server, and a memory
+   provider plugin backed by the gateway; Open WebUI connected to it.
+   - Accept: chatting in Open WebUI, the agent answers a weather and a
+     search question, and uses mail, documents and memory via the
+     gateway; attempts to use terminal or file tools fail.
+11. **Browser:** the sbx browser VM, a persistent profile per agent,
+   `read(url)`, `login(site)`, and a live-view link via ntfy.
+   - Accept: `read(url)` returns Markdown and refuses a LAN address;
+     `login(site)` refuses on a lookalike domain; the agent can't read a
+     filled password field.
+12. **Multi-user and household:** profiles for each user and Household,
+   Telegram bots, `ask_household`, skills repositories with hourly
+   commits, backups, health alerts, and the operator CLI with its Claude
+   Code skills.
+   - Accept:
+     - "tell the household agent to add milk" works from either user;
+     - personal → personal requests are refused;
+     - restore from backup succeeds on a clean machine;
+     - `sesh user add` provisions a test user end to end, and `sesh user
+       remove` revokes every credential.
+13. **Google Docs (read-only):** search and read the owner's Google Docs
    through their existing Google grant, with a read-only scope.
    - Accept: an agent reads its owner's documents, never another
      user's; nothing can be written.
@@ -558,34 +654,6 @@ is a feature under `specs/`.
      - **Unverified:** a report that, from 2027-02-01, AI tools must use
        those servers instead of the REST APIs. If confirmed, move Gmail,
        Calendar and Docs over together. Check this before February 2027.
-10. **Memory:** Mem0 (CPU embeddings, `infer=False`) behind the gateway's
-   `memory` connector, scoped per user; cross-store recall with
-   documents. Mem0 gets its own login; the migration creates the
-   `vector` extension, which needs the superuser.
-   - Accept: a fact saved in one session is recalled in a later one;
-     user A's agent can't recall user B's facts or documents (negative
-     tests).
-11. **One agent end to end:** one Hermes profile in a container, with
-   built-in tools off, the gateway as its only MCP server, and a memory
-   provider plugin backed by the gateway; Open WebUI connected to it.
-   - Accept: chatting in Open WebUI, the agent answers a weather and a
-     search question, and uses mail, documents and memory via the
-     gateway; attempts to use terminal or file tools fail.
-12. **Browser:** the sbx browser VM, a persistent profile per agent,
-   `read(url)`, `login(site)`, and a live-view link via ntfy.
-   - Accept: `read(url)` returns Markdown and refuses a LAN address;
-     `login(site)` refuses on a lookalike domain; the agent can't read a
-     filled password field.
-13. **Multi-user and household:** profiles for each user and Household,
-   Telegram bots, `ask_household`, skills repositories with hourly
-   commits, backups, health alerts, and the operator CLI with its Claude
-   Code skills.
-   - Accept:
-     - "tell the household agent to add milk" works from either user;
-     - personal → personal requests are refused;
-     - restore from backup succeeds on a clean machine;
-     - `sesh user add` provisions a test user end to end, and `sesh user
-       remove` revokes every credential.
 
 **Working notes for Claude Code**
 
@@ -610,10 +678,10 @@ before or during its phase.
 | Hermes memory provider interface fits a gateway-backed plugin | Open question | Read the provider ABC; prototype against the `memory` connector | 10 |
 | Browser server choice (Auto Browser, easi.run, Nod, or build) | Open question | Vet code and isolation; confirm CDP fill and field-read blocking | 11 |
 | Paperless built-in AI covers semantic search | Open question | Check the current release; add Paperless-AI only if needed | 5 |
-| Feed addresses used for server-side request forgery or exfiltration | Risk | Only Miniflux fetches, off `default` on its own networks; agent adds need approval (ADR 0009) | 6 |
+| Feed addresses used for server-side request forgery or exfiltration | Risk | Only Miniflux fetches, from its own egress network, which no other service is on; agent adds need approval (ADR 0009) | 6 |
 | A compromised adopted service reads or changes other services' data or the audit log | Risk | A Postgres login per service owning only its database; a Redis per service; doctor's `db-isolation` (ADR 0010) | 7 |
 | A service release that needs a superuser-only database extension | Constraint | The migration creates it as the superuser; none needed so far (`vector` will be, for memory) | 7, 9 |
-| Prompt injection via email, pages, documents or other agents | Risk | Untrusted labels, approvals, domain-pinned login, egress guard, audit alerts | 4–12 |
+| Prompt injection via email, pages, documents or other agents | Risk | Untrusted labels, approvals, domain-pinned login, egress guard, audit alerts | 4–13 |
 | Mem0 add-only accumulates stale facts | Risk | Scheduled cleanup; per-user memory editing page | 9 |
 | sbx requires a Docker sign-in (cloud dependency) | Risk | Review login and telemetry terms; fall back to containers if unacceptable | 11 |
 | Telegram content passes Telegram servers | Risk | Convenience only; sensitive work in Open WebUI | 12 |

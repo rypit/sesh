@@ -201,3 +201,18 @@ the architecture doc's phase list.
 
 - **Egress filtering** for Open WebUI and Infisical, with host firewall
   rules (`DOCKER-USER`).
+
+## CI results (T022)
+
+- **PR #14, pull_request run 46057894533** (head `27407f2`): all jobs
+  that ran passed.
+  - `changes`, `images`: passed.
+  - `stack (eval_stack gateway_stack network_stack)`: passed.
+  - `stack (isolation_stack secrets_stack)`: passed.
+  - `stack (foundation_stack google_docs_stack feeds_stack)`: passed.
+  - `check`: skipped by design on pull_request runs; the branch's push
+    run covers it.
+- **main after the merge of #14, push run 46060058391** (`542bf2b`):
+  `check`, `changes` and `images` passed; the three stack jobs were
+  still running when this was written.
+- **The follow-up PR** (T015, T017, T019, T020): pending.

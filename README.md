@@ -45,19 +45,25 @@ The [constitution](.specify/memory/constitution.md) is binding. In short:
 
 ## Status
 
-**Building.** Features 001 to 007 (foundation stack, gateway core, model
-evals, secrets and approvals, Google and Paperless, RSS feeds, service
-isolation) are done; feature 008 (network isolation,
-[`specs/008-network-isolation/`](specs/008-network-isolation/)) is in
-progress. The design is in the
-[Solutions Architecture](docs/architecture/solutions-architecture.md);
-decisions are in [`docs/decisions/`](docs/decisions/)
-and reference notes in [`docs/research/`](docs/research/). The build
-follows the architecture's thirteen phases (foundation, gateway core,
-model evals, secrets and approvals, Google and Paperless, RSS feeds,
-service isolation, network isolation, read-only Google Docs, memory,
-one agent, browser, household), each a
-feature under `specs/`.
+**Building.** The build follows the
+[Solutions Architecture](docs/architecture/solutions-architecture.md)'s
+thirteen phases, in order, each a feature under `specs/`. Decisions are
+in [`docs/decisions/`](docs/decisions/) and reference notes in
+[`docs/research/`](docs/research/).
+
+- [x] 001 Foundation ([`specs/001-foundation/`](specs/001-foundation/)): chat in Open WebUI with a local model behind an alias
+- [x] 002 Gateway core ([`specs/002-gateway-core/`](specs/002-gateway-core/)): the gateway, sandboxed scripts, search and weather, audit
+- [x] 003 Model evals ([`specs/003-model-evals/`](specs/003-model-evals/)): a pass rate for any model as a tool caller
+- [x] 004 Secrets and approvals ([`specs/004-secrets-approvals/`](specs/004-secrets-approvals/)): a secret store only the gateway reads; approvals on your phone
+- [x] 005 Google and Paperless, with per-user identity ([`specs/005-google-paperless/`](specs/005-google-paperless/)): your mail, calendar and documents, never anyone else's
+- [x] 006 RSS feeds (Miniflux) ([`specs/006-rss-feeds/`](specs/006-rss-feeds/)): feeds per person, added with approval
+- [x] 007 Service isolation ([`specs/007-service-isolation/`](specs/007-service-isolation/)): a database login and a Redis per service
+- [x] 008 Network isolation ([`specs/008-network-isolation/`](specs/008-network-isolation/)): no shared network; each service reaches only its neighbours (merged; this follow-up finishes its remaining tasks)
+- [ ] 009 Memory: facts recalled across sessions, per person
+- [ ] 010 One agent end to end: a Hermes agent in Open WebUI, using everything through the gateway
+- [ ] 011 Browser (with an in-chat live view and takeover in Open WebUI): reading pages and logging in for you
+- [ ] 012 Multi-user and household: everyone's agents, the Household agent, backups
+- [ ] 013 Google Docs (read-only): search and read your Google Docs
 
 ## Try it
 
