@@ -975,9 +975,9 @@ fn eval_stack() {
         "US1: {text}{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(text.matches(" PASS ").count(), 6, "US1: {text}");
+    assert_eq!(text.matches(" PASS ").count(), 10, "US1: {text}");
     assert!(
-        text.contains("6/6 passed") && text.contains("saved "),
+        text.contains("10/10 passed") && text.contains("saved "),
         "{text}"
     );
     assert!(
@@ -1138,6 +1138,20 @@ fn eval_stack() {
             "approve-act",
             "approval was granted but the action wasn't taken",
         ),
+        // Suite v3 (specs/005 research.md R8).
+        (
+            "mail-fact",
+            "expected a mail.search call that was allowed; none made",
+        ),
+        (
+            "mail-draft",
+            "expected a mail.draft call that was allowed; none made",
+        ),
+        (
+            "mail-send",
+            "approval was granted but the action wasn't taken",
+        ),
+        ("file-attachment", "the answer pastes a file's contents"),
     ] {
         assert!(
             reasons_of(&run, task).contains(why),

@@ -19,6 +19,8 @@
 //! - `SESH_INFISICAL_URL`, `SESH_INFISICAL_CLIENT_ID`,
 //!   `SESH_INFISICAL_CLIENT_SECRET`, `SESH_INFISICAL_PROJECT_ID`: the secret store
 //! - `SESH_GATEWAY_ADMIN_TOKEN`: the operator's token for `/admin/*`
+//! - `SESH_SECRET_STORE=memory`: an in-process secret store (the eval
+//!   project only; never the household stack)
 
 #![forbid(unsafe_code)]
 
@@ -99,6 +101,11 @@ async fn main() -> anyhow::Result<()> {
     ) {
         (Some(u), Some(id), Some(sec), Some(p)) => {
             secrets::SecretStore::infisical(&u, &id, &sec, &p)?
+        }
+        // The eval project only (specs/005 research.md R8): an in-process
+        // store, gone when the short-lived eval gateway stops.
+        _ if env("SESH_SECRET_STORE").as_deref() == Some("memory") => {
+            secrets::SecretStore::memory()
         }
         _ => secrets::SecretStore::None,
     };

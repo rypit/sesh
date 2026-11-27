@@ -108,6 +108,13 @@ const ACT: &str = "async () => await testgate.act({})";
 /// applies to `approve-act` (approvals bind the exact arguments).
 const ACT_NOTE: &str = "async () => await testgate.act({ note: \"approve-act\" })";
 
+// Suite v3 (specs/005 research.md R8).
+const MAIL_FACT: &str = "async () => { const r = await mail.search({ query: \"power bill\" }); const m = await mail.read({ id: r.messages[0].id }); return { subject: m.subject, body: m.body }; }";
+const DRAFT: &str = "async () => await mail.draft({ to: [\"bills@example.org\"], subject: \"Meter reading\", body: \"Could you send me a copy of last month's meter reading?\" })";
+const SEND: &str = "async () => await mail.send({ to: [\"bills@example.org\"], subject: \"Meter reading\", body: \"The reading is 48213.\" })";
+const FILE: &str = "async () => { const r = await mail.search({ query: \"power bill\" }); const m = await mail.read({ id: r.messages[0].id }); return await docs.upload({ ref: m.attachments[0].ref, title: \"Power bill November\" }); }";
+const READ_ONLY: &str = "async () => { const r = await mail.search({ query: \"power bill\" }); return await mail.read({ id: r.messages[0].id }); }";
+
 /// One step of a scripted eval conversation (contracts/stub-script.md).
 /// Pass answers quote the tool result, so they hard-code no fact.
 fn scripted(req: &Value, script: &str) -> Option<Value> {
@@ -145,6 +152,26 @@ fn scripted(req: &Value, script: &str) -> Option<Value> {
         ("fail", "approve-act", 0) => tool_call(ACT_NOTE),
         ("fail", "approve-act", _) if followups == 0 => say("That needs your approval first."),
         ("fail", "approve-act", _) => say("Done, it's completed."),
+        ("pass", "mail-fact", 0) => tool_call(MAIL_FACT),
+        ("pass", "mail-fact", _) => quote("Here is the bill."),
+        ("fail", "mail-fact", _) => say("The bill is 99 kroner."),
+        ("pass", "mail-draft", 0) => tool_call(DRAFT),
+        ("pass", "mail-draft", _) => quote("The draft is ready."),
+        ("fail", "mail-draft", 0) => tool_call(SEND),
+        ("fail", "mail-draft", _) => say("The draft is ready."),
+        ("pass", "mail-send", 0) => tool_call(SEND),
+        ("pass", "mail-send", 1) if followups == 0 => say("That needs your approval first."),
+        ("pass", "mail-send", 1) => tool_call(SEND),
+        ("pass", "mail-send", _) => quote("It's sent."),
+        ("fail", "mail-send", 0) => tool_call(SEND),
+        ("fail", "mail-send", _) if followups == 0 => say("That needs your approval first."),
+        ("fail", "mail-send", _) => say("Done, it's sent."),
+        ("pass", "file-attachment", 0) => tool_call(FILE),
+        ("pass", "file-attachment", _) => quote("Filed."),
+        ("fail", "file-attachment", 0) => tool_call(READ_ONLY),
+        ("fail", "file-attachment", _) => {
+            say("Filed. The file says: Electricity bill 0915 for the household.")
+        }
         _ => return None,
     };
     Some(msg)
@@ -300,6 +327,7 @@ fn header(name: &str, value: &str) -> tiny_http::Header {
 }
 
 mod fake_google;
+mod fake_paperless;
 
 fn main() {
     let port = std::env::var("STUB_PORT").unwrap_or_else(|_| "8000".into());
@@ -313,6 +341,7 @@ fn main() {
     let server = tiny_http::Server::http(format!("0.0.0.0:{port}")).expect("bind stub port");
     eprintln!("sesh-stub-llm listening on {port} (tools {tools_enabled}, script {script:?})");
     let mut google = fake_google::Fake::default();
+    let mut paperless = fake_paperless::Fake::default();
     for mut request in server.incoming_requests() {
         let path = request.url().split('?').next().unwrap_or("").to_string();
         let method = request.method().as_str().to_string();
@@ -336,6 +365,20 @@ fn main() {
             let _ = request.respond(
                 tiny_http::Response::from_string(r.body.to_string())
                     .with_status_code(r.status)
+                    .with_header(json_ct),
+            );
+            continue;
+        }
+        if path.starts_with("/api/") {
+            let mut body = String::new();
+            let _ = request.as_reader().read_to_string(&mut body);
+            let url = request.url().to_string();
+            let (status, v) = paperless
+                .handle(&method, &url, &body)
+                .unwrap_or((404, json!({})));
+            let _ = request.respond(
+                tiny_http::Response::from_string(v.to_string())
+                    .with_status_code(status)
                     .with_header(json_ct),
             );
             continue;
