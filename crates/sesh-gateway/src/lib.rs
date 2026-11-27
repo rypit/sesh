@@ -15,12 +15,13 @@ pub mod executor;
 pub mod listen;
 pub mod mcp;
 pub mod notify;
+pub mod owners;
 pub mod pages;
 pub mod redact;
 pub mod schema;
 pub mod secrets;
 
-use sesh_core::{Agent, AgentsFile, ConnectorDescriptor, GatewaySettings};
+use sesh_core::{Agent, AgentsFile, ConnectorDescriptor, GatewaySettings, User, UsersFile};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
@@ -71,8 +72,45 @@ impl Agents {
     }
 }
 
+/// Reloads `users.toml` when it changes (specs/005); fails closed.
+pub struct Users {
+    path: Option<PathBuf>,
+    cached: Mutex<(Option<SystemTime>, UsersFile)>,
+}
+
+impl Users {
+    pub fn from_file(path: PathBuf) -> Self {
+        Users {
+            path: Some(path),
+            cached: Mutex::new((None, UsersFile::default())),
+        }
+    }
+
+    pub fn fixed(file: UsersFile) -> Self {
+        Users {
+            path: None,
+            cached: Mutex::new((None, file)),
+        }
+    }
+
+    pub fn get(&self, name: &str) -> Option<User> {
+        let mut c = self.cached.lock().expect("lock");
+        if let Some(path) = &self.path {
+            let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+            if mtime != c.0 {
+                match std::fs::read_to_string(path).map(|t| UsersFile::parse(&t)) {
+                    Ok(Ok(f)) => *c = (mtime, f),
+                    _ => *c = (mtime, UsersFile::default()),
+                }
+            }
+        }
+        c.1.get(name).cloned()
+    }
+}
+
 pub struct Gateway {
     pub agents: Agents,
+    pub users: Users,
     pub settings: GatewaySettings,
     pub connectors: Vec<ConnectorDescriptor>,
     pub caps: capability::Capabilities,

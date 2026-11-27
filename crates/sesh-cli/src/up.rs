@@ -166,16 +166,39 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
     let rendered = render::litellm_config(&config);
     std::fs::write(dir.join(render::FILE_NAME), &rendered)?;
     write_compose_files(dir, &config)?;
-    // The approval channel's users and access (specs/004 research.md R3).
+    // The approval channels (specs/004 R3, specs/005 R2): the Household's
+    // topic, read by `person` and every user, and each user's own.
+    let users = crate::user::load(dir)?;
+    let hh = config.gateway.ntfy_topic.clone();
+    let mut topics = vec![hh.clone()];
+    let mut readers = vec![crate::ntfy::Reader {
+        user: crate::ntfy::PERSON_USER.into(),
+        password: secrets
+            .get("NTFY_PERSON_PASSWORD")
+            .context("NTFY_PERSON_PASSWORD missing; run `sesh init`")?
+            .to_string(),
+        topics: vec![hh.clone()],
+    }];
+    for u in &users.users {
+        topics.push(u.topic.clone());
+        readers.push(crate::ntfy::Reader {
+            user: crate::ntfy::reader_name(&u.name),
+            password: secrets
+                .get(&crate::user::password_key(&u.name))
+                .with_context(|| {
+                    format!("no ntfy password for {}; run `sesh user add` again", u.name)
+                })?
+                .to_string(),
+            topics: vec![u.topic.clone(), hh.clone()],
+        });
+    }
     let ntfy_changed = crate::ntfy::write_config(
         &dir.join("compose"),
-        &config.gateway.ntfy_topic,
+        &topics,
         secrets
             .get("NTFY_GATEWAY_PASSWORD")
             .context("NTFY_GATEWAY_PASSWORD missing; run `sesh init`")?,
-        secrets
-            .get("NTFY_PERSON_PASSWORD")
-            .context("NTFY_PERSON_PASSWORD missing; run `sesh init`")?,
+        &readers,
     )?;
     let gateway_toml = std::fs::read_to_string(agent::gateway_dir(dir).join("gateway.toml"))?;
     let agents = agent::load(dir)?;

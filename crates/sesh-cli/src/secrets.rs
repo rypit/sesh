@@ -108,6 +108,10 @@ impl Secrets {
         self.values.get(key).map(String::as_str)
     }
 
+    pub fn remove(&mut self, key: &str) {
+        self.values.remove(key);
+    }
+
     pub fn set(&mut self, key: &str, value: &str) {
         self.values.insert(key.to_string(), value.to_string());
     }

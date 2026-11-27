@@ -156,7 +156,16 @@ pub fn prepare(dir: &Path, config: &Config, token: &str) -> Result<Prepared> {
     std::fs::write(rdir.join("compose.yaml"), EVAL_COMPOSE)?;
     std::fs::write(rdir.join("empty.env"), "")?;
     let (gw_pw, person_pw) = (secrets::random_token()?, secrets::random_token()?);
-    crate::ntfy::write_config(&rdir, EVAL_TOPIC, &gw_pw, &person_pw)?;
+    crate::ntfy::write_config(
+        &rdir,
+        &[EVAL_TOPIC.to_string()],
+        &gw_pw,
+        &[crate::ntfy::Reader {
+            user: crate::ntfy::PERSON_USER.into(),
+            password: person_pw.clone(),
+            topics: vec![EVAL_TOPIC.into()],
+        }],
+    )?;
     std::fs::rename(rdir.join(crate::ntfy::FILE), rdir.join("ntfy-server.yml"))?;
     mode(&rdir.join("ntfy-server.yml"), 0o644)?;
     Ok(Prepared {

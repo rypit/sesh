@@ -85,7 +85,6 @@ async fn main() -> anyhow::Result<()> {
     let notifier = match env("SESH_NTFY_URL") {
         Some(url) => notify::Notifier::ntfy(
             &url,
-            &settings.ntfy_topic,
             &env("SESH_NTFY_USER").unwrap_or_default(),
             &env("SESH_NTFY_PASSWORD").unwrap_or_default(),
         )?,
@@ -108,8 +107,14 @@ async fn main() -> anyhow::Result<()> {
         Some(url) if url.starts_with("file:") => Audit::file(&url["file:".len()..])?,
         Some(url) => Audit::postgres(url.to_string()),
     };
+    let users = sesh_gateway::Users::from_file(
+        env("SESH_USERS_FILE")
+            .unwrap_or_else(|| "/etc/sesh/users.toml".into())
+            .into(),
+    );
     let gw = Arc::new(Gateway {
         agents,
+        users,
         connectors: connectors::all(env("SESH_GATEWAY_TEST_CONNECTORS").as_deref() == Some("1")),
         caps: Default::default(),
         audit,

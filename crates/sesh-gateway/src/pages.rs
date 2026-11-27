@@ -492,6 +492,7 @@ mod tests {
         let gw = Arc::new(gateway(Audit::memory(), GatewaySettings::default()));
         let ask = approvals::Ask {
             agent: "alice",
+            topic: "t",
             connector: "testgate",
             method: "act",
             description: "A side effect.",

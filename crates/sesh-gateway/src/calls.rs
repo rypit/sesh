@@ -69,6 +69,10 @@ pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Rep
         let Some(agent) = gw.agents.get(&grant.agent) else {
             break 'checks Err(refused(&mut entry, 403, "agent no longer exists"));
         };
+        let scope = match crate::owners::scope(gw, &agent) {
+            Ok(s) => s,
+            Err(why) => break 'checks Err(refused(&mut entry, 403, &why)),
+        };
         if !agent.connectors.contains(&connector) {
             break 'checks Err(refused(
                 &mut entry,
@@ -114,6 +118,7 @@ pub async fn handle(gw: &Gateway, capability: Option<&str>, body: &Value) -> Rep
         if desc.requires_approval {
             let ask = Ask {
                 agent: &grant.agent,
+                topic: &scope.topic,
                 connector: &connector,
                 method: &method,
                 description: &desc.description,
@@ -206,6 +211,7 @@ pub mod tests {
             audit,
             upstream: Upstream::new(settings.clone()).unwrap(),
             settings,
+            users: crate::Users::fixed(Default::default()),
             executor_url: "http://executor-{agent}:8000".into(),
             approvals: crate::approvals::Store::memory(),
             notifier: crate::notify::Notifier::memory(),

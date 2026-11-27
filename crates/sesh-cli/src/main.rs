@@ -15,6 +15,7 @@ mod ntfy;
 mod render;
 mod secrets;
 mod up;
+mod user;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -85,6 +86,11 @@ enum Command {
         #[command(subcommand)]
         command: CredentialCommand,
     },
+    /// Manage household users (each has their own approval topic).
+    User {
+        #[command(subcommand)]
+        command: UserCommand,
+    },
     /// Manage the agents the gateway accepts.
     Agent {
         #[command(subcommand)]
@@ -100,6 +106,16 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum UserCommand {
+    /// Add a user and their approval topic.
+    Add { name: String },
+    /// Remove a user; their agents stop working.
+    Remove { name: String },
+    /// List users.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -251,6 +267,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     credential::request(&dir, &http, &connector, &name)?
                 }
                 CredentialCommand::List => credential::list(&dir, &http)?,
+            };
+            for line in lines {
+                println!("{line}");
+            }
+        }
+        Command::User { command } => {
+            let lines = match command {
+                UserCommand::Add { name } => user::add(&dir, &name)?,
+                UserCommand::Remove { name } => vec![user::remove(&dir, &name)?],
+                UserCommand::List => user::list(&dir)?,
             };
             for line in lines {
                 println!("{line}");
