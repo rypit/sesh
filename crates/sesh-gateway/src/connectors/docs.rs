@@ -159,33 +159,38 @@ impl Paperless {
         .map(|_| ())
     }
 
-    /// The Paperless user id for an owner, created the first time.
-    pub async fn owner_id(&self, base: &str, owner: &str) -> Result<u64, String> {
-        if let Some(id) = self.ids.lock().await.get(owner) {
-            return Ok(*id);
-        }
-        let name = format!("sesh-{owner}");
+    /// A Paperless user's id by exact name.
+    async fn find_user(&self, base: &str, name: &str) -> Result<Option<u64>, String> {
         let found = self
             .req(
                 base,
                 reqwest::Method::GET,
                 "/api/users/",
-                &[("username__iexact", name.clone())],
+                &[("username__iexact", name.to_string())],
                 None,
             )
             .await?;
         // Match the name exactly here: a filter Paperless ignored would
         // otherwise hand back the first user (the admin).
-        let exact = found["results"]
+        Ok(found["results"]
             .as_array()
             .into_iter()
             .flatten()
             .find(|u| {
                 u["username"]
                     .as_str()
-                    .is_some_and(|n| n.eq_ignore_ascii_case(&name))
+                    .is_some_and(|n| n.eq_ignore_ascii_case(name))
             })
-            .and_then(|u| u["id"].as_u64());
+            .and_then(|u| u["id"].as_u64()))
+    }
+
+    /// The Paperless user id for an owner, created the first time.
+    pub async fn owner_id(&self, base: &str, owner: &str) -> Result<u64, String> {
+        if let Some(id) = self.ids.lock().await.get(owner) {
+            return Ok(*id);
+        }
+        let name = format!("sesh-{owner}");
+        let exact = self.find_user(base, &name).await?;
         let id = match exact {
             Some(id) => id,
             None => {
@@ -302,18 +307,54 @@ impl Paperless {
         Ok(task)
     }
 
+    /// The newest document still owned by the gateway's own account (so
+    /// not yet given to anyone) with this upload's exact title and file
+    /// name. Only unassigned uploads can match, never someone's document.
+    async fn find_unassigned(&self, base: &str, up: &Pending) -> Result<Option<u64>, String> {
+        let Some(me) = self.find_user(base, &self.user).await? else {
+            return Ok(None);
+        };
+        let v = self
+            .req(
+                base,
+                reqwest::Method::GET,
+                "/api/documents/",
+                &[
+                    ("title__iexact", up.title.clone()),
+                    ("owner__id", me.to_string()),
+                    ("ordering", "-added".into()),
+                    ("page_size", "10".into()),
+                ],
+                None,
+            )
+            .await?;
+        Ok(v["results"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|d| {
+                d["owner"].as_u64() == Some(me)
+                    && d["title"].as_str() == Some(up.title.as_str())
+                    && d["original_file_name"]
+                        .as_str()
+                        .is_none_or(|f| f == up.filename)
+            })
+            .and_then(|d| d["id"].as_u64()))
+    }
+
     /// Waits for consumption, then gives the document its owner. Until
     /// then it belongs to the gateway's admin account, which no agent's
     /// scope includes, so it is invisible rather than misfiled.
     async fn finish(
         &self,
         base: &str,
-        task: &str,
+        up: &Pending,
         owner_id: u64,
         polls: u32,
     ) -> Result<Option<u64>, String> {
-        let task = task.to_string();
+        let task = up.task.clone();
         let mut seen = String::new();
+        let mut finished_without_id = 0;
         for _ in 0..polls {
             let t = self
                 .req(
@@ -358,6 +399,29 @@ impl Paperless {
                         "the document service couldn't process the file: {why}"
                     ));
                 }
+                TaskState::Finished(entry) => {
+                    // Done, but this Paperless didn't say which document:
+                    // allow a moment (the result can land just after the
+                    // status), then find it by its title and file name.
+                    finished_without_id += 1;
+                    if finished_without_id == 4 {
+                        tracing::warn!(entry = %entry, "task finished without a document id; looking it up");
+                    }
+                    if finished_without_id >= 4
+                        && let Some(id) = self.find_unassigned(base, up).await?
+                    {
+                        self.req(
+                            base,
+                            reqwest::Method::PATCH,
+                            &format!("/api/documents/{id}/"),
+                            &[],
+                            Some(json!({"owner": owner_id})),
+                        )
+                        .await?;
+                        return Ok(Some(id));
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await
+                }
                 TaskState::Waiting => tokio::time::sleep(Duration::from_millis(500)).await,
             }
         }
@@ -366,10 +430,20 @@ impl Paperless {
     }
 }
 
+/// An upload Paperless is consuming.
+#[derive(Clone)]
+struct Pending {
+    task: String,
+    title: String,
+    filename: String,
+}
+
 #[derive(Debug, PartialEq)]
 enum TaskState {
     Waiting,
     Done(u64),
+    /// Succeeded without naming the document (the entry, cut, for the log).
+    Finished(String),
     Failed(String),
 }
 
@@ -423,7 +497,15 @@ fn task_state(list: &Value, task: &str) -> TaskState {
                 .or(digits_after(&result, "document id"));
             match id {
                 Some(id) => TaskState::Done(id),
-                None => TaskState::Failed("it finished but gave no document id".into()),
+                None => TaskState::Finished(
+                    format!(
+                        "status {} result {} related {}",
+                        t["status"], result, t["related_document"]
+                    )
+                    .chars()
+                    .take(300)
+                    .collect(),
+                ),
             }
         }
         "FAILURE" | "REVOKED" => TaskState::Failed(result.chars().take(200).collect()),
@@ -566,12 +648,17 @@ pub async fn call(
                     })
                     .await;
             }
-            match p.finish(&base, &task, owner_id, INLINE_POLLS).await? {
+            let up = Pending {
+                task,
+                title: title.clone(),
+                filename: att.filename.clone(),
+            };
+            match p.finish(&base, &up, owner_id, INLINE_POLLS).await? {
                 Some(id) => Ok(json!({"id": id, "title": title, "status": "filed"})),
                 None => {
                     let (p, base) = (p.clone(), base.clone());
                     tokio::spawn(async move {
-                        if let Err(e) = p.finish(&base, &task, owner_id, BACKGROUND_POLLS).await {
+                        if let Err(e) = p.finish(&base, &up, owner_id, BACKGROUND_POLLS).await {
                             tracing::warn!("filing a document failed: {e}");
                         }
                     });
@@ -604,6 +691,10 @@ mod tests {
                 json!({"id": 10, "owner": 1, "title": "household lease", "content": "lease", "tags": [], "created": "2026-01-01"}),
                 json!({"id": 11, "owner": 2, "title": "ana payslip", "content": "pay", "tags": [], "created": "2026-01-01"}),
                 json!({"id": 12, "owner": 3, "title": "ben medical", "content": "private", "tags": [], "created": "2026-01-01"}),
+                // Ben's document and the gateway's own unassigned upload,
+                // with the same title.
+                json!({"id": 14, "owner": 3, "title": "Pending bill", "original_file_name": "bill.pdf", "content": "", "tags": [], "created": "2026-01-01"}),
+                json!({"id": 13, "owner": 99, "title": "Pending bill", "original_file_name": "bill.pdf", "content": "", "tags": [], "created": "2026-01-01"}),
             ]
         };
         let app = Router::new()
@@ -619,6 +710,7 @@ mod tests {
                         "sesh-household" => 1,
                         "sesh-ana" => 2,
                         "sesh-ben" => 3,
+                        "sesh-gateway" => 99,
                         _ => return Json(json!({"results": []})),
                     };
                     // The admin first, as if the filter were ignored: the
@@ -699,6 +791,42 @@ mod tests {
             call(&g, &household, "alice", "get", &json!({"id": 11}))
                 .await
                 .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_nameless_finished_upload_is_found_among_unassigned_only() {
+        let g = gw().await;
+        let base = g.settings.upstreams.paperless.clone();
+        let up = |title: &str| Pending {
+            task: "t".into(),
+            title: title.into(),
+            filename: "bill.pdf".into(),
+        };
+        assert_eq!(
+            g.paperless
+                .find_unassigned(&base, &up("Pending bill"))
+                .await
+                .unwrap(),
+            Some(13)
+        );
+        assert_eq!(
+            g.paperless
+                .find_unassigned(&base, &up("Nothing like it"))
+                .await
+                .unwrap(),
+            None
+        );
+        let other_file = Pending {
+            filename: "other.pdf".into(),
+            ..up("Pending bill")
+        };
+        assert_eq!(
+            g.paperless
+                .find_unassigned(&base, &other_file)
+                .await
+                .unwrap(),
+            None
         );
     }
 
@@ -794,6 +922,13 @@ mod tests {
             ),
             TaskState::Waiting
         );
+        assert!(matches!(
+            task_state(
+                &json!([{"task_id": "abc", "status": "SUCCESS", "result": null}]),
+                t
+            ),
+            TaskState::Finished(_)
+        ));
         assert!(matches!(
             task_state(&json!([{"task_id": "abc", "status": "FAILURE", "result": "bad pdf"}]), t),
             TaskState::Failed(w) if w == "bad pdf"
