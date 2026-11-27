@@ -174,7 +174,19 @@ impl Paperless {
                 None,
             )
             .await?;
-        let id = match found["results"][0]["id"].as_u64() {
+        // Match the name exactly here: a filter Paperless ignored would
+        // otherwise hand back the first user (the admin).
+        let exact = found["results"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|u| {
+                u["username"]
+                    .as_str()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(&name))
+            })
+            .and_then(|u| u["id"].as_u64());
+        let id = match exact {
             Some(id) => id,
             None => {
                 // A Paperless account no one logs in to: a long random password.
@@ -214,7 +226,17 @@ impl Paperless {
                     None,
                 )
                 .await?;
-            let id = match found["results"][0]["id"].as_u64() {
+            let exact = found["results"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|x| {
+                    x["name"]
+                        .as_str()
+                        .is_some_and(|n| n.eq_ignore_ascii_case(t))
+                })
+                .and_then(|x| x["id"].as_u64());
+            let id = match exact {
                 Some(id) => id,
                 None => self
                     .req(
@@ -379,22 +401,28 @@ pub async fn call(
     match method {
         "search" => {
             let ids: Vec<String> = readable.keys().map(|i| i.to_string()).collect();
-            let v = p
-                .req(
-                    &base,
-                    reqwest::Method::GET,
-                    "/api/documents/",
-                    &[
-                        ("query", args["query"].as_str().unwrap_or("").into()),
-                        ("owner__id__in", ids.join(",")),
-                        (
-                            "page_size",
-                            args["limit"].as_u64().unwrap_or(10).to_string(),
-                        ),
-                    ],
-                    None,
-                )
-                .await?;
+            let q = args["query"].as_str().unwrap_or("").to_string();
+            let size = args["limit"].as_u64().unwrap_or(10).to_string();
+            let find = |key: &'static str| {
+                let (q, ids, size) = (q.clone(), ids.join(","), size.clone());
+                let base = base.clone();
+                async move {
+                    p.req(
+                        &base,
+                        reqwest::Method::GET,
+                        "/api/documents/",
+                        &[(key, q), ("owner__id__in", ids), ("page_size", size)],
+                        None,
+                    )
+                    .await
+                }
+            };
+            // Full-text first; a document consumed moments ago may not be
+            // in the index yet, so fall back to the title/content filter.
+            let mut v = find("query").await?;
+            if v["results"].as_array().is_none_or(|r| r.is_empty()) {
+                v = find("title_content").await?;
+            }
             let out: Vec<Value> = v["results"]
                 .as_array()
                 .into_iter()
@@ -517,13 +545,16 @@ mod tests {
             .route(
                 "/api/users/",
                 get(|Query(q): Query<HashMap<String, String>>| async move {
-                    let id = match q.get("username__iexact").map(String::as_str) {
-                        Some("sesh-household") => 1,
-                        Some("sesh-ana") => 2,
-                        Some("sesh-ben") => 3,
+                    let name = q.get("username__iexact").cloned().unwrap_or_default();
+                    let id = match name.as_str() {
+                        "sesh-household" => 1,
+                        "sesh-ana" => 2,
+                        "sesh-ben" => 3,
                         _ => return Json(json!({"results": []})),
                     };
-                    Json(json!({"results": [{"id": id}]}))
+                    // The admin first, as if the filter were ignored: the
+                    // gateway must pick the exact name.
+                    Json(json!({"results": [{"id": 99, "username": "sesh-gateway"}, {"id": id, "username": name}]}))
                 }),
             )
             .route(

@@ -1820,6 +1820,7 @@ fn google_docs_stack() {
         "async () => await docs.upload({{ ref: \"{ana_ref}\", title: \"Dentist invoice\", tags: [\"health\"] }})"
     ));
     assert!(out.contains("\"title\":\"Dentist invoice\""), "US4: {out}");
+    let ana_upload = out.clone();
     let out = house.execute("async () => await mail.read({ id: \"m-hh-1\" })");
     let hh_ref = first_ref(&out);
     let out = house.execute(&format!(
@@ -1834,19 +1835,20 @@ fn google_docs_stack() {
         "FR-014: household uploads notify"
     );
     // SC-003: ana sees hers and the household's; ben sees neither of ana's.
+    let mut last = String::new();
     assert!(
         retry(|| {
-            let out = anabot.execute("async () => await docs.search({ query: \"invoice\" })");
-            out.contains("Dentist invoice")
+            last = anabot.execute("async () => await docs.search({ query: \"invoice\" })");
+            last.contains("Dentist invoice")
         }),
-        "ana finds her document"
+        "ana finds her document; upload: {ana_upload}; last search: {last}"
     );
     assert!(
         retry(|| {
-            let out = anabot.execute("async () => await docs.search({ query: \"electricity\" })");
-            out.contains("Electricity bill")
+            last = anabot.execute("async () => await docs.search({ query: \"electricity\" })");
+            last.contains("Electricity bill")
         }),
-        "ana reads the household's documents"
+        "ana reads the household's documents; last search: {last}"
     );
     let out = benbot.execute("async () => await docs.search({ query: \"invoice\" })");
     assert!(!out.contains("Dentist invoice"), "SC-003: {out}");
