@@ -207,18 +207,35 @@
      connector;
   2. **back to the pre-007 state:** stop the four services, run
      `tests/fixtures/pre-007.sql` as the superuser (hand everything back
-     to `sesh`, drop the four roles, and add probe objects of each kind
-     as `sesh`), start them with `tests/fixtures/pre-007.compose.yaml`
-     (superuser connection strings and one shared `redis`);
+     to `sesh` and drop the four roles), then `pre-007-objects.sql` in
+     each of the four databases (probe objects of every kind the
+     hand-over must move, made by `sesh`), and start them with
+     `tests/fixtures/pre-007.compose.yaml` (superuser connection strings
+     and one shared `redis`);
   3. doctor's check fails there; create an Open WebUI user, a router
-     key, a stored credential and a Paperless tag;
-  4. the new `sesh up`; everything from step 3 is still there and
+     key, a stored credential and a Paperless tag; drop the new
+     passwords from `secrets.env`, as a pre-007 install lacks them;
+  4. the new `sesh up`, which generates them; everything from step 3 is still there and
      works, new data can be written, every object in each service
      database belongs to its role, the old `redis` is gone, doctor
      passes;
   5. each login reaches only its own database; each service reaches
      only its own Redis (with its own as the control), by name and by
      address, and the gateway reaches none.
+
+- **Checked locally without Docker:** the migration was run against a
+  Postgres 16 server: the rss-feeds migration, then the probe objects
+  as the superuser in every service database, then the new migration.
+  Every object changed hands (a first draft missed the partitioned
+  parent, whose partition key depends on the table itself, and a range
+  type's multirange and constructors; both are fixed and covered by the
+  probe objects); a second run changed nothing; each login opened only
+  its own database, could replace its views and functions, refresh its
+  materialized views and create a trusted extension, and could not
+  create a database, a role or `vector`; the pre-007 fixture rewound
+  the state and the migration handed it over again; doctor's query
+  listed the four superuser-owned databases and a superuser TCP
+  session, and nothing afterwards.
 
 ## R8. Boundary change → ADR 0010
 

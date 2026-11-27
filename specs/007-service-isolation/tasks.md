@@ -43,7 +43,7 @@ checks.
 
 **Independent test**: the pre-007 state, data created, the new `sesh up`, data still there and owned by the roles.
 
-- [x] T007 [US2] Stack steps (written first): the fixtures `tests/fixtures/pre-007.sql` and `pre-007.compose.yaml`; an Open WebUI user, a router key, a credential and a Paperless tag made in the pre-007 state; after `sesh up` all there and writable; no object left with another owner
+- [x] T007 [US2] Stack steps (written first): the fixtures `tests/fixtures/pre-007.sql`, `pre-007-objects.sql` and `pre-007.compose.yaml`; an Open WebUI user, a router key, a credential and a Paperless tag made in the pre-007 state; after `sesh up` all there and writable; no object left with another owner
 - [x] T008 [US2] Unit tests, then `deploy/postgres/owners.sql` per research.md R2, appended by `migration_sql` for each service database
 - [x] T009 [US2] Unit tests, then `sesh up` generates missing passwords (research.md R5)
 
@@ -62,7 +62,7 @@ checks.
 
 **Independent test**: fails on the pre-007 state; passes after the upgrade.
 
-- [x] T012 [US4] Unit tests, then `db-isolation` in `crates/sesh-cli/src/doctor.rs` per research.md R6 and contracts/cli.md (the fake compose answers per database)
+- [x] T012 [US4] Unit tests, then `db-isolation` in `crates/sesh-cli/src/doctor.rs` per research.md R6 and contracts/cli.md
 - [x] T013 [US4] Stack steps: doctor fails in the pre-007 state, naming the owners, and passes after `sesh up`
 - [x] T014 [US4] `isolation_stack` in the CI matrix in `.github/workflows/ci.yml`
 

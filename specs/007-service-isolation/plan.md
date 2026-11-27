@@ -88,9 +88,8 @@ deploy/compose.yaml                   # service logins; redis-openwebui, -infisi
 crates/sesh-cli/src/up.rs             # SERVICE_DATABASES; migration_sql; missing passwords; start order
 crates/sesh-cli/src/secrets.rs        # GENERATED: the new passwords; REDIS_PASSWORD dropped
 crates/sesh-cli/src/doctor.rs         # db-isolation; the Redis services
-crates/sesh-cli/src/host/fake.rs      # per-database SQL output for the fake
 crates/sesh-cli/tests/stack.rs        # isolation_stack
-crates/sesh-cli/tests/fixtures/pre-007.sql, pre-007.compose.yaml
+crates/sesh-cli/tests/fixtures/       # pre-007.sql, pre-007-objects.sql, pre-007.compose.yaml
 Makefile                              # compose-config dummies
 .github/workflows/ci.yml              # + isolation_stack
 docs/decisions/0010-service-isolation.md
