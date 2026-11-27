@@ -111,7 +111,7 @@ sesh has 20 components across six zones. Three are custom builds (marked
 | Paperless-ngx | Resources | Household documents: OCR, search | Paperless-ngx (+ Paperless-AI if needed) | Container | User per agent scope; search, read and upload via the gateway; a mail rule imports a Gmail "To file" label; embeddings on CPU |
 | Browser | Resources | Logged-in browsing, live view, `read(url)` | Chromium (Playwright build), headful | sbx microVM per session | Profile per agent; fresh context per read; private addresses blocked (**build**: `login(site)`, `read(url)`) |
 | Mem0 | Resources | Long-term memory per user + household | Mem0 OSS, pgvector, BM25 | Container | `infer=False` at first; CPU embeddings; `user_id` set by the gateway |
-| Postgres + Redis | Resources | Shared storage | Postgres 16 + pgvector, Redis | Container | Backs Mem0, Paperless, Miniflux, Infisical and the audit log |
+| Postgres + Redis | Resources | Storage for the adopted services and the audit log | Postgres 16 + pgvector; Redis, one instance per service | Container | One Postgres server; each service logs in as its own role, owning only its database, never the superuser; a Redis per service (Open WebUI, Infisical, Paperless), each reachable only from it (ADR 0010). Backs Mem0, Open WebUI, LiteLLM, Paperless, Miniflux, Infisical and the audit log |
 | Inference server | Inference | Serves models behind aliases (OpenAI-compatible API) | Any OpenAI-compatible server (for example oMLX, Ollama, llama.cpp, vLLM) | Bare metal | Alias `agent-main` |
 | embed | Inference | Embeddings for Mem0 and Paperless | Small embedding model | In-container CPU | Same model for both; never swapped without re-embedding |
 | LiteLLM | Inference | The alias router every client calls (ADR 0005) | LiteLLM | Container | Always present; clients get alias-only keys; later: failover, a second engine |
@@ -194,6 +194,19 @@ and the audit log.
   - the result, or the refusal reason.
 - The table is insert-only, and agents can't read it.
 - Repeated refusals or bursts trigger an ntfy alert.
+
+**Storage isolation**
+
+- Every adopted service is untrusted. Each logs in to Postgres as its
+  own role, which owns only that service's database and has no
+  administrative rights; only that role may connect to it. The
+  superuser is for sesh's own admin tasks (`sesh up`, `sesh doctor`),
+  over the Postgres container's local socket (ADR 0010).
+- So a compromised service can't read or change the audit log, the
+  secret store's database or another service's data. `sesh doctor`
+  fails if a service is connected as the superuser.
+- Each service that uses Redis has its own instance, on an internal
+  network shared only with it.
 
 **Network**
 
@@ -286,7 +299,7 @@ that touches untrusted content runs in sbx microVMs.
 | Placement | Components | Why |
 | --- | --- | --- |
 | Bare metal (macOS) | Inference server, when it needs the GPU (for example oMLX) | Needs the Metal GPU |
-| Docker (Compose) | Open WebUI, Hermes (container per profile), gateway, workerd executor per agent (no network), Infisical, ntfy, Mem0, Paperless, SearXNG, Kiwix, LiteLLM, Postgres, Redis | Long-lived services; one Compose file moves to the Mac mini unchanged |
+| Docker (Compose) | Open WebUI, Hermes (container per profile), gateway, workerd executor per agent (no network), Infisical, ntfy, Mem0, Paperless, Miniflux, SearXNG, Kiwix, LiteLLM, Postgres, Redis (one per service) | Long-lived services; one Compose file moves to the Mac mini unchanged |
 | sbx microVM | Browser sessions | VM boundary for code execution and untrusted web content |
 
 **Memory budget on a 64GB Mac mini (estimates)**
@@ -450,7 +463,7 @@ Paperless-ngx, SearXNG, Kiwix, Postgres, Redis, sbx.
 
 ## Implementation plan
 
-Build in eleven phases, each ending in a working end-to-end path. Don't
+Build in twelve phases, each ending in a working end-to-end path. Don't
 start a phase until the previous one's acceptance checks pass. Each phase
 is a feature under `specs/`.
 
@@ -507,28 +520,38 @@ is a feature under `specs/`.
      - Miniflux can't reach the gateway or Postgres on `default`, and no
        executor can reach Miniflux;
      - an agent's `feeds.add` runs only after approval.
-7. **Google Docs (read-only):** search and read the owner's Google Docs
+7. **Service isolation:** a Postgres login per adopted service, owning
+   only its database, and a Redis per service on its own network;
+   existing installs handed over in place by `sesh up` (ADR 0010).
+   - Accept:
+     - each service's login reaches only its own database (negative
+       tests), and no service reaches another's Redis;
+     - an install from before this phase keeps its data and works after
+       `sesh up`;
+     - `sesh doctor` fails when a service uses the superuser.
+8. **Google Docs (read-only):** search and read the owner's Google Docs
    through their existing Google grant, with a read-only scope.
    - Accept: an agent reads its owner's documents, never another
      user's; nothing can be written.
-8. **Memory:** Mem0 (CPU embeddings, `infer=False`) behind the gateway's
+9. **Memory:** Mem0 (CPU embeddings, `infer=False`) behind the gateway's
    `memory` connector, scoped per user; cross-store recall with
-   documents.
+   documents. Mem0 gets its own login; the migration creates the
+   `vector` extension, which needs the superuser.
    - Accept: a fact saved in one session is recalled in a later one;
      user A's agent can't recall user B's facts or documents (negative
      tests).
-9. **One agent end to end:** one Hermes profile in a container, with
+10. **One agent end to end:** one Hermes profile in a container, with
    built-in tools off, the gateway as its only MCP server, and a memory
    provider plugin backed by the gateway; Open WebUI connected to it.
    - Accept: chatting in Open WebUI, the agent answers a weather and a
      search question, and uses mail, documents and memory via the
      gateway; attempts to use terminal or file tools fail.
-10. **Browser:** the sbx browser VM, a persistent profile per agent,
+11. **Browser:** the sbx browser VM, a persistent profile per agent,
    `read(url)`, `login(site)`, and a live-view link via ntfy.
    - Accept: `read(url)` returns Markdown and refuses a LAN address;
      `login(site)` refuses on a lookalike domain; the agent can't read a
      filled password field.
-11. **Multi-user and household:** profiles for each user and Household,
+12. **Multi-user and household:** profiles for each user and Household,
    Telegram bots, `ask_household`, skills repositories with hourly
    commits, backups, health alerts, and the operator CLI with its Claude
    Code skills.
@@ -558,18 +581,20 @@ before or during its phase.
 | --- | --- | --- | --- |
 | `agent-main` tool-calling and memory quality on a ~30B local model | Risk | Benchmark candidate models on real tasks (`sesh eval`); keep prompts and tool docs short | 3 |
 | Code Mode durable runtime (snippets, replay) outside Cloudflare | Resolved | Verified under local workerd; it enforces no CPU limits, so one executor per agent and gateway-enforced deadlines | 2 |
-| Hermes skill writing still works with file and terminal tools off | Open question | Verify the skills tool writes only inside the profile's skills folder | 9 |
-| Hermes memory provider interface fits a gateway-backed plugin | Open question | Read the provider ABC; prototype against the `memory` connector | 9 |
-| Browser server choice (Auto Browser, easi.run, Nod, or build) | Open question | Vet code and isolation; confirm CDP fill and field-read blocking | 10 |
+| Hermes skill writing still works with file and terminal tools off | Open question | Verify the skills tool writes only inside the profile's skills folder | 10 |
+| Hermes memory provider interface fits a gateway-backed plugin | Open question | Read the provider ABC; prototype against the `memory` connector | 10 |
+| Browser server choice (Auto Browser, easi.run, Nod, or build) | Open question | Vet code and isolation; confirm CDP fill and field-read blocking | 11 |
 | Paperless built-in AI covers semantic search | Open question | Check the current release; add Paperless-AI only if needed | 5 |
 | Feed addresses used for server-side request forgery or exfiltration | Risk | Only Miniflux fetches, off `default` on its own networks; agent adds need approval (ADR 0009) | 6 |
-| Prompt injection via email, pages, documents or other agents | Risk | Untrusted labels, approvals, domain-pinned login, egress guard, audit alerts | 4–11 |
-| Mem0 add-only accumulates stale facts | Risk | Scheduled cleanup; per-user memory editing page | 8 |
-| sbx requires a Docker sign-in (cloud dependency) | Risk | Review login and telemetry terms; fall back to containers if unacceptable | 10 |
-| Telegram content passes Telegram servers | Risk | Convenience only; sensitive work in Open WebUI | 11 |
+| A compromised adopted service reads or changes other services' data or the audit log | Risk | A Postgres login per service owning only its database; a Redis per service; doctor's `db-isolation` (ADR 0010) | 7 |
+| A service release that needs a superuser-only database extension | Constraint | The migration creates it as the superuser; none needed so far (`vector` will be, for memory) | 7, 9 |
+| Prompt injection via email, pages, documents or other agents | Risk | Untrusted labels, approvals, domain-pinned login, egress guard, audit alerts | 4–12 |
+| Mem0 add-only accumulates stale facts | Risk | Scheduled cleanup; per-user memory editing page | 9 |
+| sbx requires a Docker sign-in (cloud dependency) | Risk | Review login and telemetry terms; fall back to containers if unacceptable | 11 |
+| Telegram content passes Telegram servers | Risk | Convenience only; sensitive work in Open WebUI | 12 |
 | Google OAuth app in production shows an unverified warning | Accepted | One-time click-through per user | 5 |
 | Operator can read other users' chats, sessions and logs | Policy | Turn off Open WebUI admin chat access; agree a household policy | 1 |
-| An embedding model change requires re-embedding all memories and documents | Constraint | Pick once; document the re-index procedure | 8 |
+| An embedding model change requires re-embedding all memories and documents | Constraint | Pick once; document the re-index procedure | 9 |
 
 ## References
 
