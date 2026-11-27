@@ -64,7 +64,7 @@ they check.
 ## Phase 8: Polish
 
 - [x] T023 [P] Update `README.md`, `AGENTS.md` (images to build), quickstart; architecture diagram unchanged (no component moved)
-- [ ] T024 Record CI results for SC-001–SC-006 in `specs/002-gateway-core/research.md`
+- [x] T024 Record CI results for SC-001–SC-006 in `specs/002-gateway-core/research.md`
 
 ## Dependencies
 

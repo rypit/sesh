@@ -114,3 +114,48 @@ server, macros off), `axum`, `tokio`, `reqwest` (rustls), `tokio-postgres`,
 `tiny_http` and `ureq`. JSON Schema validation is a small in-house
 validator for the subset sesh's own connectors declare (types, required,
 enums, string length, array items), since the schemas are ours.
+
+## R9. Results (CI, 2026-11-27)
+
+GitHub Actions run 45912985495 on commit 8c39037: `make check` passed; the
+stack job built the stub, gateway and executor images and ran both stack
+tests in 8 min 46 s. `gateway_stack` (`crates/sesh-cli/tests/stack.rs`)
+verified, against the stub upstreams:
+
+- A test MCP client searches, describes, and runs one script calling
+  `search.web` and `geo.forecast`; the result's first line marks it as
+  untrusted data (US1, FR-001, FR-013).
+- An unknown or missing token gets 401; bob neither sees nor reaches `geo`
+  (FR-002, FR-003).
+- The script finds no environment, `node:fs` or network; the executor
+  container reaches only `gateway:7001`, not `gateway:7000`, searxng,
+  postgres, litellm or the internet, and holds no secret (FR-004).
+- A forged capability, or an agent token in place of one, is refused on
+  `/call` (FR-005).
+- An approval-gated call returns `approval_unavailable`; an argument
+  outside the schema is refused (FR-008, FR-009).
+- A `while (true) {}` script times out, bob's script started meanwhile
+  completes within 2 s, and alice's next script completes (FR-006, FR-007,
+  SC-004).
+- The audit log has allowed, approval and schema refusals and token
+  refusals; no token appears in it; `sesh_gateway` can't SELECT or DELETE
+  (FR-010).
+- Removing an agent revokes its token; doctor passes with
+  `executors-healthy` (FR-016).
+
+Found by running it: workerd resolves an absolute `embed` path against the
+import path (the supervisor passes `--import-path /`), and needs a CA store
+to start even with no outbound TLS (the image installs `ca-certificates`).
+The executor healthcheck now asks workerd itself, not only the
+supervisor's port.
+
+Not yet measured as stated:
+
+- SC-001: the two-call script completes, but its time isn't asserted.
+- SC-003: the test checks that each kind of call is audited, not that
+  each has exactly one entry (the one-write-per-call rule is unit-tested
+  in `calls.rs`).
+- SC-005: every upstream is the stub, but CI runners have internet
+  access, so "passes with outbound internet blocked" isn't shown.
+- SC-006: the audit log is checked for tokens; gateway logs and results
+  aren't.
