@@ -35,6 +35,9 @@ If a change adds, removes or renames a component, or changes what talks
 to what, update the architecture diagram in the same change: follow
 `docs/architecture/README.md` (the document's widget, `diagram.jsx` and
 `docs/architecture.svg` stay identical).
-Commands are defined by the first feature's plan; expect `make check`
-(fmt, clippy, unit tests, cargo-deny) and a stack test target using
-Compose with a stub model server.
+Commands: `make check` runs fmt, clippy, unit tests, cargo-deny, the
+architecture-diagram check, Compose validation and the instance-data
+guard. `make stack-test` starts the stack with the stub model server and
+runs the stack tests (needs Docker and the dev images:
+`docker build -f deploy/<name>.Dockerfile -t sesh-<name>:dev .` for
+`stub` (tagged `sesh-stub-llm:dev`), `gateway` and `executor`).

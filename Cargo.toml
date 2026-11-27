@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/sesh-cli",
+  "crates/sesh-core",
+  "crates/sesh-executor-supervisor",
+  "crates/sesh-gateway",
+  "crates/sesh-stub-llm",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+license = "Apache-2.0"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[workspace.dependencies]
+anyhow = "1"
+axum = "0.8"
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
+rmcp = { version = "3.12", default-features = false, features = ["server", "transport-streamable-http-server"] }
+sesh-core = { path = "crates/sesh-core", version = "0.1.0" }
+sha2 = "0.11"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "sync", "signal"] }
+tokio-postgres = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
+base64 = "0.23"
+clap = { version = "4", features = ["derive"] }
+getrandom = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tiny_http = "0.12"
+toml = "1"
+ureq = { version = "3", features = ["json"] }

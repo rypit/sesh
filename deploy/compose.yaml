@@ -1,0 +1,165 @@
+# sesh foundation stack (specs/001-foundation/contracts/stack.md).
+#
+# Run through `sesh up`, which passes:
+#   --env-file $SESH_DATA_DIR/secrets.env   values used for interpolation only
+#   SESH_DATA_DIR, SESH_WEBUI_PORT, SESH_ROUTER_PORT, SESH_INFERENCE_API_KEY
+# Each container receives only the variables listed for it.
+# Only open-webui, litellm and the gateway publish ports, all on loopback.
+# Executors (one per agent) come from the generated overlay `compose/generated.yaml`.
+# Images are pinned by tag and multi-arch index digest; upgrade deliberately.
+
+name: sesh
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg16@sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f
+    environment:
+      POSTGRES_USER: sesh
+      POSTGRES_DB: sesh
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run sesh init}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ${SESH_DATA_DIR:?}/compose/postgres-init.sql:/docker-entrypoint-initdb.d/10-sesh.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sesh -d sesh"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?run sesh init}
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.111.0@sha256:ce00096d012719d58c52cecfa373f7c6256dd1b0ff08f6fa607e10e9628f1f46
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?run sesh init}
+      DATABASE_URL: postgresql://sesh:${POSTGRES_PASSWORD}@postgres:5432/litellm
+      SESH_INFERENCE_API_KEY: ${SESH_INFERENCE_API_KEY:-none}
+      LITELLM_TELEMETRY: "False"
+      STORE_MODEL_IN_DB: "False"
+    volumes:
+      - ${SESH_DATA_DIR:?}/litellm.yaml:/app/config.yaml:ro
+    ports:
+      - "127.0.0.1:${SESH_ROUTER_PORT:-4000}:4000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.13.5@sha256:e0dc5a8bf5c71cadf339d1e7b9408b357da75fb2854f82cad57a1609fadf2a22
+    environment:
+      # Environment always wins over values stored in Open WebUI's database.
+      ENABLE_PERSISTENT_CONFIG: "False"
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?run sesh init}
+      WEBUI_ADMIN_EMAIL: ${WEBUI_ADMIN_EMAIL:?run sesh init}
+      WEBUI_ADMIN_PASSWORD: ${WEBUI_ADMIN_PASSWORD:?run sesh init}
+      ENABLE_SIGNUP: "False"
+      ENABLE_MEMORIES: "False"
+      ENABLE_ADMIN_CHAT_ACCESS: "False"
+      # Only the alias router is a model source; it lists only aliases.
+      ENABLE_OLLAMA_API: "False"
+      OPENAI_API_BASE_URL: http://litellm:4000/v1
+      OPENAI_API_KEY: ${WEBUI_ROUTER_KEY:-pending}
+      BYPASS_MODEL_ACCESS_CONTROL: "True"
+      TASK_MODEL_EXTERNAL: agent-main
+      DATABASE_URL: postgresql://sesh:${POSTGRES_PASSWORD}@postgres:5432/openwebui
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      WEBSOCKET_MANAGER: redis
+      # Local-first: no telemetry, no model downloads.
+      OFFLINE_MODE: "True"
+      RAG_EMBEDDING_MODEL_AUTO_UPDATE: "False"
+      DO_NOT_TRACK: "True"
+      SCARF_NO_ANALYTICS: "True"
+      ANONYMIZED_TELEMETRY: "False"
+    volumes:
+      - open-webui-data:/app/backend/data
+    ports:
+      - "127.0.0.1:${SESH_WEBUI_PORT:-3000}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    restart: unless-stopped
+
+  gateway:
+    image: ${SESH_GATEWAY_IMAGE:-sesh-gateway:dev}
+    environment:
+      SESH_GATEWAY_CONFIG: /etc/sesh/gateway.toml
+      SESH_AGENTS_FILE: /etc/sesh/agents.toml
+      SESH_AUDIT_DATABASE_URL: postgresql://sesh_gateway:${GATEWAY_DB_PASSWORD:?run sesh init}@postgres:5432/gateway
+      SESH_GATEWAY_TEST_CONNECTORS: ${SESH_GATEWAY_TEST_CONNECTORS:-0}
+    volumes:
+      - ${SESH_DATA_DIR:?}/gateway:/etc/sesh:ro
+    ports:
+      - "127.0.0.1:${SESH_GATEWAY_PORT:-7000}:7000"
+    networks: [default, search]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/7000'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      postgres:
+        condition: service_healthy
+      searxng:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Web search. Reachable only from the gateway (the `search` network is
+  # internal); its own `searxng-egress` network lets it reach search engines.
+  searxng:
+    image: searxng/searxng:2026.11.23-a7163d091@sha256:a7fc607aa6723f5a8982105bcc5ffba4d1b9fc7c6922a31a88d6e4cba49ef12a
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?run sesh init}
+    volumes:
+      - ${SESH_DATA_DIR:?}/compose/searxng-settings.yml:/etc/searxng/settings.yml:ro
+    networks: [search, searxng-egress]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  open-webui-data:
+
+networks:
+  default: {}
+  search:
+    internal: true
+  searxng-egress: {}

@@ -29,7 +29,7 @@ sesh is the platform that document describes:
 - **Inference**: any OpenAI-compatible server the operator runs on the
   home network, behind model aliases; no cloud models (ADR 0005).
 - **Operator mode**: the sesh admin CLI and Claude Code operator skills.
-- Built in the document's seven phases, one Spec Kit feature each.
+- Built in the document's phases, one Spec Kit feature each.
 
 ## Alternatives
 

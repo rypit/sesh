@@ -44,10 +44,39 @@ The [constitution](.specify/memory/constitution.md) is binding. In short:
 
 ## Status
 
-**Planning.** No code yet. The design is in the sesh Solutions
+**Building.** Feature 001 (foundation stack,
+[`specs/001-foundation/`](specs/001-foundation/)) is done; feature 002
+(gateway core, [`specs/002-gateway-core/`](specs/002-gateway-core/)) is in
+progress. The design is in the sesh Solutions
 Architecture document; decisions are in [`docs/decisions/`](docs/decisions/)
 and reference notes in [`docs/research/`](docs/research/). The build
-follows the architecture's seven phases, each a feature under `specs/`.
+follows the architecture's eight phases (foundation, gateway core, model
+evals, one agent, secrets and approvals, memory and documents, browser,
+household), each a feature under `specs/`.
+
+## Try it
+
+With Docker and Rust installed, no model needed:
+
+```bash
+docker build -f deploy/stub.Dockerfile -t sesh-stub-llm:dev .
+docker build -f deploy/gateway.Dockerfile -t sesh-gateway:dev .
+docker build -f deploy/executor.Dockerfile -t sesh-executor:dev .
+cargo install --path crates/sesh-cli
+sesh init --stub --home 59.91,10.75
+sesh agent add test --connectors search,geo
+sesh up
+sesh doctor
+```
+
+Open WebUI is then on http://127.0.0.1:3000 (admin password in
+`~/.local/share/sesh/secrets.env`). For a real model, run
+`sesh init --inference-url http://<server>/v1 --model <name>` with any
+OpenAI-compatible server, then `sesh up`. The gateway's MCP endpoint is
+http://127.0.0.1:7000/mcp; the test agent's token is in
+`~/.local/share/sesh/agents/test.token` (never printed). See the
+quickstarts for [001](specs/001-foundation/quickstart.md) and
+[002](specs/002-gateway-core/quickstart.md).
 
 ## Repository
 

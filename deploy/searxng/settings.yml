@@ -1,0 +1,17 @@
+# SearXNG for sesh: JSON output for the gateway's search connector, no
+# rate limiter (only the gateway can reach it). The secret key comes from
+# SEARXNG_SECRET in the environment.
+use_default_settings: true
+general:
+  instance_name: sesh-search
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  limiter: false
+  public_instance: false
+  image_proxy: false
+search:
+  safe_search: 1
+  formats:
+    - html
+    - json
