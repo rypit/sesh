@@ -56,6 +56,11 @@ its database, and has its own Redis (feature 007, ADR 0010): never give
 a service the `sesh` superuser; add its role to `SERVICE_DATABASES` and
 `deploy/postgres/gateway.sql`. `sesh doctor`'s `db-isolation` check
 fails otherwise.
+Services share no catch-all network (feature 008, ADR 0011): each is on
+exactly the networks `crates/sesh-cli/src/layout.rs` lists, which the
+Compose files, `sesh doctor`'s `network-layout` check and
+`network_stack` all follow. Add a service there first; each database
+login is accepted only from its own database network.
 `sesh feed add <owner> <url> [--name <name>]`, `remove` and `list`
 manage feeds (feature 006) in Miniflux, which the gateway reaches only
 through `connectors/feeds.rs` (ADR 0009).

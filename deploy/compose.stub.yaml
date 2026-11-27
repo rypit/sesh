@@ -10,10 +10,13 @@ services:
       STUB_SCRIPT: ${STUB_SCRIPT:-}
       # The hash of the credential the test connector should present (specs/004).
       STUB_TESTCRED_SHA256: ${STUB_TESTCRED_SHA256:-}
-    # The fake feed publisher (specs/006): Miniflux reaches it on
-    # feeds-egress, so stub mode needs no internet.
-    networks: [default, feeds-egress]
+    # `stub` for LiteLLM (the model) and the gateway (fake Google, search,
+    # weather, maps); `feeds-egress` for Miniflux (the fake publisher), so
+    # stub mode needs no internet (specs/006, specs/008).
+    networks: [stub, feeds-egress]
     restart: unless-stopped
+  litellm:
+    networks: [litellm-db, models, litellm-edge, stub]
   # The fake publisher is on a private address: let Miniflux fetch it, in
   # stub mode only, if this Miniflux release refuses private networks.
   miniflux:
@@ -25,3 +28,9 @@ services:
   gateway:
     environment:
       SESH_GATEWAY_TEST_CONNECTORS: "1"
+    networks: [gateway-db, secrets, notify, search, docs, feeds, gateway-edge, stub]
+
+# Development and CI only (specs/008 research.md R6).
+networks:
+  stub:
+    internal: true

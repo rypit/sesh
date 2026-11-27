@@ -1,8 +1,10 @@
 # Test fixture for isolation_stack (specs/007 research.md R7): the four
 # services as an install from before feature 007 ran them, over the
 # current Compose files. They log in to Postgres as the superuser and
-# share one Redis on `default`, on database indexes 0, 1 and 2. The test
-# passes LEGACY_REDIS_PASSWORD (random, per run). Never used by `sesh up`.
+# share one Redis, on database indexes 0, 1 and 2. Since specs/008 there's
+# no `default`, so the shared Redis joins each client's Redis network to
+# be reachable by name. The test passes LEGACY_REDIS_PASSWORD (random, per
+# run). Never used by `sesh up`.
 services:
   redis:
     image: redis:7.4-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
@@ -14,6 +16,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    networks: [openwebui-redis, infisical-redis, paperless-redis]
 
   litellm:
     environment:

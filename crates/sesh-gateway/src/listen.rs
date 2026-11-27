@@ -8,6 +8,12 @@
 //! where the published port arrives). Executor networks are internal, so
 //! they never hold the default route (FR-004, ADR 0004: an executor's
 //! single binding to the gateway is the executor port).
+//!
+//! Since specs/008 the gateway has no `default` network: its only
+//! non-internal network is `gateway-edge`, so the default route, and with
+//! it this address, is there. Its database, pair, resource and executor
+//! networks are all internal, so neither listener ever binds on them
+//! (ADR 0011).
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 
@@ -91,6 +97,24 @@ mod tests {
     fn default_route_ip_is_never_a_wildcard_or_loopback() {
         if let Some(ip) = default_route_ip() {
             assert!(!ip.is_unspecified() && !ip.is_loopback(), "{ip}");
+        }
+    }
+
+    #[test]
+    fn with_the_route_on_the_edge_network_both_listeners_bind_loopback_and_it_only() {
+        // specs/008 research.md R5: the gateway's edge network holds the
+        // default route; nothing else may appear, and never a wildcard.
+        let edge: IpAddr = "172.23.0.2".parse().unwrap();
+        for port in [AGENT_PORT, 7002] {
+            let addrs = addrs_on(port, None, Some(edge)).unwrap();
+            assert_eq!(
+                addrs,
+                vec![
+                    SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+                    SocketAddr::new(edge, port)
+                ]
+            );
+            assert!(addrs.iter().all(|a| !a.ip().is_unspecified()));
         }
     }
 }

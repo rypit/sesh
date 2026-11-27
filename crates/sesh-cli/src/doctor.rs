@@ -91,6 +91,7 @@ pub fn run(
     checks.push(feeds_check(secrets, http));
     checks.push(audit_check(compose));
     checks.push(isolation_check(compose));
+    checks.push(network_check(config, compose));
     checks.push(match tailscale.serves_port(config.ports.webui) {
         Ok(Some(true)) => Check::pass("tailscale-serve", "Open WebUI is served on the tailnet"),
         Ok(Some(false)) => Check::warn(
@@ -546,6 +547,105 @@ fn isolation_sql() -> String {
 
 /// specs/007 FR-010: no service uses the superuser; each service database
 /// belongs to its own login, which has no administrative rights.
+/// The query for Postgres's active login rules, in file order.
+pub const HBA_RULES_SQL: &str = "SELECT type, coalesce(user_name[1], ''), coalesce(address, ''), coalesce(netmask, ''), auth_method FROM pg_hba_file_rules ORDER BY line_number";
+
+/// The prefix length of a netmask (`255.255.0.0` → 16; IPv6 too).
+fn prefix_len(netmask: &str) -> Option<u32> {
+    match netmask.parse::<std::net::IpAddr>().ok()? {
+        std::net::IpAddr::V4(m) => Some(u32::from(m).count_ones()),
+        std::net::IpAddr::V6(m) => Some(u128::from(m).count_ones()),
+    }
+}
+
+/// specs/008 contracts/cli.md: each running service is on exactly its
+/// networks, the old shared network is gone, and Postgres's active login
+/// rules bind each login to its own network's current ranges.
+fn network_check(config: &Config, compose: &dyn Compose) -> Check {
+    let stub = crate::init::is_stub(config);
+    let mut problems = vec![];
+    match compose.service_networks() {
+        Ok(running) => {
+            for (svc, nets) in running {
+                if svc.starts_with("executor-") || svc == "kiwix" {
+                    continue;
+                }
+                let want = crate::layout::networks_of(&svc, stub);
+                if want.is_empty() {
+                    continue;
+                }
+                for n in &nets {
+                    let exec = svc == "gateway" && n.starts_with("exec-");
+                    if !exec && !want.contains(&n.as_str()) {
+                        problems.push(format!("{svc} is on {n} (expected {})", want.join(", ")));
+                    }
+                }
+                for w in &want {
+                    if !nets.iter().any(|n| n == w) {
+                        problems.push(format!("{svc} isn't on {w}"));
+                    }
+                }
+            }
+        }
+        Err(e) => problems.push(format!("can't read the containers' networks: {e}")),
+    }
+    if compose
+        .network_subnets("default")
+        .is_ok_and(|s| !s.is_empty())
+    {
+        problems.push("sesh_default still exists".into());
+    }
+    match compose.exec_sql("sesh", HBA_RULES_SQL) {
+        Ok(out) => {
+            let rows: Vec<Vec<&str>> = out
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| l.split('|').collect())
+                .collect();
+            let mut allowed = std::collections::BTreeSet::new();
+            for r in &rows {
+                if r.len() == 5 && r[0] == "host" && r[4] != "reject" {
+                    match prefix_len(r[3]) {
+                        Some(p) => {
+                            allowed.insert((r[1].to_string(), format!("{}/{p}", r[2])));
+                        }
+                        None => {
+                            problems.push(format!("a login rule for {} has no address range", r[1]))
+                        }
+                    }
+                }
+            }
+            let mut want = std::collections::BTreeSet::new();
+            for (role, _, net) in crate::layout::DB_LOGINS {
+                for s in compose.network_subnets(net).unwrap_or_default() {
+                    want.insert((role.to_string(), s));
+                }
+            }
+            for (role, range) in allowed.difference(&want) {
+                problems.push(format!("a database login rule lets {role} in from {range}"));
+            }
+            for (role, range) in want.difference(&allowed) {
+                problems.push(format!("no database login rule for {role} on {range}"));
+            }
+            if !rows.last().is_some_and(|r| {
+                r.len() == 5 && r[0] == "host" && r[1] == "all" && r[4] == "reject"
+            }) {
+                problems
+                    .push("the database login rules don't end by rejecting everything else".into());
+            }
+        }
+        Err(e) => problems.push(format!("can't read the database login rules: {e}")),
+    }
+    if problems.is_empty() {
+        Check::pass(
+            "network-layout",
+            "each service is on only its own networks; each database login only from its own",
+        )
+    } else {
+        Check::fail("network-layout", problems.join("; "), "run `sesh up`")
+    }
+}
+
 fn isolation_check(compose: &dyn Compose) -> Check {
     match compose.exec_sql("sesh", &isolation_sql()) {
         Ok(out) if out.trim().is_empty() => Check::pass(
@@ -664,7 +764,7 @@ mod tests {
     }
 
     fn healthy_stack() -> FakeCompose {
-        FakeCompose::healthy(&[
+        let f = FakeCompose::healthy(&[
             ("postgres", None),
             ("redis-openwebui", None),
             ("litellm", Some(("127.0.0.1", 4000))),
@@ -677,7 +777,87 @@ mod tests {
             ("open-webui", Some(("127.0.0.1", 3000))),
             ("redis-infisical", None),
             ("redis-paperless", None),
-        ])
+        ]);
+        with_layout(&f);
+        f
+    }
+
+    /// The intended layout (specs/008): networks per the table, a range per
+    /// database network, and matching login rules.
+    fn with_layout(f: &FakeCompose) {
+        *f.service_nets.borrow_mut() = crate::layout::services(false)
+            .into_iter()
+            .map(|s| {
+                (
+                    s.to_string(),
+                    crate::layout::networks_of(s, false)
+                        .iter()
+                        .map(|n| n.to_string())
+                        .collect(),
+                )
+            })
+            .collect();
+        let mut rules = String::from("local|all|||trust\n");
+        for (i, (role, _, net)) in crate::layout::DB_LOGINS.iter().enumerate() {
+            f.subnets
+                .borrow_mut()
+                .insert(net.to_string(), vec![format!("172.{}.0.0/16", 40 + i)]);
+            rules.push_str(&format!(
+                "host|{role}|172.{}.0.0|255.255.0.0|scram-sha-256\n",
+                40 + i
+            ));
+        }
+        rules.push_str("host|all|all|0.0.0.0|reject\n");
+        f.sql_by_query
+            .borrow_mut()
+            .push(("pg_hba_file_rules".into(), rules));
+    }
+
+    #[test]
+    fn network_layout_names_each_drift() {
+        let (c, _) = setup(false);
+        let f = healthy_stack();
+        assert_eq!(
+            network_check(&c, &f).status,
+            Status::Pass,
+            "{}",
+            network_check(&c, &f).detail
+        );
+        // A service on another service's link.
+        f.service_nets
+            .borrow_mut()
+            .iter_mut()
+            .find(|(s, _)| s == "open-webui")
+            .unwrap()
+            .1
+            .push("secrets".into());
+        let r = network_check(&c, &f);
+        assert_eq!(r.status, Status::Fail);
+        assert!(
+            r.detail.contains("open-webui is on secrets"),
+            "{}",
+            r.detail
+        );
+        // The old shared network, and a login rule wider than its network.
+        let f = healthy_stack();
+        f.subnets
+            .borrow_mut()
+            .insert("default".into(), vec!["172.18.0.0/16".into()]);
+        f.sql_by_query.borrow_mut()[0].1 =
+            "local|all|||trust\nhost|litellm|0.0.0.0|0.0.0.0|scram-sha-256\n".into();
+        let r = network_check(&c, &f).detail;
+        assert!(r.contains("sesh_default still exists"), "{r}");
+        assert!(r.contains("lets litellm in from 0.0.0.0/0"), "{r}");
+        assert!(r.contains("no database login rule for paperless"), "{r}");
+        assert!(r.contains("don't end by rejecting"), "{r}");
+    }
+
+    #[test]
+    fn netmasks_become_prefix_lengths() {
+        assert_eq!(prefix_len("255.255.0.0"), Some(16));
+        assert_eq!(prefix_len("255.255.255.240"), Some(28));
+        assert_eq!(prefix_len("ffff:ffff:ffff:ffff::"), Some(64));
+        assert_eq!(prefix_len("nope"), None);
     }
 
     fn good_router(tools: bool) -> FakeHttp {

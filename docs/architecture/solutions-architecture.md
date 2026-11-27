@@ -463,7 +463,7 @@ Paperless-ngx, SearXNG, Kiwix, Postgres, Redis, sbx.
 
 ## Implementation plan
 
-Build in twelve phases, each ending in a working end-to-end path. Don't
+Build in thirteen phases, each ending in a working end-to-end path. Don't
 start a phase until the previous one's acceptance checks pass. Each phase
 is a feature under `specs/`.
 
@@ -529,29 +529,41 @@ is a feature under `specs/`.
      - an install from before this phase keeps its data and works after
        `sesh up`;
      - `sesh doctor` fails when a service uses the superuser.
-8. **Google Docs (read-only):** search and read the owner's Google Docs
+8. **Network isolation:** no shared network. Each service is on a
+   database network to Postgres, the pair networks for its links, and
+   one edge network of its own for its published port and outbound
+   access; each database login is accepted only from its own network's
+   address range, read from Docker on every `sesh up` (ADR 0011).
+   - Accept:
+     - from inside each service, only the paths in the layout table
+       connect, and everything else is refused (negative tests);
+     - a database login is refused from any other network, and the
+       superuser over any network;
+     - `sesh doctor` fails when a service is on a network outside its
+       row.
+9. **Google Docs (read-only):** search and read the owner's Google Docs
    through their existing Google grant, with a read-only scope.
    - Accept: an agent reads its owner's documents, never another
      user's; nothing can be written.
-9. **Memory:** Mem0 (CPU embeddings, `infer=False`) behind the gateway's
+10. **Memory:** Mem0 (CPU embeddings, `infer=False`) behind the gateway's
    `memory` connector, scoped per user; cross-store recall with
    documents. Mem0 gets its own login; the migration creates the
    `vector` extension, which needs the superuser.
    - Accept: a fact saved in one session is recalled in a later one;
      user A's agent can't recall user B's facts or documents (negative
      tests).
-10. **One agent end to end:** one Hermes profile in a container, with
+11. **One agent end to end:** one Hermes profile in a container, with
    built-in tools off, the gateway as its only MCP server, and a memory
    provider plugin backed by the gateway; Open WebUI connected to it.
    - Accept: chatting in Open WebUI, the agent answers a weather and a
      search question, and uses mail, documents and memory via the
      gateway; attempts to use terminal or file tools fail.
-11. **Browser:** the sbx browser VM, a persistent profile per agent,
+12. **Browser:** the sbx browser VM, a persistent profile per agent,
    `read(url)`, `login(site)`, and a live-view link via ntfy.
    - Accept: `read(url)` returns Markdown and refuses a LAN address;
      `login(site)` refuses on a lookalike domain; the agent can't read a
      filled password field.
-12. **Multi-user and household:** profiles for each user and Household,
+13. **Multi-user and household:** profiles for each user and Household,
    Telegram bots, `ask_household`, skills repositories with hourly
    commits, backups, health alerts, and the operator CLI with its Claude
    Code skills.

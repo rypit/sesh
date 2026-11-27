@@ -13,7 +13,12 @@ mod google;
 mod host;
 mod infisical;
 mod init;
+// The reachability half of the table is read only by tests and the
+// `network_stack` stack test (which includes this file by path).
+#[allow(dead_code)]
+mod layout;
 mod ntfy;
+mod pg_hba;
 mod render;
 mod secrets;
 mod up;

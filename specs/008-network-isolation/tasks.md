@@ -14,7 +14,7 @@ description: "Task list for feature 008: network isolation"
 
 ## Phase 1: Setup
 
-- [ ] T001 [P] ADR `docs/decisions/0011-network-isolation.md`:
+- [x] T001 [P] ADR `docs/decisions/0011-network-isolation.md`:
   - the layout (contracts/networks.md);
   - why each service has one non-internal network (research.md R1, R2);
   - the gateway listener rule and why it holds unchanged (R5);
@@ -23,13 +23,13 @@ description: "Task list for feature 008: network isolation"
   - follow-up: egress filtering.
 
   Status proposed.
-- [ ] T002 [P] Roadmap renumbering (008 network isolation, 009 read-only Google Docs, 010 memory, 011 one agent, 012 browser, 013 household) in `README.md`, `AGENTS.md` and the phase list in `docs/architecture/solutions-architecture.md`
+- [x] T002 [P] Roadmap renumbering (008 network isolation, 009 read-only Google Docs, 010 memory, 011 one agent, 012 browser, 013 household) in `README.md`, `AGENTS.md` and the phase list in `docs/architecture/solutions-architecture.md`
 
 ---
 
 ## Phase 2: Foundational
 
-- [ ] T003 Unit tests first, then `crates/sesh-cli/src/layout.rs`: the layout table per data-model.md.
+- [x] T003 Unit tests first, then `crates/sesh-cli/src/layout.rs`: the layout table per data-model.md.
   - **Fields:** `Network.name`, `Network.internal`, `Network.members`, `Network.stub_only`; `Allowed path.from`, `Allowed path.to`, `Allowed path.port`, `Allowed path.stub_only`, `Allowed path.kind`.
   - **Values:** the networks, services and paths in contracts/networks.md.
   - **Tests check the rules:**
@@ -41,7 +41,7 @@ description: "Task list for feature 008: network isolation"
     - every pair sharing a network has a `used` or `reverse` path for each port the destination listens on, except the gateway's `:7000` and `:7002`.
 
   Declare `mod layout;` in `crates/sesh-cli/src/main.rs`.
-- [ ] T004 Unit test (written failing): `deploy/compose.yaml` and `deploy/compose.stub.yaml` match `layout.rs`.
+- [x] T004 Unit test (written failing): `deploy/compose.yaml` and `deploy/compose.stub.yaml` match `layout.rs`.
   - Every service's `networks:` list and every network's `internal:` flag (`Network.internal`).
   - `stub` appears only in the stub file (`Network.stub_only`).
   - No service uses `default`.
@@ -56,7 +56,7 @@ description: "Task list for feature 008: network isolation"
 
 **Independent test**: `network_stack` probes every (service, destination, port) from inside each service's network namespace.
 
-- [ ] T005 [US1] Stack test (written first) `network_stack` in `crates/sesh-cli/tests/stack.rs`, in stub mode with one agent.
+- [x] T005 [US1] Stack test (written first) `network_stack` in `crates/sesh-cli/tests/stack.rs`, in stub mode with one agent.
   - **Networks:** for every running service, `networks_of` equals the layout table's list (FR-002 to FR-008).
   - **Reachability:** for every (from, to, port), the expected result is computed from `layout.rs` (`Allowed path.kind`).
     - Probes use `probe_from`, run in the source's namespace from the gateway image.
@@ -66,20 +66,20 @@ description: "Task list for feature 008: network isolation"
     - The gateway's `:7000` and `:7002` must fail from every container but itself (FR-009).
   - **Edge networks:** every edge network has one member, and Postgres has no non-internal network.
   - **Published ports:** still loopback only (FR-010).
-- [ ] T006 [US1] `deploy/compose.yaml`: remove every implicit `default` and declare the networks in contracts/networks.md.
+- [x] T006 [US1] `deploy/compose.yaml`: remove every implicit `default` and declare the networks in contracts/networks.md.
   - The database networks, the pair networks and the edge networks.
   - Postgres joins the six `*-db` networks; each service gets exactly its row.
   - LiteLLM keeps `extra_hosts` for `host.docker.internal` on `litellm-edge` (research.md R3).
   - Comment the purpose of each network as the existing ones do.
-- [ ] T007 [US1] Executors and Kiwix in the generated overlay (`crates/sesh-cli/src/up.rs` `generated_overlay`): the gateway's network list there gains `gateway-db`, `secrets`, `notify`, `gateway-edge` instead of `default`. Update its unit tests (`networks: [default, search, …]` → the new list).
-- [ ] T008 [P] [US1] Unit test, then a doc comment in `crates/sesh-gateway/src/listen.rs`: with the route address on the edge network, `agent_addrs` and `addrs_on(7002, …)` give loopback plus that address only, never `0.0.0.0` (research.md R5). No behaviour change.
+- [x] T007 [US1] Executors and Kiwix in the generated overlay (`crates/sesh-cli/src/up.rs` `generated_overlay`): the gateway's network list there gains `gateway-db`, `secrets`, `notify`, `gateway-edge` instead of `default`. Update its unit tests (`networks: [default, search, …]` → the new list).
+- [x] T008 [P] [US1] Unit test, then a doc comment in `crates/sesh-gateway/src/listen.rs`: with the route address on the edge network, `agent_addrs` and `addrs_on(7002, …)` give loopback plus that address only, never `0.0.0.0` (research.md R5). No behaviour change.
 
-- [ ] T009 [US1] Unit tests first, then `crates/sesh-cli/src/pg_hba.rs`: render the login rules from data-model.md `Database login rule` (`Database login rule.role`, `Database login rule.database`, `Database login rule.network`, `Database login rule.subnets`).
+- [x] T009 [US1] Unit tests first, then `crates/sesh-cli/src/pg_hba.rs`: render the login rules from data-model.md `Database login rule` (`Database login rule.role`, `Database login rule.database`, `Database login rule.network`, `Database login rule.subnets`).
   - **Output:** one `host <database> <role> <subnet> scram-sha-256` line per subnet, in a stable order, then `local all all trust`, then `host all all all reject`. No network line for `sesh`.
   - **Before any subnet is known:** only the local line and the reject.
   - **A role whose subnets are empty or unreadable:** an error naming its network, and no permissive line.
   - The roles and networks come from `layout.rs`.
-- [ ] T010 [US1] Wire the rules in (research.md R10).
+- [x] T010 [US1] Wire the rules in (research.md R10).
   - **`Compose::network_subnets(network) -> Result<Vec<String>>`**, using `docker network inspect`, in `crates/sesh-cli/src/host/compose.rs`, plus the fake in `host/fake.rs`.
   - **`deploy/compose.yaml`:** Postgres gets `command: ["postgres", "-c", "hba_file=/etc/sesh-pg/pg_hba.conf"]` and mounts `${SESH_DATA_DIR:?}/postgres-conf:/etc/sesh-pg:ro`, a directory mount.
   - **`up.rs`:**
@@ -87,7 +87,7 @@ description: "Task list for feature 008: network isolation"
     - `run`, after `up postgres`, reads each `*-db` network's subnets, writes the file atomically in its directory (only when it changed), and runs `SELECT pg_reload_conf()` through `exec_sql`;
     - it prints per contracts/cli.md, and fails closed when a subnet can't be read.
   - **Unit tests:** a first `sesh up` writes and reloads; an unchanged second run does neither; a missing subnet fails.
-- [ ] T011 [US1] Stack steps in `network_stack` (written before T010 lands). Probes use `docker run --network container:<source>` with the Postgres image's `psql`, taking passwords from `secrets.env` through the environment:
+- [x] T011 [US1] Stack steps in `network_stack` (written before T010 lands). Probes use `docker run --network container:<source>` with the Postgres image's `psql`, taking passwords from `secrets.env` through the environment:
   - each service's login works from its own namespace;
   - from another storing service's namespace, which can reach Postgres on its own database network, that login is rejected with "pg_hba.conf rejects connection";
   - the superuser is rejected over the network from every storing service's namespace;
@@ -101,14 +101,14 @@ description: "Task list for feature 008: network isolation"
 
 **Independent test**: the seven existing stack tests pass on the new layout.
 
-- [ ] T012 [US2] Review each existing stack test for `sesh_default` or `["default"]` assumptions and update them to the new networks:
+- [x] T012 [US2] Review each existing stack test for `sesh_default` or `["default"]` assumptions and update them to the new networks:
   - `foundation_stack`'s port and network checks;
   - `gateway_stack`'s executor probes (`1.1.1.1` and `gateway:7000` from an executor);
   - `feeds_stack`'s `default_ip` helper, which reads `sesh_default`: use `gateway-db` and `gateway-edge` for the gateway and the `*-db` networks for Postgres;
   - `isolation_stack`'s Redis and Postgres probes.
 
   All in `crates/sesh-cli/tests/stack.rs`.
-- [ ] T013 [US2] `crates/sesh-cli/src/doctor.rs`: make sure existing checks don't depend on `default`. `ports-loopback` reads published ports, and `services-healthy` reads states. Update the fixtures in its tests if they name `default`.
+- [x] T013 [US2] `crates/sesh-cli/src/doctor.rs`: make sure existing checks don't depend on `default`. `ports-loopback` reads published ports, and `services-healthy` reads states. Update the fixtures in its tests if they name `default`.
 
 ---
 
@@ -118,7 +118,7 @@ description: "Task list for feature 008: network isolation"
 
 **Independent test**: a pre-008 stack with data, then the new `sesh up`; the data is intact and `sesh_default` is gone.
 
-- [ ] T014 [US3] Unit tests, then the code.
+- [x] T014 [US3] Unit tests, then the code.
   - `Compose::remove_network_if_unused(name) -> Result<Option<Vec<String>>>`, returning the containers still attached, if any. Implemented with `docker network inspect` and `docker network rm` in `crates/sesh-cli/src/host/compose.rs`, plus the fake in `host/fake.rs`.
   - `up::run` calls it for `sesh_default` after the services are up and reports per contracts/cli.md: removed, still in use, or absent (silent).
 - [ ] T015 [US3] Stack steps in `network_stack`:
@@ -136,7 +136,7 @@ description: "Task list for feature 008: network isolation"
 
 **Independent test**: the stub-mode stack tests and `eval_stack` pass with containers' internet blocked.
 
-- [ ] T016 [US4] `deploy/compose.stub.yaml`: an internal `stub` network (`Network.stub_only`) joining `stub-llm`, `litellm` and `gateway`. `stub-llm` moves from `default` to `[stub, feeds-egress]`. `network_stack` checks that LiteLLM, the gateway and Miniflux reach `stub-llm:8000`.
+- [x] T016 [US4] `deploy/compose.stub.yaml`: an internal `stub` network (`Network.stub_only`) joining `stub-llm`, `litellm` and `gateway`. `stub-llm` moves from `default` to `[stub, feeds-egress]`. `network_stack` checks that LiteLLM, the gateway and Miniflux reach `stub-llm:8000`.
 - [ ] T017 [P] [US4] Confirm the eval project (`deploy/eval/compose.yaml`) is unaffected. It has no `default` and no reference to household networks. Add a unit test in `crates/sesh-cli/src/eval/mod.rs` asserting it never names a household network.
 
 ---
@@ -147,7 +147,7 @@ description: "Task list for feature 008: network isolation"
 
 **Independent test**: the doctor passes on the intended layout, and fails, naming the service and the network, when a container is attached to an extra network.
 
-- [ ] T018 [US5] Unit tests, then the `network-layout` check in `crates/sesh-cli/src/doctor.rs`, per contracts/cli.md.
+- [x] T018 [US5] Unit tests, then the `network-layout` check in `crates/sesh-cli/src/doctor.rs`, per contracts/cli.md.
   - It reads each running sesh container's networks through `Compose` and compares them with `layout.rs` (`Network.members`). It also checks whether `sesh_default` exists. It also checks that `pg_hba_file_rules` matches the current subnets: each login only on its own network, no network rule for `sesh`, and a final reject (contracts/cli.md).
   - The fake compose in `host/fake.rs` gains network data.
 - [ ] T019 [US5] Stack step in `network_stack`: `docker network connect sesh_secrets <open-webui>`. The doctor fails, naming `open-webui` and `secrets`. Then disconnect, and the doctor passes again.
@@ -157,7 +157,7 @@ description: "Task list for feature 008: network isolation"
 ## Phase 8: Polish
 
 - [ ] T020 [P] Architecture doc: a network-layout section (the networks and the reachability rule), and updates to the deployment table and the security section. `diagram.jsx` and `docs/architecture.svg`: update them if the diagram shows networks or shared links; the diagram check in `make check` keeps them identical.
-- [ ] T021 [P] `.github/workflows/ci.yml`: add `network_stack` to the lightest stack group.
+- [x] T021 [P] `.github/workflows/ci.yml`: add `network_stack` to the lightest stack group.
 - [ ] T022 Record CI results in `specs/008-network-isolation/research.md`
 
 ## Dependencies
