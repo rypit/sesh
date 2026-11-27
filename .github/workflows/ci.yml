@@ -108,7 +108,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test: [foundation_stack, gateway_stack, eval_stack, secrets_stack]
+        test: [foundation_stack, gateway_stack, eval_stack, secrets_stack, google_docs_stack]
     name: stack (${{ matrix.test }})
     steps:
       - uses: actions/checkout@v4

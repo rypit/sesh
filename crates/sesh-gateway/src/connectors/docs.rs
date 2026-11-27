@@ -52,13 +52,19 @@ pub fn descriptor() -> ConnectorDescriptor {
     )
 }
 
+#[derive(Clone)]
 pub struct Paperless {
     http: reqwest::Client,
     user: String,
     password: String,
-    token: tokio::sync::Mutex<Option<String>>,
-    ids: tokio::sync::Mutex<HashMap<String, u64>>,
+    token: std::sync::Arc<tokio::sync::Mutex<Option<String>>>,
+    ids: std::sync::Arc<tokio::sync::Mutex<HashMap<String, u64>>>,
 }
+
+/// How long an upload waits inline for Paperless to consume the file;
+/// past it, a background task finishes (an execution's deadline is 30 s).
+const INLINE_POLLS: u32 = 40;
+const BACKGROUND_POLLS: u32 = 600;
 
 impl Paperless {
     pub fn new(user: &str, password: &str) -> Self {
@@ -227,17 +233,16 @@ impl Paperless {
         Ok(ids)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Hands the file to Paperless; returns its consumption task id.
     async fn upload(
         &self,
         base: &str,
-        owner_id: u64,
         filename: &str,
         mime: &str,
         bytes: Vec<u8>,
         title: &str,
         tags: &[u64],
-    ) -> Result<u64, String> {
+    ) -> Result<String, String> {
         let tok = self.token(base).await?;
         let part = reqwest::multipart::Part::bytes(bytes)
             .file_name(filename.to_string())
@@ -272,8 +277,21 @@ impl Paperless {
             .map(str::to_string)
             .or(task["task_id"].as_str().map(str::to_string))
             .ok_or("no task id")?;
-        // Consumption runs in the background; wait for its document id.
-        for _ in 0..120 {
+        Ok(task)
+    }
+
+    /// Waits for consumption, then gives the document its owner. Until
+    /// then it belongs to the gateway's admin account, which no agent's
+    /// scope includes, so it is invisible rather than misfiled.
+    async fn finish(
+        &self,
+        base: &str,
+        task: &str,
+        owner_id: u64,
+        polls: u32,
+    ) -> Result<Option<u64>, String> {
+        let task = task.to_string();
+        for _ in 0..polls {
             let t = self
                 .req(
                     base,
@@ -302,7 +320,7 @@ impl Paperless {
                         Some(json!({"owner": owner_id})),
                     )
                     .await?;
-                    return Ok(id);
+                    return Ok(Some(id));
                 }
                 Some("FAILURE") => {
                     return Err(format!(
@@ -318,7 +336,7 @@ impl Paperless {
                 _ => tokio::time::sleep(Duration::from_millis(500)).await,
             }
         }
-        Err("the document service is still processing the file; search for it later".into())
+        Ok(None)
     }
 }
 
@@ -433,16 +451,8 @@ pub async fn call(
                 .collect();
             let tag_ids = p.tag_ids(&base, owner_id, &tags).await?;
             let title = args["title"].as_str().unwrap_or("").to_string();
-            let id = p
-                .upload(
-                    &base,
-                    owner_id,
-                    &att.filename,
-                    &att.mime,
-                    bytes,
-                    &title,
-                    &tag_ids,
-                )
+            let task = p
+                .upload(&base, &att.filename, &att.mime, bytes, &title, &tag_ids)
                 .await?;
             if scope.owner == HOUSEHOLD {
                 // FR-014: a household document tells everyone.
@@ -459,7 +469,20 @@ pub async fn call(
                     })
                     .await;
             }
-            Ok(json!({"id": id, "title": title}))
+            match p.finish(&base, &task, owner_id, INLINE_POLLS).await? {
+                Some(id) => Ok(json!({"id": id, "title": title, "status": "filed"})),
+                None => {
+                    let (p, base) = (p.clone(), base.clone());
+                    tokio::spawn(async move {
+                        if let Err(e) = p.finish(&base, &task, owner_id, BACKGROUND_POLLS).await {
+                            tracing::warn!("filing a document failed: {e}");
+                        }
+                    });
+                    Ok(
+                        json!({"title": title, "status": "processing", "note": "the document service is still reading the file; it will be searchable shortly"}),
+                    )
+                }
+            }
         }
         _ => Err(format!("docs.{method} has no upstream")),
     }

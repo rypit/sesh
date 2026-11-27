@@ -72,6 +72,10 @@ impl Agents {
     pub fn get(&self, name: &str) -> Option<Agent> {
         self.current().get(name).cloned()
     }
+
+    pub fn all(&self) -> Vec<Agent> {
+        self.current().agents
+    }
 }
 
 /// Reloads `users.toml` when it changes (specs/005); fails closed.

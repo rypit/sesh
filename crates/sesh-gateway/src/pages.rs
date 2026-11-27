@@ -323,6 +323,28 @@ async fn form_submit(
     msg(StatusCode::OK, "Saved. You can close this page.")
 }
 
+/// Credentials the operator may fill: each connector's, plus the Google
+/// OAuth client's (specs/005 research.md R3). The Google ones are listed
+/// only once an agent uses a Google connector, unless `all`.
+fn declared_credentials(gw: &Gateway, all: bool) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = gw
+        .connectors
+        .iter()
+        .flat_map(|c| c.credentials.iter().map(|n| (c.name.clone(), n.clone())))
+        .collect();
+    let uses_google = gw.agents.all().iter().any(|a| {
+        a.connectors
+            .iter()
+            .any(|c| ["mail", "calendar", "contacts"].contains(&c.as_str()))
+    });
+    if all || uses_google {
+        for n in ["CLIENT_ID", "CLIENT_SECRET"] {
+            out.push(("google".into(), n.into()));
+        }
+    }
+    out
+}
+
 fn admin_ok(gw: &Gateway, h: &HeaderMap) -> bool {
     match (&gw.admin_token, bearer(h)) {
         (Some(want), Some(got)) => approvals::ct_eq(want, got),
@@ -340,10 +362,9 @@ async fn admin_form(
     }
     let connector = b["connector"].as_str().unwrap_or("");
     let name = b["name"].as_str().unwrap_or("");
-    let declared = gw
-        .connectors
+    let declared = declared_credentials(&gw, true)
         .iter()
-        .any(|c| c.name == connector && c.credentials.iter().any(|n| n == name));
+        .any(|(c, n)| c == connector && n == name);
     if !declared {
         return (
             StatusCode::NOT_FOUND,
@@ -383,15 +404,13 @@ async fn admin_credentials(State(gw): State<Arc<Gateway>>, headers: HeaderMap) -
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let mut out = vec![];
-    for c in &gw.connectors {
-        for n in &c.credentials {
-            let state = match gw.secrets.get(&sesh_core::credential_key(&c.name, n)).await {
-                Ok(Some(_)) => "set",
-                Ok(None) => "missing",
-                Err(_) => "unavailable",
-            };
-            out.push(json!({"connector": c.name, "name": n, "state": state}));
-        }
+    for (c, n) in declared_credentials(&gw, false) {
+        let state = match gw.secrets.get(&sesh_core::credential_key(&c, &n)).await {
+            Ok(Some(_)) => "set",
+            Ok(None) => "missing",
+            Err(_) => "unavailable",
+        };
+        out.push(json!({"connector": c, "name": n, "state": state}));
     }
     Json(Value::Array(out)).into_response()
 }
