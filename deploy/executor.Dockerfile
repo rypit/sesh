@@ -6,12 +6,25 @@
 FROM rust:1.97-slim-bookworm AS supervisor
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
+# Dependencies first, in their own layer: it stays cached until a manifest
+# or Cargo.lock changes, so a code change rebuilds only sesh's own crates.
+# Every workspace member's manifest is needed; placeholder sources stand in.
+COPY crates/sesh-cli/Cargo.toml crates/sesh-cli/
+COPY crates/sesh-core/Cargo.toml crates/sesh-core/
+COPY crates/sesh-executor-supervisor/Cargo.toml crates/sesh-executor-supervisor/
+COPY crates/sesh-gateway/Cargo.toml crates/sesh-gateway/
+COPY crates/sesh-stub-llm/Cargo.toml crates/sesh-stub-llm/
+RUN for d in crates/*/; do mkdir -p "$d/src" && echo 'fn main() {}' > "$d/src/main.rs" && : > "$d/src/lib.rs"; done \
+ && cargo build --release -p sesh-executor-supervisor \
+ && rm -rf crates/*/src
 COPY crates ./crates
-# Keep only the binary: the target directory and the crate registry
-# would otherwise stay in this layer's build cache (several GB).
-RUN cargo build --release -p sesh-executor-supervisor \
+# COPY keeps the context's file times, which can be older than the
+# placeholders: touch them so cargo rebuilds sesh's crates. Keep only the
+# binary in this layer.
+RUN find crates -name '*.rs' -exec touch {} + \
+ && cargo build --release -p sesh-executor-supervisor \
  && cp target/release/sesh-executor-supervisor /sesh-executor-supervisor \
- && rm -rf target /usr/local/cargo/registry
+ && rm -rf target
 
 FROM node:24-trixie-slim AS bundle
 WORKDIR /src
