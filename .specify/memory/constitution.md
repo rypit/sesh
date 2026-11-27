@@ -10,8 +10,8 @@ agent ever holds a secret. It runs in two modes on one stack:
 - **Operator mode**: the admin sets up and maintains sesh with the sesh
   admin CLI and Claude Code operator skills, which no agent can reach.
 
-The design is described in the sesh Solutions Architecture document
-(ADR 0001). These principles are binding on every spec, plan, task and
+The design is described in the sesh Solutions Architecture,
+`docs/architecture/solutions-architecture.md` (ADR 0001). These principles are binding on every spec, plan, task and
 change. When a principle and a convenience conflict, the principle wins.
 
 ## Core Principles
@@ -180,4 +180,4 @@ updates any affected checks and templates. Versioning:
 
 All reviews check compliance with this constitution.
 
-**Version**: 1.2.0 | **Ratified**: 2026-11-26 | **Last Amended**: 2026-11-26
+**Version**: 1.2.1 | **Ratified**: 2026-11-26 | **Last Amended**: 2026-11-27

@@ -9,8 +9,7 @@ A household wants AI agents that act for each person (email, calendar,
 documents, browsing, errands) without trusting those agents with
 credentials or unchecked side effects, and without sending household data
 to cloud model providers. The design is set out in the
-[sesh Solutions Architecture](https://claude.ai/artifact/Hq9kuLsqLakFbAUW1Jyt5T)
-document and its [whiteboard](https://claude.ai/artifact/4HChjrjx4NPCuD1ktsM5LH).
+[sesh Solutions Architecture](../architecture/solutions-architecture.md).
 
 ## Decision
 

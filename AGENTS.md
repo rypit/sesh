@@ -30,11 +30,12 @@ Hard rules:
 - The project name is always lowercase, **sesh**, even at the start of a
   sentence or in a title.
 
-The design source is the sesh Solutions Architecture document (ADR 0001).
+The design source is `docs/architecture/solutions-architecture.md`
+(ADR 0001); change it in the same pull request as the code it describes.
 If a change adds, removes or renames a component, or changes what talks
 to what, update the architecture diagram in the same change: follow
-`docs/architecture/README.md` (the document's widget, `diagram.jsx` and
-`docs/architecture.svg` stay identical).
+`docs/architecture/README.md` (`diagram.jsx` and `docs/architecture.svg`
+stay identical).
 Commands: `make check` runs fmt, clippy, unit tests, cargo-deny, the
 architecture-diagram check, Compose validation and the instance-data
 guard. `make stack-test` starts the stack with the stub model server and
