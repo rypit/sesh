@@ -299,6 +299,8 @@ fn header(name: &str, value: &str) -> tiny_http::Header {
     tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes()).expect("static header")
 }
 
+mod fake_google;
+
 fn main() {
     let port = std::env::var("STUB_PORT").unwrap_or_else(|_| "8000".into());
     let tools_enabled = std::env::var("STUB_TOOLS")
@@ -310,10 +312,34 @@ fn main() {
     let script = script.as_deref();
     let server = tiny_http::Server::http(format!("0.0.0.0:{port}")).expect("bind stub port");
     eprintln!("sesh-stub-llm listening on {port} (tools {tools_enabled}, script {script:?})");
+    let mut google = fake_google::Fake::default();
     for mut request in server.incoming_requests() {
         let path = request.url().split('?').next().unwrap_or("").to_string();
         let method = request.method().as_str().to_string();
         let json_ct = header("Content-Type", "application/json");
+        if path.starts_with("/fake/google/") {
+            let auth = request
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv("Authorization"))
+                .map(|h| h.value.as_str().to_string())
+                .unwrap_or_default();
+            let mut body = String::new();
+            let _ = request.as_reader().read_to_string(&mut body);
+            let url = request.url().to_string();
+            let r = google
+                .handle(&method, &url, &auth, &body)
+                .unwrap_or(fake_google::Reply {
+                    status: 404,
+                    body: json!({}),
+                });
+            let _ = request.respond(
+                tiny_http::Response::from_string(r.body.to_string())
+                    .with_status_code(r.status)
+                    .with_header(json_ct),
+            );
+            continue;
+        }
         let response = match (method.as_str(), path.as_str()) {
             ("GET", "/health") => tiny_http::Response::from_string("ok"),
             ("GET", "/v1/models") => {
