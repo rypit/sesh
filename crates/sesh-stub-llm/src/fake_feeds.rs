@@ -17,9 +17,13 @@ pub struct Reply {
 #[derive(Default)]
 pub struct Fake;
 
+// Each feed's site link is the stub itself: Miniflux fetches the site's
+// icon while adding a feed, and a link to the real internet would hang
+// there in CI (no internet). Item links stay as they are.
+
 const HARBOUR: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
-<title>Harbour news</title><link>https://example.org/harbour</link>
+<title>Harbour news</title><link>http://stub-llm:8000/fake/site/harbour</link>
 <item><title>Marrow Quay pier reopens after repairs</title>
 <link>https://example.org/harbour/marrow-quay</link>
 <pubDate>Thu, 26 Nov 2026 08:30:00 GMT</pubDate>
@@ -32,6 +36,7 @@ const HARBOUR: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 
 const GARDEN: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom"><title>Garden club</title>
+<link rel="alternate" href="http://stub-llm:8000/fake/site/garden"/>
 <entry><title>Seed swap on Saturday</title>
 <link rel="alternate" href="https://example.org/garden/seed-swap"/>
 <published>2026-11-24T09:00:00Z</published>
@@ -39,13 +44,13 @@ const GARDEN: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 </feed>"#;
 
 const CYCLING: &str = r#"<?xml version="1.0"?>
-<rss version="2.0"><channel><title>Cycling club</title>
+<rss version="2.0"><channel><title>Cycling club</title><link>http://stub-llm:8000/fake/site/cycling</link>
 <item><title>Sunday ride to Holmen</title><link>https://example.org/cycling/holmen</link>
 <pubDate>Tue, 24 Nov 2026 18:00:00 GMT</pubDate><description>Meet at nine.</description></item>
 </channel></rss>"#;
 
 const FERRY: &str = r#"<?xml version="1.0"?>
-<rss version="2.0"><channel><title>Ferry notices</title>
+<rss version="2.0"><channel><title>Ferry notices</title><link>http://stub-llm:8000/fake/site/ferry</link>
 <item><title>Winter timetable</title><link>https://example.org/ferry/winter</link>
 <description>The winter timetable starts on 1 December.</description></item>
 </channel></rss>"#;
@@ -120,5 +125,28 @@ mod tests {
         );
         assert!(f.handle("/other").is_none());
         assert_eq!(f.handle("/fake/feeds/nope.xml").unwrap().status, 404);
+    }
+}
+
+#[cfg(test)]
+mod site_link_tests {
+    use super::*;
+
+    #[test]
+    fn every_feeds_site_link_is_the_stub_itself() {
+        for f in [HARBOUR, GARDEN, CYCLING, FERRY] {
+            let head = f
+                .split("<item>")
+                .next()
+                .unwrap()
+                .split("<entry>")
+                .next()
+                .unwrap();
+            assert!(head.contains("http://stub-llm:8000/fake/site/"), "{head}");
+            assert!(
+                !head.contains("https://example.org"),
+                "a site link to the internet: {head}"
+            );
+        }
     }
 }
