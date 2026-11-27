@@ -786,4 +786,102 @@ mod tests {
         r.reasons = vec!["expected a geo.forecast call that was allowed; none made".into()];
         assert!(result_line(&r).starts_with("web-fact         FAIL  expected a geo.forecast"));
     }
+
+    /// The networks a Compose file names that belong to the household stack
+    /// (specs/008 `layout::NETWORKS`, or `default`), plus each service that
+    /// declares no `networks:` and so would join `default` implicitly.
+    fn household_networks_named(yaml: &str) -> Vec<String> {
+        let household =
+            |n: &str| n == "default" || crate::layout::NETWORKS.iter().any(|h| h.name == n);
+        let indent = |l: &str| l.len() - l.trim_start().len();
+        let mut out = vec![];
+        let mut named = vec![];
+        let mut section = "";
+        let mut service: Option<(String, bool)> = None;
+        let mut in_list = false;
+        let end_service = |svc: &mut Option<(String, bool)>, out: &mut Vec<String>| {
+            if let Some((name, false)) = svc.take() {
+                out.push(format!("{name} (no networks: joins default)"));
+            }
+        };
+        for line in yaml.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') {
+                continue;
+            }
+            match indent(line) {
+                0 => {
+                    end_service(&mut service, &mut out);
+                    section = if t == "services:" {
+                        "services"
+                    } else if t == "networks:" {
+                        "networks"
+                    } else {
+                        ""
+                    };
+                    in_list = false;
+                }
+                2 if t.ends_with(':') || t.contains(": ") => {
+                    let key = t.split(':').next().unwrap_or("").to_string();
+                    if section == "services" {
+                        end_service(&mut service, &mut out);
+                        service = Some((key, false));
+                    } else if section == "networks" {
+                        named.push(key);
+                    }
+                    in_list = false;
+                }
+                4 if section == "services" && t.starts_with("networks:") => {
+                    if let Some(s) = service.as_mut() {
+                        s.1 = true;
+                    }
+                    let rest = t["networks:".len()..].trim();
+                    in_list = rest.is_empty();
+                    named.extend(
+                        rest.trim_matches(|c| c == '[' || c == ']')
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|n| !n.is_empty())
+                            .map(str::to_string),
+                    );
+                }
+                n if in_list && n > 4 => {
+                    if let Some(item) = t.strip_prefix("- ") {
+                        named.push(item.trim().to_string());
+                    } else if n == 6 && t.ends_with(':') {
+                        named.push(t.trim_end_matches(':').to_string());
+                    }
+                }
+                4 => in_list = false,
+                _ => {}
+            }
+        }
+        end_service(&mut service, &mut out);
+        // Household names first in file order, then each missing list.
+        let mut hits: Vec<String> = named.into_iter().filter(|n| household(n)).collect();
+        hits.extend(out);
+        hits
+    }
+
+    #[test]
+    fn the_eval_project_names_no_household_network() {
+        // specs/008 T017 (US4): the eval project shares no network with
+        // the household stack, and has no `default` of its own.
+        assert_eq!(
+            household_networks_named(EVAL_COMPOSE),
+            Vec::<String>::new(),
+            "deploy/eval/compose.yaml"
+        );
+        // Negative controls: the check sees each way it could go wrong.
+        let bad = "services:\n  a:\n    networks: [eval-edge, default]\n  b:\n    networks:\n      - secrets\n  c:\n    image: x\nnetworks:\n  gateway-edge:\n    external: true\n";
+        assert_eq!(
+            household_networks_named(bad),
+            vec![
+                "default",
+                "secrets",
+                "gateway-edge",
+                "c (no networks: joins default)"
+            ]
+        );
+    }
 }
