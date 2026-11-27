@@ -45,7 +45,7 @@ pub fn generated_overlay(agents: &AgentsFile, kiwix: bool) -> String {
     for a in &agents.agents {
         let n = &a.name;
         services.push_str(&format!(
-            "  executor-{n}:\n    image: ${{SESH_EXECUTOR_IMAGE:-sesh-executor:dev}}\n    environment:\n      SESH_GATEWAY_ADDRESS: gateway:7001\n    networks: [exec-{n}]\n    read_only: true\n    tmpfs: [/var/lib/sesh-executor]\n    cap_drop: [ALL]\n    security_opt: [\"no-new-privileges:true\"]\n    mem_limit: 512m\n    pids_limit: 256\n    healthcheck:\n      test: [\"CMD-SHELL\", \"bash -c 'exec 3<>/dev/tcp/127.0.0.1/8000'\"]\n      interval: 5s\n      timeout: 5s\n      retries: 30\n    restart: unless-stopped\n"
+            "  executor-{n}:\n    image: ${{SESH_EXECUTOR_IMAGE:-sesh-executor:dev}}\n    environment:\n      SESH_GATEWAY_ADDRESS: gateway:7001\n    networks: [exec-{n}]\n    read_only: true\n    tmpfs: [/var/lib/sesh-executor]\n    cap_drop: [ALL]\n    security_opt: [\"no-new-privileges:true\"]\n    mem_limit: 512m\n    pids_limit: 256\n    healthcheck:\n      test: [\"CMD\", \"/usr/local/bin/sesh-executor-supervisor\", \"health\"]\n      interval: 5s\n      timeout: 5s\n      retries: 30\n    restart: unless-stopped\n"
         ));
         networks.push_str(&format!("  exec-{n}:\n    internal: true\n"));
         gateway_nets.push(format!("exec-{n}"));
@@ -385,6 +385,9 @@ mod tests {
         let y = generated_overlay(&f, false);
         assert!(y.contains("executor-alice:") && y.contains("networks: [exec-alice]"));
         assert!(y.contains("networks: [default, search, exec-alice, exec-bob]"));
+        // The healthcheck asks workerd itself, not just the supervisor's port.
+        assert!(y.contains("/usr/local/bin/sesh-executor-supervisor\", \"health\""));
+        assert!(!y.contains("/dev/tcp"));
         assert!(y.contains("exec-bob:\n    internal: true"));
         assert!(!y.contains("kiwix"));
         assert!(generated_overlay(&f, true).contains("kiwix-serve:3.8.2@sha256:"));

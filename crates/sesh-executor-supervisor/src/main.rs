@@ -9,6 +9,10 @@
 //! - `SESH_EXECUTOR_DATA` (default `/var/lib/sesh-executor`): Durable Object storage
 //! - `WORKERD` (default `/usr/local/bin/workerd`)
 //! - `SUPERVISOR_LISTEN` (default `0.0.0.0:8000`)
+//!
+//! `sesh-executor-supervisor health` is the container's healthcheck: it
+//! exits 0 only if the supervisor's `/health` answers 200, which needs
+//! workerd running and answering its own `/health`.
 
 #![forbid(unsafe_code)]
 
@@ -69,6 +73,21 @@ fn workerd_args(config: &Path) -> Vec<OsString> {
     ]
 }
 
+/// True when `url` answers HTTP 200 within two seconds.
+fn probe(url: &str) -> bool {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(2)))
+        .http_status_as_error(false)
+        .build()
+        .into();
+    matches!(agent.get(url).call(), Ok(r) if r.status() == 200)
+}
+
+/// The executor is healthy only if workerd's process runs and it serves.
+fn healthy(process_alive: bool, answers: bool) -> bool {
+    process_alive && answers
+}
+
 struct Workerd {
     bin: String,
     config: PathBuf,
@@ -106,6 +125,15 @@ impl Workerd {
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("health") {
+        let listen = env("SUPERVISOR_LISTEN", "0.0.0.0:8000");
+        let port = listen.rsplit(':').next().unwrap_or("8000");
+        std::process::exit(if probe(&format!("http://127.0.0.1:{port}/health")) {
+            0
+        } else {
+            1
+        });
+    }
     let dir = PathBuf::from(env("SESH_EXECUTOR_DIR", "/opt/sesh-executor"));
     let data = env("SESH_EXECUTOR_DATA", "/var/lib/sesh-executor");
     std::fs::create_dir_all(&data).expect("create data dir");
@@ -137,7 +165,8 @@ fn main() {
         let path = req.url().split('?').next().unwrap_or("").to_string();
         let response = match (req.method().as_str(), path.as_str()) {
             ("GET", "/health") => {
-                if workerd.alive() {
+                let answers = probe(&format!("http://{WORKERD_ADDR}/health"));
+                if healthy(workerd.alive(), answers) {
                     tiny_http::Response::from_string("ok")
                 } else {
                     workerd.restart();
@@ -188,6 +217,33 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Serves one fixed status on a random port; returns its /health URL.
+    fn serve(status: u16) -> String {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/health", server.server_addr().to_ip().unwrap());
+        std::thread::spawn(move || {
+            for req in server.incoming_requests() {
+                let _ = req.respond(tiny_http::Response::from_string("x").with_status_code(status));
+            }
+        });
+        url
+    }
+
+    #[test]
+    fn probe_needs_a_200_answer() {
+        assert!(probe(&serve(200)));
+        assert!(!probe(&serve(503)), "a 503 is unhealthy");
+        // A port that accepts nothing: the old TCP-only check missed this case.
+        assert!(!probe("http://127.0.0.1:9/health"));
+    }
+
+    #[test]
+    fn healthy_only_when_workerd_runs_and_answers() {
+        assert!(healthy(true, true));
+        assert!(!healthy(true, false), "process up but not serving");
+        assert!(!healthy(false, true));
+    }
 
     #[test]
     fn renders_only_safe_values() {
