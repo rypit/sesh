@@ -609,24 +609,24 @@ is a feature under `specs/`.
        superuser over any network;
      - `sesh doctor` fails when a service is on a network outside its
        row.
-9. **Memory:** Mem0 (CPU embeddings, `infer=False`) behind the gateway's
+9. **One agent end to end:** one Hermes profile in a container, with
+   built-in tools off, the gateway as its only MCP server, and a memory
+   provider plugin backed by the gateway; Open WebUI connected to it.
+   - Accept: chatting in Open WebUI, the agent answers a weather and a
+     search question, and uses mail, documents and memory via the
+     gateway; attempts to use terminal or file tools fail.
+10. **Browser:** the sbx browser VM, a persistent profile per agent,
+   `read(url)`, `login(site)`, and a live-view link via ntfy.
+   - Accept: `read(url)` returns Markdown and refuses a LAN address;
+     `login(site)` refuses on a lookalike domain; the agent can't read a
+     filled password field.
+11. **Memory:** Mem0 (CPU embeddings, `infer=False`) behind the gateway's
    `memory` connector, scoped per user; cross-store recall with
    documents. Mem0 gets its own login; the migration creates the
    `vector` extension, which needs the superuser.
    - Accept: a fact saved in one session is recalled in a later one;
      user A's agent can't recall user B's facts or documents (negative
      tests).
-10. **One agent end to end:** one Hermes profile in a container, with
-   built-in tools off, the gateway as its only MCP server, and a memory
-   provider plugin backed by the gateway; Open WebUI connected to it.
-   - Accept: chatting in Open WebUI, the agent answers a weather and a
-     search question, and uses mail, documents and memory via the
-     gateway; attempts to use terminal or file tools fail.
-11. **Browser:** the sbx browser VM, a persistent profile per agent,
-   `read(url)`, `login(site)`, and a live-view link via ntfy.
-   - Accept: `read(url)` returns Markdown and refuses a LAN address;
-     `login(site)` refuses on a lookalike domain; the agent can't read a
-     filled password field.
 12. **Multi-user and household:** profiles for each user and Household,
    Telegram bots, `ask_household`, skills repositories with hourly
    commits, backups, health alerts, and the operator CLI with its Claude
@@ -674,20 +674,20 @@ before or during its phase.
 | --- | --- | --- | --- |
 | `agent-main` tool-calling and memory quality on a ~30B local model | Risk | Benchmark candidate models on real tasks (`sesh eval`); keep prompts and tool docs short | 3 |
 | Code Mode durable runtime (snippets, replay) outside Cloudflare | Resolved | Verified under local workerd; it enforces no CPU limits, so one executor per agent and gateway-enforced deadlines | 2 |
-| Hermes skill writing still works with file and terminal tools off | Open question | Verify the skills tool writes only inside the profile's skills folder | 10 |
-| Hermes memory provider interface fits a gateway-backed plugin | Open question | Read the provider ABC; prototype against the `memory` connector | 10 |
-| Browser server choice (Auto Browser, easi.run, Nod, or build) | Open question | Vet code and isolation; confirm CDP fill and field-read blocking | 11 |
+| Hermes skill writing still works with file and terminal tools off | Open question | Verify the skills tool writes only inside the profile's skills folder | 9 |
+| Hermes memory provider interface fits a gateway-backed plugin | Open question | Read the provider ABC; prototype against the `memory` connector | 9 |
+| Browser server choice (Auto Browser, easi.run, Nod, or build) | Open question | Vet code and isolation; confirm CDP fill and field-read blocking | 10 |
 | Paperless built-in AI covers semantic search | Open question | Check the current release; add Paperless-AI only if needed | 5 |
 | Feed addresses used for server-side request forgery or exfiltration | Risk | Only Miniflux fetches, from its own egress network, which no other service is on; agent adds need approval (ADR 0009) | 6 |
 | A compromised adopted service reads or changes other services' data or the audit log | Risk | A Postgres login per service owning only its database; a Redis per service; doctor's `db-isolation` (ADR 0010) | 7 |
-| A service release that needs a superuser-only database extension | Constraint | The migration creates it as the superuser; none needed so far (`vector` will be, for memory) | 7, 9 |
+| A service release that needs a superuser-only database extension | Constraint | The migration creates it as the superuser; none needed so far (`vector` will be, for memory) | 7, 11 |
 | Prompt injection via email, pages, documents or other agents | Risk | Untrusted labels, approvals, domain-pinned login, egress guard, audit alerts | 4–13 |
-| Mem0 add-only accumulates stale facts | Risk | Scheduled cleanup; per-user memory editing page | 9 |
-| sbx requires a Docker sign-in (cloud dependency) | Risk | Review login and telemetry terms; fall back to containers if unacceptable | 11 |
+| Mem0 add-only accumulates stale facts | Risk | Scheduled cleanup; per-user memory editing page | 11 |
+| sbx requires a Docker sign-in (cloud dependency) | Risk | Review login and telemetry terms; fall back to containers if unacceptable | 10 |
 | Telegram content passes Telegram servers | Risk | Convenience only; sensitive work in Open WebUI | 12 |
 | Google OAuth app in production shows an unverified warning | Accepted | One-time click-through per user | 5 |
 | Operator can read other users' chats, sessions and logs | Policy | Turn off Open WebUI admin chat access; agree a household policy | 1 |
-| An embedding model change requires re-embedding all memories and documents | Constraint | Pick once; document the re-index procedure | 9 |
+| An embedding model change requires re-embedding all memories and documents | Constraint | Pick once; document the re-index procedure | 11 |
 
 ## References
 

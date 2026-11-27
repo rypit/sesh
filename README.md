@@ -59,9 +59,9 @@ in [`docs/decisions/`](docs/decisions/) and reference notes in
 - [x] 006 RSS feeds (Miniflux) ([`specs/006-rss-feeds/`](specs/006-rss-feeds/)): feeds per person, added with approval
 - [x] 007 Service isolation ([`specs/007-service-isolation/`](specs/007-service-isolation/)): a database login and a Redis per service
 - [x] 008 Network isolation ([`specs/008-network-isolation/`](specs/008-network-isolation/)): no shared network; each service reaches only its neighbours (merged; this follow-up finishes its remaining tasks)
-- [ ] 009 Memory: facts recalled across sessions, per person
-- [ ] 010 One agent end to end: a Hermes agent in Open WebUI, using everything through the gateway
-- [ ] 011 Browser (with an in-chat live view and takeover in Open WebUI): reading pages and logging in for you
+- [ ] 009 One agent end to end: a Hermes agent in Open WebUI, using everything through the gateway
+- [ ] 010 Browser (with an in-chat live view and takeover in Open WebUI): reading pages and logging in for you
+- [ ] 011 Memory: facts recalled across sessions, per person
 - [ ] 012 Multi-user and household: everyone's agents, the Household agent, backups
 - [ ] 013 Google Docs (read-only): search and read your Google Docs
 

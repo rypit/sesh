@@ -40,6 +40,6 @@ to:
 - The household gateway still writes its audit only to Postgres
   (insert-only role). The file sink can't be pointed elsewhere.
 - The eval tests the model and the gateway's tools, not an agent
-  framework. Hermes (phase 10, one agent end to end) is evaluated
+  framework. Hermes (phase 9, one agent end to end) is evaluated
   separately.
 - Each new connector adds tasks to the suite in the phase that adds it.
