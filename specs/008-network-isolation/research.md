@@ -204,15 +204,27 @@ the architecture doc's phase list.
 
 ## CI results (T022)
 
-- **PR #14, pull_request run 46057894533** (head `27407f2`): all jobs
+- **PR #14, pull_request run 46057894533** (head `27407f2`): every job
   that ran passed.
-  - `changes`, `images`: passed.
-  - `stack (eval_stack gateway_stack network_stack)`: passed.
-  - `stack (isolation_stack secrets_stack)`: passed.
-  - `stack (foundation_stack google_docs_stack feeds_stack)`: passed.
-  - `check`: skipped by design on pull_request runs; the branch's push
-    run covers it.
+  - `changes` and `images` passed.
+  - The three stack jobs passed: `eval_stack gateway_stack network_stack`,
+    `isolation_stack secrets_stack`, and
+    `foundation_stack google_docs_stack feeds_stack`.
+  - `check` was skipped, by design, on pull_request runs; the branch's
+    push run covers it.
 - **main after the merge of #14, push run 46060058391** (`542bf2b`):
-  `check`, `changes` and `images` passed; the three stack jobs were
-  still running when this was written.
-- **The follow-up PR** (T015, T017, T019, T020): pending.
+  every job passed (`check`, `changes`, `images` and all three stack
+  jobs). Nothing on main needed fixing.
+- **The follow-up PR #15** (T015, T017, T019, T020):
+  - **Run 46061755259 failed.** `network_stack` failed in the new
+    pre-008 rewind. The fresh-install checks and the doctor drift step
+    (T019) had passed.
+    - The cause was in the test, not in `sesh`. Once the services were
+      back on `default`, they reached Postgres from their `default`
+      addresses, which the current login rules refuse, so Infisical and
+      LiteLLM never became healthy.
+    - The fix: the test now writes the permissive pre-008 rules before
+      the rewind, which is how a pre-008 install was.
+  - **Pull_request run 46065044778** (head `30ff2f4`): every job passed,
+    including `network_stack` with the upgrade from pre-008 and the
+    second `sesh up`. `check` passed in push run 46065039474.

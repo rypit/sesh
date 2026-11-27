@@ -158,7 +158,7 @@ description: "Task list for feature 008: network isolation"
 
 - [x] T020 [P] Architecture doc: a network-layout section (the networks and the reachability rule), and updates to the deployment table and the security section. `diagram.jsx` and `docs/architecture.svg`: update them if the diagram shows networks or shared links; the diagram check in `make check` keeps them identical. (The diagram shows logical links only, none of which changed, so it is unchanged.)
 - [x] T021 [P] `.github/workflows/ci.yml`: add `network_stack` to the lightest stack group.
-- [ ] T022 Record CI results in `specs/008-network-isolation/research.md`
+- [x] T022 Record CI results in `specs/008-network-isolation/research.md`
 
 ## Dependencies
 
