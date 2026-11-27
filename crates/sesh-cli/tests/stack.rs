@@ -97,6 +97,23 @@ impl Drop for Stack {
                 String::from_utf8_lossy(&out.stderr)
             );
         }
+        // The eval project (feature 003), if a failure left it behind.
+        let eval = |args: &[&str]| {
+            Command::new("docker")
+                .args(["compose", "-p", "sesh-eval"])
+                .args(args)
+                .output()
+        };
+        if std::thread::panicking()
+            && let Ok(out) = eval(&["logs", "--no-color", "--tail", "100"])
+        {
+            eprintln!(
+                "---- eval project logs ----\n{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+        }
+        let _ = eval(&["down", "-v", "--remove-orphans"]);
+        let _ = self.compose(&[], &[], &["unpause", "stub-llm"]);
         let _ = self.compose(&[], &[], &["down", "-v", "--remove-orphans"]);
     }
 }
