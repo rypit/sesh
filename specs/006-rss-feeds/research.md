@@ -44,6 +44,15 @@
 - Miniflux is **not** on `default`, where Postgres, Redis, ntfy,
   Infisical, LiteLLM and Open WebUI meet the gateway. So an address an
   agent or person chose can't make Miniflux fetch from them there.
+- **Its own Postgres login.** Miniflux connects as the `miniflux` role,
+  which owns only the `miniflux` database and has no superuser, database
+  or role rights. CONNECT on every other database (and on `sesh` and
+  `postgres`) is revoked from PUBLIC, so a Miniflux compromised by a
+  hostile feed can't read the audit log, Infisical or anyone else's data.
+  `sesh up` sets its password (`MINIFLUX_DB_PASSWORD`, generated) as a
+  psql variable on stdin. Miniflux's migrations need no superuser: the
+  only extension they touch, `hstore`, is dropped if present, never
+  created. `feeds_stack` checks the login reaches only `miniflux`.
 - **Postgres route:** a dedicated internal `feeds-db` network, shared
   only by Miniflux and Postgres, rather than putting Miniflux on
   `default` (Paperless's choice in feature 005). Miniflux can still

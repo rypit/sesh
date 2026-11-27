@@ -161,6 +161,12 @@ fn apply_if_changed(
     Ok(())
 }
 
+/// The migration with its passwords as psql variables, for stdin only:
+/// never a command line or a file.
+pub fn migration_sql(gateway_pw: &str, miniflux_pw: &str) -> String {
+    format!("\\set gateway_pw '{gateway_pw}'\n\\set miniflux_pw '{miniflux_pw}'\n{GATEWAY_SQL}")
+}
+
 /// Runs `sesh up`; returns lines to print.
 pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<String>> {
     let config = Config::load(dir)?;
@@ -216,10 +222,11 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
 
     compose.up(&["postgres"])?;
     // The password goes in on stdin as a psql variable, never on a command line.
-    compose.exec_sql(
-        "sesh",
-        &format!("\\set gateway_pw '{gateway_pw}'\n{GATEWAY_SQL}"),
-    )?;
+    let miniflux_pw = secrets
+        .get("MINIFLUX_DB_PASSWORD")
+        .context("MINIFLUX_DB_PASSWORD missing; run `sesh init`")?
+        .to_string();
+    compose.exec_sql("sesh", &migration_sql(&gateway_pw, &miniflux_pw))?;
 
     let executors: Vec<String> = agents
         .agents
@@ -352,6 +359,34 @@ fn update_client_key(
 
 #[cfg(test)]
 mod tests {
+    use super::migration_sql;
+
+    #[test]
+    fn the_migration_gives_miniflux_its_own_role_and_passes_passwords_as_variables() {
+        let sql = migration_sql("gw-pw-1", "mf-pw-2");
+        let (head, body) = sql
+            .split_once(crate::up::GATEWAY_SQL)
+            .expect("the migration follows the variables");
+        assert!(
+            head.contains("\\set gateway_pw 'gw-pw-1'")
+                && head.contains("\\set miniflux_pw 'mf-pw-2'"),
+            "{head}"
+        );
+        assert!(body.is_empty());
+        let m = crate::up::GATEWAY_SQL;
+        assert!(
+            m.contains("CREATE ROLE miniflux LOGIN"),
+            "specs/006: Miniflux has its own role"
+        );
+        assert!(m.contains("ALTER ROLE miniflux PASSWORD :'miniflux_pw'"));
+        assert!(m.contains("ALTER DATABASE miniflux OWNER TO miniflux"));
+        assert!(m.contains("GRANT CONNECT ON DATABASE miniflux TO miniflux"));
+        assert!(
+            !m.contains("mf-pw-2") && !m.contains("gw-pw-1"),
+            "no password in the file"
+        );
+    }
+
     use super::*;
     use crate::host::fake::{FakeCompose, FakeHttp};
     use crate::init::{self, InitOptions};

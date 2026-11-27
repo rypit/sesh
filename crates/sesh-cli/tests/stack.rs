@@ -1964,19 +1964,6 @@ impl Stack {
             .expect("docker inspect");
         serde_json::from_slice(&out.stdout).expect("networks json")
     }
-
-    /// Runs `sh -c` in a service container (Miniflux's image has no bash).
-    fn sh_in(&self, service: &str, script: &str) -> (bool, String) {
-        let out = self.compose(&[], &[], &["exec", "-T", service, "sh", "-c", script]);
-        (
-            out.status.success(),
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ),
-        )
-    }
 }
 
 #[test]
@@ -2155,22 +2142,52 @@ fn feeds_stack() {
             .to_string()
     };
     let (gw_ip, pg_ip) = (default_ip("gateway"), default_ip("postgres"));
-    let (_, out) = stack.sh_in(
-        "miniflux",
-        &format!("wget -q -T 3 -O - http://{gw_ip}:7001/health && echo REACHED"),
+    // Probes run in Miniflux's network namespace from the gateway image
+    // (which has bash), so they don't depend on tools in Miniflux's image.
+    let reaches = |target: &str| stack.probe_from("miniflux", target);
+    assert!(
+        reaches("postgres:5432"),
+        "control: Miniflux can't reach its database on feeds-db, so the probe is broken"
     );
     assert!(
-        !out.contains("REACHED"),
-        "SC-002: Miniflux reached the gateway on default: {out}"
-    );
-    let (_, out) = stack.sh_in(
-        "miniflux",
-        &format!("nc -w 3 {pg_ip} 5432 </dev/null && echo REACHED"),
+        !reaches(&format!("{gw_ip}:7001")),
+        "SC-002: Miniflux reached the gateway's executor port on default"
     );
     assert!(
-        !out.contains("REACHED"),
-        "SC-002: Miniflux reached Postgres on default: {out}"
+        !reaches(&format!("{pg_ip}:5432")),
+        "SC-002: Miniflux reached Postgres on default"
     );
+    // Its own login reaches only its own database (specs/006 R2).
+    let as_miniflux = |db: &str| {
+        stack
+            .compose(
+                &[],
+                &[],
+                &[
+                    "exec", "-T", "postgres", "psql", "-U", "miniflux", "-d", db, "-Atc",
+                    "SELECT 1",
+                ],
+            )
+            .status
+            .success()
+    };
+    assert!(
+        as_miniflux("miniflux"),
+        "Miniflux can't use its own database"
+    );
+    for db in [
+        "gateway",
+        "infisical",
+        "paperless",
+        "openwebui",
+        "litellm",
+        "sesh",
+    ] {
+        assert!(
+            !as_miniflux(db),
+            "R2: the miniflux login reached the {db} database"
+        );
+    }
     let (ok, out) = stack.bash_in("executor-anabot", "exec 3<>/dev/tcp/miniflux/8080");
     assert!(!ok, "SC-002: an executor reached Miniflux: {out}");
     let published = stack.compose(&[], &[], &["port", "miniflux", "8080"]);
@@ -2259,6 +2276,34 @@ fn feeds_stack() {
                 entry.display()
             );
         }
+    }
+}
+
+impl Stack {
+    /// Whether `service`'s network namespace can open a TCP connection to
+    /// `host:port`, probed with bash from the gateway image.
+    fn probe_from(&self, service: &str, target: &str) -> bool {
+        let id = self.container(service);
+        let (host, port) = target.rsplit_once(':').unwrap();
+        let image =
+            std::env::var("SESH_GATEWAY_IMAGE").unwrap_or_else(|_| "sesh-gateway:dev".into());
+        Command::new("docker")
+            .args([
+                "run",
+                "--rm",
+                "--network",
+                &format!("container:{id}"),
+                "--entrypoint",
+                "bash",
+                &image,
+                "-c",
+            ])
+            .arg(format!(
+                "timeout 5 bash -c 'exec 3<>/dev/tcp/{host}/{port}'"
+            ))
+            .status()
+            .expect("docker run")
+            .success()
     }
 }
 
