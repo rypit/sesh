@@ -12,12 +12,14 @@ pub mod calls;
 pub mod capability;
 pub mod connectors;
 pub mod executor;
+pub mod google;
 pub mod listen;
 pub mod mcp;
 pub mod notify;
 pub mod owners;
 pub mod pages;
 pub mod redact;
+pub mod refs;
 pub mod schema;
 pub mod secrets;
 
