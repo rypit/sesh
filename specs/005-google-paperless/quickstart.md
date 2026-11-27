@@ -20,3 +20,11 @@ Then, as `ana-agent`:
 A real Google account needs a Google Cloud OAuth client ("Web
 application"), with `<approvals_base_url>/google/callback` as an
 authorized redirect URI.
+
+**Keep the OAuth client "In production".** Gmail read access is a
+restricted scope: while the client's publishing status is "Testing",
+Google expires its refresh tokens after 7 days, and everyone would have
+to reconnect weekly. An unverified client "In production" works for a
+household's few users (they see an "unverified app" warning once, at
+consent) and its grants don't expire. `sesh doctor` warns when a grant
+was revoked.
