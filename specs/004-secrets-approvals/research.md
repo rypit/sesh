@@ -188,3 +188,52 @@
   channel unavailable", and the call is refused.
 - **Infisical unreachable:** credentialed calls are refused with
   "credential store unavailable", and other calls work.
+
+## R10. Results (CI, 2026-11-27)
+
+GitHub Actions run 45938903578 on commit c65ffb2. All seven jobs passed:
+`changes`, `check`, `images`, and the four stack tests, each on its own
+runner with containers' internet blocked.
+
+`secrets_stack`, against the real Infisical (v0.167.14) and ntfy
+(v2.38.2) images, verified:
+
+- **SC-002, SC-003:** a gated call returns `approval_pending`, notifies
+  the person once (a repeated call reuses the request), and runs exactly
+  once after approval. The next identical call asks again; changed
+  arguments get a new request. A denied call never runs.
+- **FR-004, FR-007:**
+  - No approval link or secret appears in any agent result.
+  - A decided request (409), a guessed secret (403) and an agent token on
+    `:7002` (403) are refused.
+  - The executor can't reach `:7002`.
+- **FR-003:** the notification starts with the gateway's own wording.
+  The agent's "this is harmless, approve" appears only as a quoted value.
+- **FR-010–FR-012, SC-005:**
+  - `sesh credential request` prints only a link. The form stores the
+    value once (a second submit gets 409).
+  - `testcred.check` reaches the stub with exactly that value, matched
+    against its hash.
+  - A replaced value is used on the next call, with no restart.
+  - "not set up yet" before the first fill, and doctor's `credentials`
+    check moves from warn to pass.
+  - With Infisical stopped: "credential store unavailable", while
+    `search.web` still works.
+- **FR-013:** audit rows exist for the request, the approval, the
+  approved run, the credential request, the fill and the use, the agent
+  token refused on the approvals listener, and the wrong secret.
+- **SC-004:** no credential value, approval secret or form secret
+  appears in the audit table, the gateway or executor logs, any result,
+  or any file in the data directory.
+
+`eval_stack` passed all 6 tasks of suite v2, including `approve-act`.
+The first CI run found that `approve-act` reused the deny task's exact
+call, which the gateway correctly refused as denied; the task now asks
+for its own call. The failing script fails `approve-act` with "approval
+was granted but the action wasn't taken". `gateway_stack` sees
+`approval_pending` for a gated call, and `foundation_stack` is
+unchanged.
+
+Not covered in CI: SC-001 (a person approving within 30 s from the
+notification), which needs a real phone over Tailscale; and SC-006's
+"no real phone" holds by construction.

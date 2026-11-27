@@ -148,7 +148,7 @@ they check.
 ## Phase 8: Polish
 
 - [x] T020 [P] `README.md` (credentials, approvals, phone set-up), `AGENTS.md`, `specs/004-secrets-approvals/quickstart.md`
-- [ ] T021 Record CI results for SC-001–SC-006 in `specs/004-secrets-approvals/research.md`
+- [x] T021 Record CI results for SC-001–SC-006 in `specs/004-secrets-approvals/research.md`
 
 ## Dependencies
 
