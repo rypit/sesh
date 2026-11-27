@@ -404,7 +404,6 @@ fn update_client_key(
 
 #[cfg(test)]
 mod tests {
-<<<<<<< HEAD
     use super::*;
 
     fn passwords() -> Vec<(&'static str, String)> {
@@ -414,7 +413,7 @@ mod tests {
             .map(|(i, (role, _))| (*role, format!("pw-{role}-{i}")))
             .collect()
     }
-=======
+
     #[test]
     fn only_the_stub_lets_miniflux_fetch_private_addresses() {
         // ADR 0009: the household stack keeps Miniflux's default refusal
@@ -422,9 +421,6 @@ mod tests {
         assert!(!super::COMPOSE_YAML.contains("FETCHER_ALLOW_PRIVATE_NETWORKS"));
         assert!(super::COMPOSE_STUB_YAML.contains("FETCHER_ALLOW_PRIVATE_NETWORKS"));
     }
-
-    use super::migration_sql;
->>>>>>> origin/claude/rss-feeds
 
     #[test]
     fn the_migration_gives_every_service_its_own_role_and_passes_passwords_as_variables() {
