@@ -33,6 +33,15 @@
   the default-route address, and with one non-internal network
   (`gateway-edge`) that address is the edge network's. A unit test pins
   this rule, and ADR 0011 records why it holds.
+- **Database logins bound to their networks** (research.md R10):
+  - Postgres reads a generated `pg_hba.conf` from a sesh-owned,
+    read-only mounted directory.
+  - On every `sesh up`, sesh reads each `*-db` network's actual subnets
+    from Docker, writes one rule per login for its own network's
+    ranges, allows the superuser only over the local socket, rejects
+    everything else, and reloads Postgres.
+  - It uses no fixed ranges, and it fails closed if a range can't be
+    read.
 - **Upgrade:** `sesh up` already recreates containers whose networks
   changed (`--remove-orphans`). It then removes `sesh_default` when no
   container uses it.
@@ -115,9 +124,10 @@ deploy/
 └── compose.stub.yaml     # the `stub` network
 crates/sesh-cli/src/
 ├── layout.rs             # NEW: the layout and reachability table
-├── up.rs                 # removes sesh_default after up; overlay unchanged
+├── up.rs                 # removes sesh_default after up; writes pg_hba rules
+├── pg_hba.rs             # NEW: login rules from the networks' subnets
 ├── doctor.rs             # network-layout check
-└── host/compose.rs       # Compose::remove_network_if_unused
+└── host/compose.rs       # remove_network_if_unused, network_subnets
 crates/sesh-cli/tests/stack.rs   # network_stack; probe helpers
 crates/sesh-gateway/src/listen.rs # unit test pinning the listener rule
 docs/decisions/0011-network-isolation.md

@@ -33,6 +33,23 @@ Allowed paths follow from shared networks plus the listening port. The
 table lists them explicitly, so a shared network that isn't meant as a
 path shows up as a test failure.
 
+## Database login rule
+
+| Field | Notes |
+|---|---|
+| `role` | a service's login (`litellm`, `openwebui`, `sesh_gateway`, `infisical`, `paperless`, `miniflux`) |
+| `database` | the one database it may open |
+| `network` | its database network (`litellm-db`, …) |
+| `subnets` | read from Docker on every `sesh up`, never configured |
+
+**Rules:**
+- The generated rules file contains one `host` line per (role,
+  database, subnet), plus `local all all trust`, plus a final `host all
+  all all reject`.
+- There is no rule for the superuser over the network.
+- If any subnet can't be read, no rule is written for that role, and
+  `sesh up` fails.
+
 ## The layout
 
 See [contracts/networks.md](contracts/networks.md).

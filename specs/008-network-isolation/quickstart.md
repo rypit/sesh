@@ -20,6 +20,14 @@ sesh up                # nothing new
 
 No data changes: volumes are untouched.
 
+## Check the database login rules
+
+```bash
+docker compose -p sesh exec -T postgres psql -U sesh -Atc \
+  "SELECT type, database, user_name, address, netmask, auth_method FROM pg_hba_file_rules"
+# one host line per login, on its own network's range; local trust; host all all all reject
+```
+
 ## Check reachability by hand
 
 From inside a service's network namespace, using the gateway image,

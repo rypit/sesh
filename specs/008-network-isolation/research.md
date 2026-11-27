@@ -159,10 +159,45 @@
 agent, 012 browser, 013 household. Updated in the README, AGENTS.md and
 the architecture doc's phase list.
 
+## R10. Database logins bound to their networks
+
+- **Decision:**
+  - Postgres starts with `-c hba_file=/etc/sesh-pg/pg_hba.conf`. That
+    file sits in a directory sesh owns: `${SESH_DATA_DIR}/postgres-conf`,
+    mounted read-only. It is a directory mount, because a single-file
+    bind mount keeps the old file when the host replaces it.
+  - The file is generated: it never takes the image's default
+    `host all all all scram-sha-256`.
+  - On every `sesh up`, after `up postgres`, sesh:
+    1. reads each `*-db` network's subnets with `docker network inspect`
+       (IPv4, and IPv6 if enabled);
+    2. writes one line per login: `host <db> <role> <subnet> scram-sha-256`;
+    3. adds `local all all trust` for administration through `docker
+       compose exec`, as the image does today;
+    4. adds a final `host all all all reject`;
+    5. writes the file atomically within the directory and runs
+       `SELECT pg_reload_conf()` through the local socket.
+- **Before the first `sesh up` writes rules** (a fresh volume, or a
+  missing file), the file holds only the local line plus the reject.
+  Init scripts run over the local socket, so first boot works, and no
+  service can log in until the rules exist.
+- **Fails closed:** if a range can't be read, sesh writes no line for
+  that login and `sesh up` fails, naming the network. Nothing falls back
+  to "allow everywhere".
+- **Why the ranges are stable enough:** Docker keeps a network's subnet
+  for the network's whole life. `sesh up` regenerates the rules every
+  run, so a recreated network (after `sesh down`, say) is picked up.
+- **Alternatives:**
+  - **Fixed subnets in Compose IPAM:** these can clash with the
+    household's LAN, VPN or other Docker networks, and Compose then
+    refuses to start. Rejected.
+  - **Hostnames in `pg_hba`,** using reverse DNS from Docker's resolver:
+    container names and aliases vary, and a DNS failure would decide
+    access. Rejected.
+- **The gateway's login** (`sesh_gateway`) is bound to `gateway-db`, and
+  `miniflux` to `feeds-db`, like the rest.
+
 ## Follow-ups (recorded, not built)
 
-- **Postgres `pg_hba`:** bind each login to its database network's
-  subnet. That needs fixed subnets, at the risk of clashing with the
-  household's LAN or VPN.
 - **Egress filtering** for Open WebUI and Infisical, with host firewall
   rules (`DOCKER-USER`).

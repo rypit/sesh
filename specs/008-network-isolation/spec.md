@@ -55,6 +55,12 @@ refused.
 3. **Given** the running stack, **When** the database's network
    attachments are listed, **Then** it is attached only to the
    per-service database networks.
+4. **Given** a service's database login and password, **When** they are
+   used from anywhere but that service's own database network (another
+   service, another network), **Then** the database refuses the login.
+5. **Given** the database's administrative login, **When** it is used
+   over the network from any container, **Then** it is refused; it works
+   only from inside the database's own container.
 4. **Given** the running stack, **When** the networks are listed,
    **Then** there is no network shared by more than the services its
    purpose names (no catch-all network).
@@ -195,6 +201,13 @@ carries its published loopback port and its outbound access, if any.
   executors) keep their existing networks.
 - **A network left from the old layout** (the old shared network) is
   removed by `sesh up` once no container uses it.
+- **Network address ranges are chosen by the container engine**, not
+  fixed by sesh, so they can differ between installs and change if a
+  network is recreated. `sesh up` reads the actual ranges every time and
+  rewrites the database's login rules to match.
+- **If the ranges can't be read**, the database keeps only local access
+  for administration and refuses every service login, and `sesh up`
+  fails with a clear message: it fails closed, never open.
 
 ## Requirements *(mandatory)*
 
@@ -248,6 +261,17 @@ carries its published loopback port and its outbound access, if any.
 - **FR-017**: The roadmap MUST be renumbered: 008 network isolation,
   009 read-only Google Docs, 010 memory, 011 one agent, 012 browser,
   013 household.
+- **FR-018**: Each service's database login MUST be accepted only from
+  the address range of that service's own database network; every other
+  source MUST be refused, including other networks, other services and
+  the database's own default rules.
+- **FR-019**: The database's administrative login MUST be accepted only
+  through the database container's local connection, never over the
+  network.
+- **FR-020**: The login rules MUST be derived on every `sesh up` from the
+  address ranges the container engine actually assigned, with no fixed
+  ranges in sesh's configuration, and applied without restarting the
+  database.
 
 ### Key Entities
 
@@ -263,6 +287,9 @@ carries its published loopback port and its outbound access, if any.
   joining the stub with the services that use its fakes.
 - **Reachability table**: the allowed (service → destination) pairs;
   the source of truth for the stack test and the doctor check.
+- **Database login rule**: a database login, the database it may open,
+  and the one address range it may connect from (its database network's
+  current range).
 
 ## Success Criteria *(mandatory)*
 
@@ -282,14 +309,17 @@ carries its published loopback port and its outbound access, if any.
   isn't named for it, and no edge network has more than one member.
 - **SC-006**: The doctor's layout check fails within one run when any
   service is attached to a network outside its row.
+- **SC-007**: 100% of service database logins are refused from every
+  source other than their own database network, and the administrative
+  login is refused over the network from every container.
 
 ## Assumptions
 
-- **Per-login source restrictions in the database are out of scope**:
-  binding each database login to its own network's addresses needs
-  fixed address ranges per network, which risk clashing with the
-  household's LAN or VPN. Recorded as a follow-up; the logins from
-  feature 007 already confine each service to its own data.
+- **Per-login source restrictions use the engine's own ranges**: the
+  container engine chooses each network's address range; sesh never
+  fixes one (that would risk clashing with the household's LAN or VPN).
+  The database's login rules are regenerated from the actual ranges on
+  every `sesh up`.
 - **Outbound access through an edge network isn't narrowed**: an edge
   network gives its service general outbound access, including services
   that don't need it (the chat UI, the secret store). Compose can't
