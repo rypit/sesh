@@ -10,7 +10,9 @@ use anyhow::{Result, bail};
 use sesh_core::{Agent, AgentsFile, token_hash, valid_agent_name};
 use std::path::{Path, PathBuf};
 
-pub const KNOWN_CONNECTORS: [&str; 6] = ["search", "geo", "mail", "calendar", "contacts", "docs"];
+pub const KNOWN_CONNECTORS: [&str; 7] = [
+    "search", "geo", "mail", "calendar", "contacts", "docs", "feeds",
+];
 /// Test-only connectors (specs/004 research.md R7), allowed in stub mode only.
 pub const TEST_CONNECTORS: [&str; 2] = ["testgate", "testcred"];
 

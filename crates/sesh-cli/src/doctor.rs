@@ -84,6 +84,7 @@ pub fn run(
     checks.push(credentials_check(secrets, http));
     checks.push(google_check(secrets, http));
     checks.push(paperless_check(secrets, http));
+    checks.push(feeds_check(config, secrets, http));
     checks.push(audit_check(compose));
     checks.push(match tailscale.serves_port(config.ports.webui) {
         Ok(Some(true)) => Check::pass("tailscale-serve", "Open WebUI is served on the tailnet"),
@@ -409,6 +410,84 @@ fn paperless_check(secrets: &Secrets, http: &dyn Http) -> Check {
     }
 }
 
+/// specs/006 contracts/cli.md: feeds per owner; warns about feeds whose
+/// last fetch failed; fails if the address filter's test allowance is
+/// set outside stub mode (ADR 0009).
+fn feeds_check(config: &Config, secrets: &Secrets, http: &dyn Http) -> Check {
+    if !is_stub(config) && !config.gateway.feeds_allow_hosts.is_empty() {
+        return Check::fail(
+            "feeds",
+            "feeds_allow_hosts is set outside stub mode",
+            "remove feeds_allow_hosts from sesh.toml [gateway], then `sesh up`",
+        );
+    }
+    let Some(token) = secrets.get("SESH_GATEWAY_ADMIN_TOKEN") else {
+        return Check::warn("feeds", "no gateway admin token yet", "run `sesh init`");
+    };
+    let r = match http.get(
+        &format!("{}/feeds", crate::credential::admin_url()),
+        Some(token),
+    ) {
+        Ok(r) if r.status == 200 => r,
+        Ok(r) => {
+            return Check::warn(
+                "feeds",
+                format!("the gateway answered {}", r.status),
+                "run `sesh up`",
+            );
+        }
+        Err(e) => {
+            return Check::warn(
+                "feeds",
+                format!("can't reach the gateway: {e}"),
+                "run `sesh up`",
+            );
+        }
+    };
+    if !is_stub(config)
+        && r.body["allow_hosts"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty())
+    {
+        return Check::fail(
+            "feeds",
+            "the gateway skips the address filter for some hosts outside stub mode",
+            "remove feeds_allow_hosts and SESH_GATEWAY_TEST_CONNECTORS, then `sesh up`",
+        );
+    }
+    let feeds: Vec<&Value> = r.body["feeds"].as_array().into_iter().flatten().collect();
+    let mut per_owner: std::collections::BTreeMap<&str, usize> = Default::default();
+    for f in &feeds {
+        *per_owner
+            .entry(f["owner"].as_str().unwrap_or("?"))
+            .or_default() += 1;
+    }
+    let failed: Vec<String> = feeds
+        .iter()
+        .filter(|f| f["last"]["state"] == "failed")
+        .map(|f| {
+            format!(
+                "{}/{} ({})",
+                f["owner"].as_str().unwrap_or("?"),
+                f["name"].as_str().unwrap_or("?"),
+                f["last"]["message"].as_str().unwrap_or("failed")
+            )
+        })
+        .collect();
+    if !failed.is_empty() {
+        return Check::warn(
+            "feeds",
+            format!("last fetch failed: {}", failed.join(", ")),
+            "check the address, or `sesh feed remove <owner> <name>`",
+        );
+    }
+    if per_owner.is_empty() {
+        return Check::pass("feeds", "no feeds yet");
+    }
+    let counts: Vec<String> = per_owner.iter().map(|(o, n)| format!("{o} {n}")).collect();
+    Check::pass("feeds", format!("feeds: {}", counts.join(", ")))
+}
+
 /// Warns when an agent had many refusals in the last hour (FR-016).
 fn audit_check(compose: &dyn Compose) -> Check {
     let sql = format!(
@@ -713,5 +792,53 @@ mod tests {
         let a = checks.iter().find(|c| c.id == "alias-answers").unwrap();
         assert_eq!(a.status, Status::Fail);
         assert_eq!(a.fix.as_deref(), Some("run `sesh up`"));
+    }
+
+    #[test]
+    fn feeds_counts_per_owner_warns_on_failures_and_fails_on_the_allowance() {
+        let mut s = Secrets::default();
+        s.set("SESH_GATEWAY_ADMIN_TOKEN", "admin");
+        let reply = |feeds: Value, allow: Value| {
+            FakeHttp::new(move |_, url, _| {
+                assert!(url.ends_with("/admin/feeds"));
+                (
+                    200,
+                    json!({"feeds": feeds.clone(), "allow_hosts": allow.clone()}),
+                )
+            })
+        };
+        let real = Config::new("http://srv/v1", "m");
+        let ok = json!([
+            {"owner": "ana", "name": "a", "last": {"state": "ok"}},
+            {"owner": "ana", "name": "b", "last": {"state": "never"}},
+            {"owner": "household", "name": "h", "last": {"state": "ok"}}
+        ]);
+        let c = feeds_check(&real, &s, &reply(ok, json!([])));
+        assert_eq!(c.status, Status::Pass);
+        assert_eq!(c.detail, "feeds: ana 2, household 1");
+        let bad = json!([{"owner": "ana", "name": "big", "last": {"state": "failed", "message": "the feed is too large"}}]);
+        let c = feeds_check(&real, &s, &reply(bad, json!([])));
+        assert_eq!(c.status, Status::Warn);
+        assert!(
+            c.detail.contains("ana/big (the feed is too large)"),
+            "{}",
+            c.detail
+        );
+        let c = feeds_check(&real, &s, &reply(json!([]), json!(["stub-llm"])));
+        assert_eq!(c.status, Status::Fail, "the allowance outside stub mode");
+        let stub = Config::new(crate::init::STUB_URL, "stub-model");
+        let c = feeds_check(&stub, &s, &reply(json!([]), json!(["stub-llm"])));
+        assert_eq!(
+            (c.status, c.detail.as_str()),
+            (Status::Pass, "no feeds yet")
+        );
+        let mut set = Config::new("http://srv/v1", "m");
+        set.gateway.feeds_allow_hosts = vec!["anything".into()];
+        let c = feeds_check(&set, &s, &reply(json!([]), json!([])));
+        assert_eq!(
+            c.status,
+            Status::Fail,
+            "sesh.toml sets it outside stub mode"
+        );
     }
 }

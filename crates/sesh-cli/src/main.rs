@@ -8,6 +8,7 @@ mod config;
 mod credential;
 mod doctor;
 mod eval;
+mod feed;
 mod google;
 mod host;
 mod infisical;
@@ -92,6 +93,11 @@ enum Command {
         #[command(subcommand)]
         command: GoogleCommand,
     },
+    /// Add, remove or list the feeds (RSS, Atom) a user or the Household follows.
+    Feed {
+        #[command(subcommand)]
+        command: FeedCommand,
+    },
     /// Manage household users (each has their own approval topic).
     User {
         #[command(subcommand)]
@@ -120,6 +126,22 @@ enum GoogleCommand {
     Connect { owner: String },
     /// Revoke and remove the grant.
     Disconnect { owner: String },
+}
+
+#[derive(Subcommand)]
+enum FeedCommand {
+    /// Add a feed for a user, or household (public http/https addresses only).
+    Add {
+        owner: String,
+        url: String,
+        /// A short name (a-z, 0-9, -); default: from the host.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Remove a feed.
+    Remove { owner: String, name: String },
+    /// List feeds, with who added each and its last fetch.
+    List { owner: Option<String> },
 }
 
 #[derive(Subcommand)]
@@ -161,7 +183,7 @@ enum AgentCommand {
     /// Add an agent and generate its token (never printed).
     Add {
         name: String,
-        /// Connectors the agent may use, comma-separated (search, geo, mail, calendar, contacts, docs).
+        /// Connectors the agent may use, comma-separated (search, geo, mail, calendar, contacts, docs, feeds).
         #[arg(long, value_delimiter = ',', required = true)]
         connectors: Vec<String>,
         /// Whose agent this is: a user (`sesh user add`), or household.
@@ -293,6 +315,21 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 GoogleCommand::Disconnect { owner } => {
                     vec![google::disconnect(&dir, &http, &owner)?]
                 }
+            };
+            for line in lines {
+                println!("{line}");
+            }
+        }
+        Command::Feed { command } => {
+            let http = UreqHttp::new(Duration::from_secs(30));
+            let lines = match command {
+                FeedCommand::Add { owner, url, name } => {
+                    vec![feed::add(&dir, &http, &owner, &url, name.as_deref())?]
+                }
+                FeedCommand::Remove { owner, name } => {
+                    vec![feed::remove(&dir, &http, &owner, &name)?]
+                }
+                FeedCommand::List { owner } => feed::list(&dir, &http, owner.as_deref())?,
             };
             for line in lines {
                 println!("{line}");

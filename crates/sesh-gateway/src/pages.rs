@@ -27,6 +27,9 @@ pub fn router(gw: Arc<Gateway>) -> Router {
         .route("/admin/google/disconnect", post(google_disconnect))
         .route("/admin/google/status", get(google_status))
         .route("/admin/paperless", get(paperless_status))
+        .route("/admin/feeds", get(feeds_list))
+        .route("/admin/feeds/add", post(feeds_add))
+        .route("/admin/feeds/remove", post(feeds_remove))
         .route(
             "/google/start/{id}",
             get(google_start_page).post(google_start),
@@ -637,6 +640,128 @@ async fn paperless_status(State(gw): State<Arc<Gateway>>, headers: HeaderMap) ->
     }
 }
 
+/// `sesh feed add` (specs/006 contracts/cli.md): the same checks as an
+/// agent's request, without the approval (the operator is the person).
+async fn feeds_add(
+    State(gw): State<Arc<Gateway>>,
+    headers: HeaderMap,
+    Json(b): Json<Value>,
+) -> Response {
+    if !admin_ok(&gw, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let owner = b["owner"].as_str().unwrap_or("");
+    if !known_owner(&gw, owner) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "no such user"})),
+        )
+            .into_response();
+    }
+    let refuse = async |why: String| {
+        audit(
+            &gw,
+            "operator",
+            Some("feeds"),
+            None,
+            "refused",
+            format!("feed.add refused: {why}"),
+        )
+        .await;
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error": why})),
+        )
+            .into_response()
+    };
+    let (url, name) = match crate::connectors::feeds::check_add(
+        &gw,
+        owner,
+        b["url"].as_str().unwrap_or(""),
+        b["name"].as_str(),
+    )
+    .await
+    {
+        Ok(x) => x,
+        Err(why) => return refuse(why).await,
+    };
+    let feed = crate::feeds::Feed {
+        owner: owner.into(),
+        name: name.clone(),
+        url: url.to_string(),
+        added_by: "operator".into(),
+        added_at: approvals::now(),
+    };
+    if let Err(e) = gw.feeds.add(&feed, gw.settings.feeds_max_per_owner).await {
+        return refuse(e.to_string()).await;
+    }
+    audit(
+        &gw,
+        "operator",
+        Some("feeds"),
+        None,
+        "allowed",
+        format!("feed.added {owner}/{name}"),
+    )
+    .await;
+    Json(json!({"owner": owner, "name": name, "url": feed.url})).into_response()
+}
+
+async fn feeds_remove(
+    State(gw): State<Arc<Gateway>>,
+    headers: HeaderMap,
+    Json(b): Json<Value>,
+) -> Response {
+    if !admin_ok(&gw, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let owner = b["owner"].as_str().unwrap_or("");
+    let name = b["name"].as_str().unwrap_or("");
+    match gw.feeds.remove(owner, name).await {
+        Ok(true) => {
+            audit(
+                &gw,
+                "operator",
+                Some("feeds"),
+                None,
+                "allowed",
+                format!("feed.removed {owner}/{name}"),
+            )
+            .await;
+            Json(json!({"owner": owner, "name": name})).into_response()
+        }
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "no such feed"})),
+        )
+            .into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+/// Every feed with its last fetch (`sesh feed list`, doctor).
+async fn feeds_list(State(gw): State<Arc<Gateway>>, headers: HeaderMap) -> Response {
+    use crate::connectors::feeds::Last;
+    if !admin_ok(&gw, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let Ok(all) = gw.feeds.all().await else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let feeds: Vec<Value> = all
+        .iter()
+        .map(|f| {
+            let last = match gw.feed_cache.last(&f.url) {
+                Last::Never => json!({"state": "never"}),
+                Last::Ok(at) => json!({"state": "ok", "at": at}),
+                Last::Failed(at, m) => json!({"state": "failed", "at": at, "message": m}),
+            };
+            json!({"owner": f.owner, "name": f.name, "url": f.url, "added_by": f.added_by, "added_at": f.added_at, "last": last})
+        })
+        .collect();
+    Json(json!({"feeds": feeds, "allow_hosts": gw.settings.feeds_allow_hosts})).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -932,5 +1057,117 @@ mod tests {
             assert!(e.contains(want), "{want}");
         }
         assert!(!e.contains("rt-secret-1") && !e.contains(secret) && !e.contains("at-1"));
+    }
+
+    #[tokio::test]
+    async fn the_operator_adds_lists_and_removes_feeds_audited() {
+        let mut gw = gateway(Audit::memory(), GatewaySettings::default());
+        gw.users = crate::Users::fixed(sesh_core::UsersFile {
+            users: vec![sesh_core::User {
+                name: "ana".into(),
+                topic: "ana-topic".into(),
+            }],
+        });
+        let gw = Arc::new(gw);
+        let url = serve(gw.clone()).await;
+        let http = reqwest::Client::new();
+        let post = |path: &str, body: Value, token: Option<&str>| {
+            let mut r = http.post(format!("{url}{path}")).json(&body);
+            if let Some(t) = token {
+                r = r.bearer_auth(t);
+            }
+            r.send()
+        };
+        let r = post(
+            "/admin/feeds/add",
+            json!({"owner": "ana", "url": "http://93.184.216.34/rss", "name": "news"}),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.status(), 401, "the admin token is required");
+        let r = post(
+            "/admin/feeds/add",
+            json!({"owner": "ana", "url": "http://93.184.216.34/rss", "name": "news"}),
+            Some("admin-token"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.status(), 200);
+        for (body, status, why) in [
+            (
+                json!({"owner": "zed", "url": "http://93.184.216.34/rss"}),
+                404,
+                "no such user",
+            ),
+            (
+                json!({"owner": "ana", "url": "ftp://example.org/rss"}),
+                422,
+                "only http and https",
+            ),
+            (
+                json!({"owner": "ana", "url": "http://192.168.1.10/rss"}),
+                422,
+                "isn't on the public internet",
+            ),
+            (
+                json!({"owner": "ana", "url": "http://93.184.216.34/other", "name": "news"}),
+                422,
+                "already exists",
+            ),
+            (
+                json!({"owner": "household", "url": "http://93.184.216.34/rss", "name": "Bad Name"}),
+                422,
+                "a feed name",
+            ),
+        ] {
+            let r = post("/admin/feeds/add", body.clone(), Some("admin-token"))
+                .await
+                .unwrap();
+            assert_eq!(r.status().as_u16(), status, "{body}");
+            let v: Value = r.json().await.unwrap();
+            assert!(v["error"].as_str().unwrap().contains(why), "{body}: {v}");
+        }
+        let list: Value = http
+            .get(format!("{url}/admin/feeds"))
+            .bearer_auth("admin-token")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(list["feeds"].as_array().unwrap().len(), 1);
+        assert_eq!(list["feeds"][0]["added_by"], "operator");
+        assert_eq!(list["feeds"][0]["last"]["state"], "never");
+        let r = post(
+            "/admin/feeds/remove",
+            json!({"owner": "ana", "name": "news"}),
+            Some("admin-token"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.status(), 200);
+        let r = post(
+            "/admin/feeds/remove",
+            json!({"owner": "ana", "name": "news"}),
+            Some("admin-token"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.status(), 404);
+        let e: Vec<String> = gw
+            .audit
+            .entries()
+            .iter()
+            .filter_map(|e| e.reason.clone())
+            .collect();
+        for want in [
+            "feed.added ana/news",
+            "feed.removed ana/news",
+            "feed.add refused: that address isn't on the public internet",
+        ] {
+            assert!(e.iter().any(|r| r == want), "{want}: {e:?}");
+        }
     }
 }

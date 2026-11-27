@@ -105,6 +105,8 @@ pub fn effective_gateway(config: &Config) -> GatewaySettings {
             latitude: 59.91,
             longitude: 10.75,
         });
+        // The stub serves fake feeds on a private address (ADR 0009).
+        g.feeds_allow_hosts = vec!["stub-llm".into()];
     }
     g
 }
@@ -380,6 +382,14 @@ mod tests {
                 (200, json!({}))
             }
         })
+    }
+
+    #[test]
+    fn only_stub_mode_allows_the_fake_feed_host() {
+        let stub = Config::new(crate::init::STUB_URL, "stub-model");
+        assert_eq!(effective_gateway(&stub).feeds_allow_hosts, vec!["stub-llm"]);
+        let real = Config::new("http://srv/v1", "m");
+        assert!(effective_gateway(&real).feeds_allow_hosts.is_empty());
     }
 
     #[test]
