@@ -213,3 +213,28 @@ consent flow, and the fake Paperless.
 - **The fake consent:** tests read the `state` from the authorization
   URL and call the callback with `code=fake-<user>` themselves (the stub
   has no host port, so a browser redirect isn't simulated).
+
+## CI results (T022)
+
+Run 46025194506 (commit 652277f) passed every job: `check`, `images`,
+and the stack tests `foundation_stack`, `gateway_stack`, `eval_stack`
+(suite v3, 10 of 10 tasks with the pass script, each new task failing for
+its own reason with the fail script), `secrets_stack` and
+`google_docs_stack` (real Paperless image, fake Google, no internet).
+
+Three runs failed first, all at `google_docs_stack`'s document search,
+and each taught something about the real Paperless:
+- **45945393488:** the search found nothing. The failure didn't print the
+  search, so the test now prints the upload result and the last search.
+- **45948479363:** the upload stayed `processing` though Paperless
+  finished in about 6 s: the gateway read only `related_document` and the
+  list's first entry. It now picks its own task by `task_id` and reads
+  the id from `related_document` or the `result`, in any letter case.
+- **45950847250:** Paperless marked the task `SUCCESS` without naming the
+  document in any shape the gateway read. The gateway now waits a
+  moment, then finds the newest document still owned by its own account
+  with the upload's exact title and file name, never another user's, and
+  logs the task entry it saw.
+
+Lesson: Paperless's task API differs between versions; the gateway must
+not depend on one shape of it.

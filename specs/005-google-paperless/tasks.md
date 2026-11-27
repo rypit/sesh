@@ -137,7 +137,7 @@ they check.
 ## Phase 8: Polish
 
 - [x] T021 [P] README, AGENTS.md, quickstart; the Solutions Architecture phase 5 accept line, unchanged unless the build differs
-- [ ] T022 Record CI results in `specs/005-google-paperless/research.md`
+- [x] T022 Record CI results in `specs/005-google-paperless/research.md`
 
 ## Dependencies
 
