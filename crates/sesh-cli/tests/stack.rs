@@ -975,9 +975,9 @@ fn eval_stack() {
         "US1: {text}{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(text.matches(" PASS ").count(), 10, "US1: {text}");
+    assert_eq!(text.matches(" PASS ").count(), 12, "US1: {text}");
     assert!(
-        text.contains("10/10 passed") && text.contains("saved "),
+        text.contains("12/12 passed") && text.contains("saved "),
         "{text}"
     );
     assert!(

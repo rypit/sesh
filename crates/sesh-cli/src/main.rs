@@ -321,7 +321,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         }
         Command::Feed { command } => {
-            let http = UreqHttp::new(Duration::from_secs(30));
+            // Longer than the gateway waits for Miniflux to add a feed (35 s).
+            let http = UreqHttp::new(Duration::from_secs(45));
             let lines = match command {
                 FeedCommand::Add { owner, url, name } => {
                     vec![feed::add(&dir, &http, &owner, &url, name.as_deref())?]
