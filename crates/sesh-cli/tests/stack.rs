@@ -3257,7 +3257,16 @@ fn network_stack() {
     // US3 (T015): back to how an install from before feature 008 ran: the
     // services that were on the shared `default` network back on it, and
     // Postgres letting every login in from anywhere (the image's default
-    // rule).
+    // rule). The rules go first: on `default`, a service reaches Postgres
+    // from its `default` address, which the current rules refuse, so the
+    // pre-008 stack can't start under them. The recreated Postgres reads
+    // the file from its mounted directory.
+    std::fs::write(
+        stack.dir.join("postgres-conf/pg_hba.conf"),
+        "local all all trust\nhost all all all scram-sha-256\n",
+    )
+    .unwrap();
+    stack.sql_in("sesh", "SELECT pg_reload_conf()");
     let out = stack.compose(
         &[&fixture("pre-008.compose.yaml")],
         &stub_env,
@@ -3268,12 +3277,6 @@ fn network_stack() {
         "the pre-008 stack didn't start: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    std::fs::write(
-        stack.dir.join("postgres-conf/pg_hba.conf"),
-        "local all all trust\nhost all all all scram-sha-256\n",
-    )
-    .unwrap();
-    stack.sql_in("sesh", "SELECT pg_reload_conf()");
     for s in PRE_008_DEFAULT {
         assert!(
             stack.networks_of(s).get("sesh_default").is_some(),
