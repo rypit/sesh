@@ -103,7 +103,7 @@ sesh has 19 components across six zones. Three are custom builds (marked
 | Code Mode gateway | Control plane | Single path to every resource; scoping, approvals, audit | `@cloudflare/codemode` runtime in per-agent workerd executors; gateway in Rust | Container | Token per agent; MCP over Streamable HTTP; scripts run in an untrusted workerd executor container per agent, with no network or secrets; see Build vs adopt (**build**) |
 | Infisical | Control plane | Secrets and site logins, per agent | Infisical (self-hosted) | Container | Project + machine identity per agent; read only by the gateway |
 | Audit log | Control plane | Append-only record of every gateway action | Postgres table | Shared Postgres | Insert-only grants; 90-day full retention; agents cannot read |
-| Gmail + Calendar + Contacts | Resources | Personal and household Google data | Google APIs via MCP server | Container | One Google Cloud project, app in production; read-only + compose scopes; send behind approval |
+| Gmail + Calendar + Contacts | Resources | Personal and household Google data | Google APIs, called by the gateway (ADR 0008) | Gateway connectors | One Google Cloud project, app in production; read-only + compose scopes; send behind approval |
 | SearXNG | Resources | Web search | SearXNG | Container | JSON output; reachable from the gateway only |
 | Kiwix | Resources | Offline Wikipedia | kiwix-serve + ZIM files | Container | Text-only English Wikipedia (~50GB); quarterly refresh |
 | Weather + maps | Resources | Forecasts, geocoding, places | Open-Meteo, OpenStreetMap | Gateway connector | No keys; home location fixed in the gateway |
@@ -283,7 +283,7 @@ that touches untrusted content runs in sbx microVMs.
 | Placement | Components | Why |
 | --- | --- | --- |
 | Bare metal (macOS) | Inference server, when it needs the GPU (for example oMLX) | Needs the Metal GPU |
-| Docker (Compose) | Open WebUI, Hermes (container per profile), gateway, workerd executor per agent (no network), Infisical, ntfy, Mem0, Paperless, SearXNG, Kiwix, Google MCP, LiteLLM, Postgres, Redis | Long-lived services; one Compose file moves to the Mac mini unchanged |
+| Docker (Compose) | Open WebUI, Hermes (container per profile), gateway, workerd executor per agent (no network), Infisical, ntfy, Mem0, Paperless, SearXNG, Kiwix, LiteLLM, Postgres, Redis | Long-lived services; one Compose file moves to the Mac mini unchanged |
 | sbx microVM | Browser sessions | VM boundary for code execution and untrusted web content |
 
 **Memory budget on a 64GB Mac mini (estimates)**
@@ -417,7 +417,7 @@ small browser controller. Everything else is configuration.
 
 **Adopted as-is (configure only):** Open WebUI, Hermes, an
 OpenAI-compatible inference server, LiteLLM, Infisical, ntfy, Mem0,
-Paperless-ngx, SearXNG, Kiwix, a Google MCP server, Postgres, Redis, sbx.
+Paperless-ngx, SearXNG, Kiwix, Postgres, Redis, sbx.
 
 **4. `sesh` admin CLI + Claude Code operator skills**
 
