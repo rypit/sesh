@@ -68,7 +68,7 @@ checks.
 
 ## Phase 7: Polish
 
-- [ ] T015 Record CI results (every stack test, including the existing ones) in `specs/007-service-isolation/research.md`
+- [x] T015 Record CI results (every stack test, including the existing ones) in `specs/007-service-isolation/research.md`
 
 ## Dependencies
 

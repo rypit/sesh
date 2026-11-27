@@ -245,3 +245,22 @@
 - The architecture diagram doesn't draw Postgres or Redis, so it
   doesn't change; the catalog row, deployment table and phase list do.
 - No principle changes: this enforces I and X for storage.
+
+## CI results (T015)
+
+Run 46039623223 (commit 469ae93), the first run of this feature,
+passed every job: `check`, `images`, and all seven stack tests:
+`foundation_stack`, `gateway_stack`, `eval_stack`, `secrets_stack`,
+`google_docs_stack`, `feeds_stack` and the new `isolation_stack`.
+
+So, with each service on its own Postgres login and its own Redis:
+- Open WebUI, LiteLLM, Infisical and Paperless all start and migrate as
+  non-superusers;
+- every earlier feature's stack test still passes;
+- `isolation_stack` passes both a fresh install and the upgrade from the
+  pre-007 state: data in all four services survives `sesh up`, a second
+  run changes nothing, and each login and each Redis reaches only its own.
+
+The upgrade risks recorded above that CI doesn't exercise remain: lock
+waits while old services are still connected, and the small window for
+an object created by an old superuser connection.
