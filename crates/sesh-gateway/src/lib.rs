@@ -132,6 +132,10 @@ pub struct Gateway {
     pub upstream: connectors::Upstream,
     /// `{agent}` is replaced by the agent's name.
     pub executor_url: String,
+    /// Accept a call only from the address the calling agent's executor
+    /// host resolves to (ADR 0009): a capability is useless from anywhere
+    /// else, such as an adopted service sharing a network with the gateway.
+    pub executor_peer_check: bool,
     /// Approval requests and credential forms (specs/004).
     pub approvals: approvals::Store,
     pub notifier: notify::Notifier,

@@ -46,6 +46,7 @@ fn env(k: &str) -> Option<String> {
 
 async fn call_handler(
     State(gw): State<Arc<Gateway>>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> (StatusCode, Json<Value>) {
@@ -59,7 +60,7 @@ async fn call_handler(
     let cap = headers
         .get("x-sesh-capability")
         .and_then(|v| v.to_str().ok());
-    let r = calls::handle(&gw, cap, &body).await;
+    let r = calls::handle_from(&gw, Some(peer.ip()), cap, &body).await;
     (
         StatusCode::from_u16(r.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
         Json(r.body),
@@ -147,6 +148,7 @@ async fn main() -> anyhow::Result<()> {
         settings,
         executor_url: env("SESH_EXECUTOR_URL")
             .unwrap_or_else(|| "http://executor-{agent}:8000".into()),
+        executor_peer_check: true,
     });
 
     let mut hosts = vec![
@@ -221,7 +223,13 @@ async fn main() -> anyhow::Result<()> {
         let app = approvals_app.clone();
         servers.spawn(async move { axum::serve(l, app).await });
     }
-    servers.spawn(async move { axum::serve(exec_listener, executor_app).await });
+    servers.spawn(async move {
+        axum::serve(
+            exec_listener,
+            executor_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+    });
     // Each server runs until it fails; one failing stops the gateway.
     if let Some(r) = servers.join_next().await {
         r??;

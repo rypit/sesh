@@ -31,7 +31,9 @@ resources.
 2. **Miniflux's networks:** `feeds` (internal, gateway and Miniflux
    only), `feeds-egress` (Miniflux alone, to publishers), `feeds-db`
    (internal, Miniflux and Postgres only). Miniflux is not on `default`.
-   Its database is `miniflux` in the shared Postgres.
+   Its database is `miniflux` in the shared Postgres, reached with its
+   own `miniflux` login, which owns only that database and has no
+   superuser, database or role rights.
 3. **One Miniflux user per owner** (`sesh-<owner>`), created by the
    gateway as Miniflux's admin and matched by exact name. The gateway
    signs in as that user with a per-process random password it keeps
@@ -44,7 +46,13 @@ resources.
    Invalid, duplicate or over-limit requests are refused before anyone
    is asked. The operator adds feeds with `sesh feed add`, through the
    gateway's admin endpoints, audited.
-5. **Constitution VII is amended** (1.3.0): the named exception for
+5. **The executor port accepts a call only from the calling agent's
+   own executor.** The capability names the agent; the gateway resolves
+   that agent's executor host and refuses (and audits) a call from any
+   other address. An adopted service that shares a network with the
+   gateway, or another agent's executor, can't use a capability even if
+   it obtained one.
+6. **Constitution VII is amended** (1.3.0): the named exception for
    search engines also covers feed publishers, reached only through the
    feed service.
 
@@ -53,11 +61,11 @@ resources.
 - Fetching, parsing and storage are adopted, not built; the gateway
   keeps no feed table and no fetch code.
 - **What Miniflux can still reach:** the internet; Postgres on
-  `feeds-db` (it holds only its own database's password); and the
-  gateway on `feeds`, whose listeners need an agent token, a capability
-  or the admin token. A feed address can make Miniflux send a GET with
-  no credentials, nothing more. That is the shape SearXNG already has
-  on `search`.
+  `feeds-db`, as a login that can open only its own database; and the
+  gateway's executor port on `feeds`, which refuses every call that
+  doesn't come from the calling agent's executor (decision 5). A feed
+  address can make Miniflux send a GET with no credentials, nothing
+  more. SearXNG has the same shape on `search`.
 - Miniflux polls feeds on its own (hourly by default), so items are as
   fresh as its last poll; publishers see the server's address, as with
   any reader.
