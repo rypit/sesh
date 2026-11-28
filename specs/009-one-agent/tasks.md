@@ -27,7 +27,7 @@ description: "Task list for feature 009: one agent end to end"
   - `config_yaml(agent)`: `platform_toolsets.api_server: [mcp-sesh]`; `agent.disabled_toolsets` = every name in `hermes/toolsets.txt`; `mcp_servers.sesh` with `http://gateway:7000/mcp` and `Authorization: Bearer ${SESH_GATEWAY_TOKEN}`; the model (`custom`, `http://litellm:4000/v1`, `agent-main`, `${SESH_ROUTER_KEY}`) and every auxiliary task on `main`; memory off. Tests: no secret value in it; every built-in toolset disabled; `mcp-sesh` is the only platform toolset.
   - `env_file(token, router_key, api_key)`: the three variables, written 0600.
   - `service(agent)`: the Compose block per data-model.md (image, `env_file`, volume, read-only config mount, three networks, `API_SERVER_*` settings without values, healthcheck on `/health`, hardening per R9).
-- [ ] T006 Unit tests, then `crates/sesh-cli/src/layout.rs`: `agent_nets(name)` and `matrix_with(stub, agents)` (data-model.md); the rules hold with agents (each agent network is a pair, internal; the runtime has no non-internal network; `gateway:7000` reachable only from the agent's own runtime; `gateway:7002` from none).
+- [x] T006 Unit tests, then `crates/sesh-cli/src/layout.rs`: `agent_nets(name)` and `matrix_with(stub, agents)` (data-model.md); the rules hold with agents (each agent network is a pair, internal; the runtime has no non-internal network; `gateway:7000` reachable only from the agent's own runtime; `gateway:7002` from none).
 
 ---
 
@@ -35,8 +35,8 @@ description: "Task list for feature 009: one agent end to end"
 
 Written first: it's the safety guarantee, and its tests define the wiring the other stories use.
 
-- [ ] T007 [US3] Unit tests, then `crates/sesh-gateway/src/listen.rs` and `main.rs`: `agent_listen` in the gateway settings; each alias resolved (retrying for up to 30 s) and `:7000` bound on its address; an unresolvable alias is a start-up error; the addresses never include `0.0.0.0`; `:7002` unchanged.
-- [ ] T008 [US3] Unit tests, then `crates/sesh-cli/src/up.rs` `generated_overlay`: for an agent with a runtime, the `hermes-<name>` service, the volume, the three networks; the gateway joins `agent-<name>` with the alias `gateway-agent-<name>` (map syntax, merged with the existing list); LiteLLM joins `agent-<name>-model`; Open WebUI joins `agent-<name>-chat`. An agent without a runtime gets none of this. `gateway.toml`'s `agent_listen` lists the aliases.
+- [x] T007 [US3] Unit tests, then `crates/sesh-gateway/src/listen.rs` and `main.rs`: `agent_listen` in the gateway settings; each alias resolved (retrying for up to 30 s) and `:7000` bound on its address; an unresolvable alias is a start-up error; the addresses never include `0.0.0.0`; `:7002` unchanged.
+- [x] T008 [US3] Unit tests, then `crates/sesh-cli/src/up.rs` `generated_overlay`: for an agent with a runtime, the `hermes-<name>` service, the volume, the three networks; the gateway joins `agent-<name>` with the alias `gateway-agent-<name>` (map syntax, merged with the existing list); LiteLLM joins `agent-<name>-model`; Open WebUI joins `agent-<name>-chat`. An agent without a runtime gets none of this. `gateway.toml`'s `agent_listen` lists the aliases.
 - [ ] T009 [US3] Stack test (written first) `agent_stack` part 1 in `crates/sesh-cli/tests/stack.rs`, stub mode with `STUB_SCRIPT=agent` and the Household agent with a runtime:
   - the stub's recorded requests from the runtime offer only tools ending in `search` or `execute` (SC-002);
   - `[agent:terminal]`: no command runs (the reply says the tool isn't available) and the audit log has no new entry;
@@ -49,7 +49,7 @@ Written first: it's the safety guarantee, and its tests define the wiring the ot
 ## Phase 4: User Story 1 - Chat in Open WebUI (Priority: P1) 🎯 MVP
 
 - [ ] T011 [US1] Unit tests, then `crates/sesh-stub-llm/src/main.rs`: `STUB_SCRIPT=agent` per contracts/stub-script.md and `GET /stub/requests`.
-- [ ] T012 [US1] Unit tests, then `up.rs`: Open WebUI's `OPENAI_API_BASE_URLS`/`OPENAI_API_KEYS` (router first, then each runtime, keys interpolated from `secrets.env`) in the overlay; `deploy/compose.yaml` moves Open WebUI to the list form. The router key per runtime agent is created/updated like Open WebUI's, and deleted for a removed agent. `sesh up` writes the config and the env file (only when changed), and starts the runtime after the gateway and LiteLLM and before Open WebUI.
+- [x] T012 [US1] Unit tests, then `up.rs`: Open WebUI's `OPENAI_API_BASE_URLS`/`OPENAI_API_KEYS` (router first, then each runtime, keys interpolated from `secrets.env`) in the overlay; `deploy/compose.yaml` moves Open WebUI to the list form. The router key per runtime agent is created/updated like Open WebUI's, and deleted for a removed agent. `sesh up` writes the config and the env file (only when changed), and starts the runtime after the gateway and LiteLLM and before Open WebUI.
 - [ ] T013 [US1] `agent_stack` part 2: sign in to Open WebUI as the admin, list models (`household-agent` present), chat `[agent:weather]` and `[agent:search]` with streaming; the answers quote the fake forecast and search result; the audit log has a `geo.forecast` and a `search.web` call by `household-agent` (SC-001).
 
 ---

@@ -422,6 +422,10 @@ pub struct GatewaySettings {
     /// Feeds (specs/006 data-model.md, Gateway settings).
     #[serde(default = "d_feeds_per_owner")]
     pub feeds_max_per_owner: u32,
+    /// The gateway's alias on each agent runtime's network (specs/009
+    /// research.md R5): its agent listener also binds there.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_listen: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -579,6 +583,7 @@ impl Default for GatewaySettings {
             upload_max_bytes: d_upload_max(),
             ref_ttl_secs: d_ref_ttl(),
             feeds_max_per_owner: d_feeds_per_owner(),
+            agent_listen: vec![],
         }
     }
 }

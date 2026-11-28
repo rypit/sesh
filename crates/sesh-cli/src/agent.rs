@@ -119,6 +119,8 @@ pub fn remove(dir: &Path, name: &str) -> Result<String> {
     }
     file.save(&gateway_dir(dir))?;
     let _ = std::fs::remove_file(token_path(dir, name));
+    let _ = std::fs::remove_file(crate::hermes::env_path(dir, name));
+    let _ = std::fs::remove_dir_all(dir.join("agents").join(name));
     let mut s = Secrets::load(dir)?;
     let api = secrets::agent_key(name, secrets::API_KEY);
     if s.get(&api).is_some() {

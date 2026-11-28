@@ -135,6 +135,15 @@ impl Secrets {
         self.values.get(key).map(String::as_str)
     }
 
+    /// Every agent runtime's router key, as (name, value).
+    pub fn agent_router_keys(&self) -> Vec<(String, String)> {
+        self.values
+            .iter()
+            .filter(|(k, _)| k.starts_with("AGENT_") && k.ends_with("_ROUTER_KEY"))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
     pub fn remove(&mut self, key: &str) {
         self.values.remove(key);
     }

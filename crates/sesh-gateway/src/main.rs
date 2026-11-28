@@ -8,7 +8,8 @@
 //! - `SESH_GATEWAY_TEST_CONNECTORS=1`: add the test-only `testgate` connector
 //! - `SESH_ALLOWED_HOSTS`: extra Host names for the MCP endpoint (comma separated)
 //! - `SESH_AGENT_LISTEN`: agent listener addresses (comma separated); default
-//!   loopback and the default-route address, never the executor networks
+//!   loopback and the default-route address, never the executor networks;
+//!   plus the address of each `agent_listen` alias in `gateway.toml`
 //! - `SESH_EXECUTOR_LISTEN`: executor listener, default `0.0.0.0:7001`
 //! - `SESH_APPROVALS_LISTEN`: approval pages and `/admin` (comma separated);
 //!   default loopback and the default-route address on 7002
@@ -189,6 +190,12 @@ async fn main() -> anyhow::Result<()> {
         listen::default_route_ip(),
     )
     .map_err(anyhow::Error::msg)?;
+    // And each agent runtime's own network (specs/009, ADR 0012).
+    let resolved = listen::resolve_aliases(&settings.agent_listen)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let agent_addrs =
+        listen::with_agent_networks(agent_addrs, &resolved).map_err(anyhow::Error::msg)?;
     let mut agent_listeners = Vec::new();
     for addr in &agent_addrs {
         agent_listeners.push(tokio::net::TcpListener::bind(addr).await?);
