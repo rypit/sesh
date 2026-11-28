@@ -467,6 +467,9 @@ pub struct BrowserSettings {
     pub allow_http_login: bool,
     /// Each agent runtime's chat upstream (`{agent}` is replaced).
     pub chat_upstream: String,
+    /// The gateway's alias on the `chat` network, where the chat listener
+    /// (`:7003`) binds; empty: no chat listener.
+    pub chat_alias: String,
 }
 
 impl Default for BrowserSettings {
@@ -484,6 +487,7 @@ impl Default for BrowserSettings {
             egress_allow: vec![],
             allow_http_login: false,
             chat_upstream: "http://hermes-{agent}:8642".into(),
+            chat_alias: String::new(),
         }
     }
 }

@@ -21,6 +21,7 @@ pub mod owners;
 pub mod pages;
 pub mod redact;
 pub mod refs;
+pub mod relay;
 pub mod schema;
 pub mod secrets;
 

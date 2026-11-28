@@ -215,7 +215,10 @@ async fn the_session_drives_a_real_browser_through_the_egress_proxy() {
     s.navigate(&format!("{base}/sub"), t).await.unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
     let r = refusals.take("a");
-    assert!(!r.is_empty() && r.iter().all(|h| h == "192.168.1.1"), "{r:?}");
+    assert!(
+        !r.is_empty() && r.iter().all(|h| h == "192.168.1.1"),
+        "{r:?}"
+    );
 
     // Live view frames.
     let mut frames = s.frames.subscribe();
