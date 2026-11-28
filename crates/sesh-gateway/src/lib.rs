@@ -8,6 +8,7 @@
 pub mod approvals;
 pub mod audit;
 pub mod auth;
+pub mod browser;
 pub mod calls;
 pub mod capability;
 pub mod connectors;
