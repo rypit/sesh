@@ -1,6 +1,6 @@
 # 0013. The browser: a container per agent, driven by the gateway, online only through the gateway
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-28
 - Feature: specs/010-browser
 

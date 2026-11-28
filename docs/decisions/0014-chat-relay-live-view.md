@@ -1,6 +1,6 @@
 # 0014. The gateway in the chat path, for a live browser view inside Open WebUI
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-28
 - Feature: specs/010-browser
 

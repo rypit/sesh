@@ -12,7 +12,7 @@ description: "Task list for feature 010: browser, with a live view and takeover 
 
 ## Phase 1: Setup
 
-- [x] T001 [P] ADRs 0013 and 0014 (status proposed; accepted before implementation)
+- [x] T001 [P] ADRs 0013 and 0014 (accepted 2026-11-28)
 - [ ] T002 [P] `deploy/browser.Dockerfile`: pinned Debian base, Chromium, non-root user, a start script with the flags from research R3/R4 (`--headless=new`, remote debugging on the container's address, `--proxy-server`, the profile dir). Built in CI's `images` job as `sesh-browser:dev`.
 - [ ] T003 [P] Dependencies (`tokio-tungstenite`, `hmac`, `sha1`) pass `cargo deny`.
 
