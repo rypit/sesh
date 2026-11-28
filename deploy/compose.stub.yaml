@@ -32,7 +32,7 @@ services:
   gateway:
     environment:
       SESH_GATEWAY_TEST_CONNECTORS: "1"
-    networks: [gateway-db, secrets, notify, chat, search, docs, feeds, gateway-edge, stub]
+    networks: [gateway-db, secrets, notify, chat, embed, search, docs, feeds, gateway-edge, stub]
 
 # Development and CI only (specs/008 research.md R6).
 networks:

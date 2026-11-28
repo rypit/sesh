@@ -130,3 +130,24 @@ CREATE TABLE IF NOT EXISTS credential_forms (
 REVOKE ALL ON approvals, credential_forms FROM PUBLIC;
 REVOKE ALL ON approvals, credential_forms FROM sesh_gateway;
 GRANT INSERT, SELECT, UPDATE ON approvals, credential_forms TO sesh_gateway;
+
+-- Memory (specs/011, ADR 0015): facts agents saved, one owner each, taken
+-- from the agent's token. pgvector is in the Postgres image; creating the
+-- extension needs the superuser, which runs this migration.
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE TABLE IF NOT EXISTS memories (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner       text NOT NULL,
+  agent       text NOT NULL,
+  fact        text NOT NULL CHECK (char_length(fact) BETWEEN 1 AND 500),
+  embedding   vector(384),
+  tsv         tsvector GENERATED ALWAYS AS (to_tsvector('simple', fact)) STORED,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS memories_owner_updated ON memories (owner, updated_at DESC);
+CREATE INDEX IF NOT EXISTS memories_tsv ON memories USING gin (tsv);
+CREATE INDEX IF NOT EXISTS memories_embedding ON memories USING hnsw (embedding vector_cosine_ops);
+REVOKE ALL ON memories FROM PUBLIC;
+REVOKE ALL ON memories FROM sesh_gateway;
+GRANT SELECT, INSERT, UPDATE, DELETE ON memories TO sesh_gateway;

@@ -73,7 +73,12 @@ pub async fn handle_from(
         execution: None,
         connector: Some(connector.clone()).filter(|c| !c.is_empty()),
         method: Some(method.clone()).filter(|m| !m.is_empty()),
-        args_summary: summarize(&args),
+        // Memory text is about people: only its length is audited (FR-012).
+        args_summary: if connector == "memory" {
+            crate::connectors::memory::audit_summary(&args)
+        } else {
+            summarize(&args)
+        },
         outcome: "refused",
         reason: None,
     };
@@ -168,13 +173,15 @@ pub async fn handle_from(
         // Approval-gated methods: the gateway decides, whatever the executor
         // claims (ADR 0007). The browser decides per call: a click that
         // submits a form, a first login, an upload (specs/010 FR-006/7/19).
-        let dynamic = if connector == "browser" {
-            match crate::browser::gate_reason(gw, &scope, &grant.agent, &method, &args).await {
-                Ok(d) => d,
-                Err(why) => break 'checks Err(refused(&mut entry, 400, &why)),
+        let dynamic = match connector.as_str() {
+            "browser" => {
+                match crate::browser::gate_reason(gw, &scope, &grant.agent, &method, &args).await {
+                    Ok(d) => d,
+                    Err(why) => break 'checks Err(refused(&mut entry, 400, &why)),
+                }
             }
-        } else {
-            None
+            "memory" => crate::connectors::memory::gate_reason(&scope, &method, &args),
+            _ => None,
         };
         let mut approved = None;
         if desc.requires_approval || dynamic.is_some() {
@@ -227,6 +234,9 @@ pub async fn handle_from(
                 crate::connectors::feeds::call(gw, &scope, &grant.agent, &method, &args).await
             }
             "browser" => crate::browser::call(gw, &scope, &grant.agent, &method, &args).await,
+            "memory" => {
+                crate::connectors::memory::call(gw, &scope, &grant.agent, &method, &args).await
+            }
             _ => gw.upstream.call(&connector, &method, &args, &creds).await,
         };
         match result {
@@ -306,6 +316,7 @@ pub mod tests {
             google: Default::default(),
             refs: Default::default(),
             browser: Default::default(),
+            memory: crate::connectors::memory::Store::memory(),
             paperless: crate::connectors::docs::Paperless::new("", ""),
             miniflux: crate::connectors::feeds::Miniflux::new("", ""),
             pending: Default::default(),

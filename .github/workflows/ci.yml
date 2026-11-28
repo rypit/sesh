@@ -114,6 +114,21 @@ jobs:
           outputs: type=docker,dest=/tmp/sesh-browser.tar
           cache-from: type=gha,scope=browser
           cache-to: type=gha,scope=browser,mode=max
+      # Separate, as only memory_stack runs the real model (specs/011).
+      - name: Build the embedding image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/embed.Dockerfile
+          tags: sesh-embed:dev
+          outputs: type=docker,dest=/tmp/embed/sesh-embed.tar
+          cache-from: type=gha,scope=embed
+          cache-to: type=gha,scope=embed,mode=max
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sesh-embed
+          path: /tmp/embed/sesh-embed.tar
+          retention-days: 1
       - uses: actions/upload-artifact@v4
         with:
           name: sesh-images
@@ -143,6 +158,7 @@ jobs:
           - secrets_stack
           - google_docs_stack
           - browser_stack
+          - memory_stack
     name: stack (${{ matrix.tests }})
     steps:
       - uses: actions/checkout@v4
@@ -162,9 +178,25 @@ jobs:
       - name: Rust toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      # Docker's default address pools hold about 30 networks; one agent
+      # with a browser plus a second agent needs more since the embed
+      # network (specs/011). /24s from one /16 give 256.
+      - name: Give Docker room for sesh's networks
+        run: |
+          f=/etc/docker/daemon.json
+          [ -s "$f" ] || echo '{}' | sudo tee "$f" >/dev/null
+          jq '. + {"default-address-pools": [{"base": "10.200.0.0/16", "size": 24}]}' "$f" | sudo tee "$f.new" >/dev/null
+          sudo mv "$f.new" "$f"
+          sudo systemctl restart docker
+          docker info --format '{{json .}}' >/dev/null
       - uses: actions/download-artifact@v4
         with:
           name: sesh-images
+          path: /tmp/images
+      - uses: actions/download-artifact@v4
+        if: matrix.tests == 'memory_stack'
+        with:
+          name: sesh-embed
           path: /tmp/images
       - name: Load the dev images
         run: |
@@ -186,7 +218,16 @@ jobs:
       - name: Stack test
         env:
           SESH_TEST_NO_INTERNET: "1"
+          SESH_STACK_STATS: /tmp/stack-stats.md
         run: make stack-test STACK_TESTS="${{ matrix.tests }}"
+      # Each container's memory at the end of the test (docker stats).
+      - name: Container memory
+        if: always()
+        run: |
+          if [ -s /tmp/stack-stats.md ]; then
+            { echo "### Container memory: ${{ matrix.tests }}"; cat /tmp/stack-stats.md; } >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/stack-stats.md
+          fi
       - name: Disk usage
         if: failure()
         run: df -h / && docker system df || true

@@ -179,6 +179,11 @@ pub fn agent_listen(agents: &AgentsFile) -> Vec<String> {
 
 /// The gateway's settings as it should run them: in stub mode every
 /// upstream is the stub's fakes, so nothing reaches the internet.
+/// `SESH_REAL_EMBED=1`: run the real embedding model in stub mode.
+pub fn real_embed() -> bool {
+    std::env::var("SESH_REAL_EMBED").is_ok_and(|v| v == "1")
+}
+
 pub fn effective_gateway(config: &Config) -> GatewaySettings {
     let mut g = config.gateway.clone();
     if is_stub(config) {
@@ -207,6 +212,13 @@ pub fn effective_gateway(config: &Config) -> GatewaySettings {
         g.browser.allow_http_login = true;
         // Tests wait for a takeover to time out; the household keeps 60 s.
         g.browser.wait_secs = 5;
+        // The stub's hashed embeddings, unless the real model is asked for
+        // (specs/011 research.md R4).
+        if !real_embed() {
+            g.memory.embed_url = STUB_UPSTREAM.into();
+            // Hashed words score unrelated text near 0, not 0.7.
+            g.memory.min_similarity = 0.2;
+        }
         g.home.get_or_insert(Home {
             latitude: 59.91,
             longitude: 10.75,
@@ -288,6 +300,29 @@ pub fn write_compose_files(dir: &Path, config: &Config) -> Result<Vec<PathBuf>> 
 pub fn write_runtime_files(dir: &Path, agents: &AgentsFile) -> Result<Vec<String>> {
     let secrets = Secrets::load(dir)?;
     let mut changed = vec![];
+    // sesh's memory plugin, shared read-only by every runtime (specs/011).
+    if agents.agents.iter().any(|a| a.runtime.is_some()) {
+        let pd = crate::hermes::plugin_dir(dir);
+        let a = crate::hermes::write_if_changed(
+            &pd.join("__init__.py"),
+            crate::hermes::PLUGIN_INIT,
+            false,
+        )?;
+        let b = crate::hermes::write_if_changed(
+            &pd.join("plugin.yaml"),
+            crate::hermes::PLUGIN_YAML,
+            false,
+        )?;
+        if a || b {
+            changed.extend(
+                agents
+                    .agents
+                    .iter()
+                    .filter(|x| x.runtime.is_some())
+                    .map(|x| crate::hermes::service(&x.name)),
+            );
+        }
+    }
     for a in agents.agents.iter().filter(|a| a.runtime.is_some()) {
         let n = &a.name;
         let cfg = crate::hermes::write_if_changed(
@@ -309,6 +344,7 @@ pub fn write_runtime_files(dir: &Path, agents: &AgentsFile) -> Result<Vec<String
                 token.trim(),
                 &get(secrets::ROUTER_KEY),
                 &get(secrets::API_KEY),
+                a.connectors.iter().any(|c| c == "memory"),
             ),
             true,
         )?;
@@ -476,6 +512,9 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
     base.extend(browsers.iter().map(String::as_str));
     if is_stub(&config) {
         base.push("stub-llm");
+    }
+    if !is_stub(&config) || real_embed() {
+        base.push("embed");
     }
     if has_zim_files(dir) {
         base.push("kiwix");
@@ -703,6 +742,17 @@ mod tests {
     }
 
     #[test]
+    fn stub_mode_embeds_with_the_stub() {
+        let mut c = Config::load(&ready("embed-url")).unwrap();
+        c.inference.base_url = "https://example.invalid/v1".into();
+        assert_eq!(effective_gateway(&c).memory.embed_url, "http://embed:80");
+        c.inference.base_url = crate::init::STUB_URL.into();
+        if !real_embed() {
+            assert_eq!(effective_gateway(&c).memory.embed_url, STUB_UPSTREAM);
+        }
+    }
+
+    #[test]
     fn only_the_stub_lets_miniflux_fetch_private_addresses() {
         // ADR 0009: the household stack keeps Miniflux's default refusal
         // of private, loopback and link-local addresses.
@@ -776,6 +826,7 @@ mod tests {
                 "GRANT INSERT ON audit TO sesh_gateway;",
                 "GRANT USAGE ON SEQUENCE audit_id_seq TO sesh_gateway;",
                 "GRANT INSERT, SELECT, UPDATE ON approvals, credential_forms TO sesh_gateway;",
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON memories TO sesh_gateway;",
             ]
         );
     }

@@ -49,7 +49,10 @@ suite's scripted conversations.
 for a credential (feature 004); nothing in sesh ever prints a value.
 `sesh user add <name>` adds a household user; `sesh agent add … --owner
 <name>` binds an agent to them, and `sesh google connect <name>` prints a
-one-time Google consent link (feature 005). The gateway derives every
+one-time Google consent link (feature 005). `sesh memory list|forget
+<owner>` shows or removes what agents remember (feature 011); stub mode
+uses the stub's embeddings unless `SESH_REAL_EMBED=1` (needs
+`sesh-embed:dev`, from `deploy/embed.Dockerfile`). The gateway derives every
 scope from the calling agent's owner, never from arguments.
 Each adopted service logs in to Postgres as its own role, owning only
 its database, and has its own Redis (feature 007, ADR 0010): never give

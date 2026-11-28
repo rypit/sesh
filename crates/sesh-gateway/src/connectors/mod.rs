@@ -5,6 +5,7 @@ pub mod docs;
 pub mod feeds;
 pub mod geo;
 pub mod google;
+pub mod memory;
 pub mod search;
 
 use serde_json::{Value, json};
@@ -136,6 +137,7 @@ pub fn all(test_connectors: bool) -> Vec<ConnectorDescriptor> {
     out.push(docs::descriptor());
     out.push(feeds::descriptor());
     out.push(crate::browser::descriptor());
+    out.push(memory::descriptor());
     if test_connectors {
         out.push(connector(
             "testgate",

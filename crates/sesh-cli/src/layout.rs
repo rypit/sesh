@@ -42,6 +42,8 @@ pub const NETWORKS: &[Net] = &[
     net("notify", true, &["gateway", "ntfy"]),
     // Open WebUI to the gateway's chat listener (specs/010, ADR 0014).
     net("chat", true, &["open-webui", "gateway"]),
+    // The gateway to the embedding service (specs/011, ADR 0015).
+    net("embed", true, &["embed", "gateway"]),
     // Edge networks: one member each, for its published port and its
     // outbound access.
     net("webui-edge", false, &["open-webui"]),
@@ -90,7 +92,12 @@ pub const LISTENS: &[(&str, u16)] = &[
     ("redis-infisical", 6379),
     ("redis-paperless", 6379),
     ("stub-llm", 8000),
+    ("embed", 80),
 ];
+
+/// Services not started in stub mode (the stub stands in for them), unless
+/// `SESH_REAL_EMBED=1` asks for the real embedding model (specs/011).
+pub const NOT_IN_STUB: &[&str] = &["embed"];
 
 /// Listeners bound only to loopback and their service's edge network
 /// (the gateway's agent and approvals listeners; research.md R5), so no
@@ -116,6 +123,7 @@ pub const USED: &[(&str, &str, u16)] = &[
     ("gateway", "searxng", 8080),
     ("gateway", "paperless", 8000),
     ("gateway", "miniflux", 8080),
+    ("gateway", "embed", 80),
     ("infisical", "postgres", 5432),
     ("infisical", "redis-infisical", 6379),
     ("paperless", "postgres", 5432),
@@ -135,7 +143,7 @@ pub fn services(stub: bool) -> Vec<&'static str> {
     let mut out: Vec<&'static str> = vec![];
     for n in NETWORKS.iter().filter(|n| stub || !n.stub_only) {
         for m in n.members {
-            if !out.contains(m) {
+            if !out.contains(m) && !(stub && NOT_IN_STUB.contains(m)) {
                 out.push(m);
             }
         }
@@ -309,6 +317,9 @@ pub fn reachable_with(from: &str, to: &str, port: u16, stub: bool, i: &Install) 
     if from == to || !listens_with(i).iter().any(|(s, p)| s == to && *p == port) {
         return false;
     }
+    if stub && (NOT_IN_STUB.contains(&from) || NOT_IN_STUB.contains(&to)) {
+        return false;
+    }
     nets(stub, i).iter().any(|n| {
         n.members.iter().any(|m| m == from)
             && n.members.iter().any(|m| m == to)
@@ -378,6 +389,26 @@ pub const DB_LOGINS: &[(&str, &str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_gateway_reaches_the_embedding_service_and_stub_mode_skips_it() {
+        assert!(reachable("gateway", "embed", 80, false));
+        for s in services(false) {
+            if s != "gateway" && s != "embed" {
+                assert!(
+                    !reachable(s, "embed", 80, false),
+                    "specs/011: {s} reaches embed"
+                );
+            }
+        }
+        assert_eq!(
+            networks_of("embed", false),
+            vec!["embed"],
+            "no outbound access"
+        );
+        assert!(!services(true).contains(&"embed"));
+        assert!(!reachable("gateway", "embed", 80, true));
+    }
 
     #[test]
     fn there_is_no_catch_all_network() {

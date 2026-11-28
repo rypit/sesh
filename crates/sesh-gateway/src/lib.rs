@@ -12,6 +12,7 @@ pub mod browser;
 pub mod calls;
 pub mod capability;
 pub mod connectors;
+pub mod embed;
 pub mod executor;
 pub mod google;
 pub mod listen;
@@ -148,6 +149,8 @@ pub struct Gateway {
     pub refs: std::sync::Arc<refs::Refs>,
     /// The browser (specs/010): sessions, egress refusals, live grants.
     pub browser: browser::Hub,
+    /// Memory (specs/011): facts per owner, in the gateway's database.
+    pub memory: connectors::memory::Store,
     pub paperless: connectors::docs::Paperless,
     /// The feed service (specs/006): one Miniflux user per owner.
     pub miniflux: connectors::feeds::Miniflux,

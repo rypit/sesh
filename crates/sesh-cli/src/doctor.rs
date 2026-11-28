@@ -106,6 +106,7 @@ pub fn run_with(
     checks.push(google_check(secrets, http));
     checks.push(paperless_check(secrets, http));
     checks.push(feeds_check(secrets, http));
+    checks.push(memory_check(secrets, http));
     checks.push(audit_check(compose));
     checks.push(isolation_check(compose));
     checks.push(network_check_with(config, compose, runtimes, browsers));
@@ -442,6 +443,59 @@ fn paperless_check(secrets: &Secrets, http: &dyn Http) -> Check {
 /// specs/006 contracts/cli.md: feeds per owner, from Miniflux through the
 /// gateway; warns when Miniflux is unreachable or a feed's last update
 /// failed (Miniflux is not a safety component, like Paperless).
+/// Memory (specs/011): the embedding service answers, and no fact waits
+/// for its embedding (recall falls back to words until it has one).
+fn memory_check(secrets: &Secrets, http: &dyn Http) -> Check {
+    let Some(token) = secrets.get("SESH_GATEWAY_ADMIN_TOKEN") else {
+        return Check::warn("memory", "no gateway admin token yet", "run `sesh init`");
+    };
+    let r = match http.get(
+        &format!("{}/memory/status", crate::credential::admin_url()),
+        Some(token),
+    ) {
+        Ok(r) if r.status == 200 => r,
+        Ok(r) => {
+            return Check::warn(
+                "memory",
+                format!("the gateway answered {}", r.status),
+                "run `sesh up`",
+            );
+        }
+        Err(e) => {
+            return Check::warn(
+                "memory",
+                format!("can't reach the gateway: {e}"),
+                "run `sesh up`",
+            );
+        }
+    };
+    if r.body["state"] != "ok" {
+        return Check::warn(
+            "memory",
+            "the memory store is unavailable",
+            "check `docker compose logs gateway postgres`, then `sesh up`",
+        );
+    }
+    let missing = r.body["missing"].as_u64().unwrap_or(0);
+    if r.body["embed"] != true {
+        return Check::warn(
+            "memory",
+            format!(
+                "the embedding service doesn't answer; recall matches words only ({missing} facts wait)"
+            ),
+            "check `docker compose logs embed`, then `sesh up`",
+        );
+    }
+    if missing > 0 {
+        return Check::warn(
+            "memory",
+            format!("{missing} facts wait for their embedding"),
+            "they are filled in within a minute; if not, check `docker compose logs gateway`",
+        );
+    }
+    Check::pass("memory", "the embedding service answers")
+}
+
 fn feeds_check(secrets: &Secrets, http: &dyn Http) -> Check {
     let Some(token) = secrets.get("SESH_GATEWAY_ADMIN_TOKEN") else {
         return Check::warn("feeds", "no gateway admin token yet", "run `sesh init`");
@@ -1183,6 +1237,40 @@ mod tests {
         let a = checks.iter().find(|c| c.id == "alias-answers").unwrap();
         assert_eq!(a.status, Status::Fail);
         assert_eq!(a.fix.as_deref(), Some("run `sesh up`"));
+    }
+
+    #[test]
+    fn memory_warns_when_embeddings_are_down_or_missing() {
+        let mut s = Secrets::default();
+        s.set("SESH_GATEWAY_ADMIN_TOKEN", "admin");
+        let reply = |body: Value| {
+            FakeHttp::new(move |_, url, _| {
+                assert!(url.ends_with("/admin/memory/status"));
+                (200, body.clone())
+            })
+        };
+        let c = memory_check(
+            &s,
+            &reply(json!({"state": "ok", "embed": true, "missing": 0})),
+        );
+        assert_eq!(c.status, Status::Pass);
+        let c = memory_check(
+            &s,
+            &reply(json!({"state": "ok", "embed": false, "missing": 2})),
+        );
+        assert_eq!(c.status, Status::Warn);
+        assert!(
+            c.detail.contains("words only (2 facts wait)"),
+            "{}",
+            c.detail
+        );
+        let c = memory_check(
+            &s,
+            &reply(json!({"state": "ok", "embed": true, "missing": 3})),
+        );
+        assert!(c.detail.contains("3 facts wait"));
+        let c = memory_check(&s, &reply(json!({"state": "unavailable", "embed": true})));
+        assert_eq!(c.status, Status::Warn);
     }
 
     #[test]
