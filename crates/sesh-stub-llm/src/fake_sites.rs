@@ -177,7 +177,8 @@ impl Fake {
             ("fake-bank.test", "GET", "/statement") if signed_in => file(
                 "application/pdf",
                 "statement-november.pdf",
-                b"%PDF-1.4 fake statement for Ana\n%%EOF".to_vec(),
+                // A real PDF, so Paperless can file it (FR-018).
+                crate::fake_google::pdf("Fake Bank statement for Ana, November: 412 kroner"),
             ),
             ("fake-bank.test", "GET", "/setup.exe") => {
                 file("application/x-msdownload", "setup.exe", b"MZ fake".to_vec())
