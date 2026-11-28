@@ -1,17 +1,41 @@
-//! Attachment references (specs/005 research.md R5): opaque ids the
-//! gateway issues to one agent for one attachment, so a script can file it
-//! without the bytes ever entering model context.
+//! File references (specs/005 research.md R5, specs/010 research.md R9):
+//! opaque ids the gateway issues to one agent for one file (a mail
+//! attachment, a stored document or a browser download), so a script can
+//! file or upload it without the bytes ever entering model context.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+/// Where a referenced file's bytes come from.
+#[derive(Clone, PartialEq)]
+pub enum Source {
+    /// A Gmail attachment, fetched from Google when used.
+    Gmail {
+        message_id: String,
+        attachment_id: String,
+    },
+    /// One of the owner's Paperless documents, fetched when used.
+    Document { id: u64 },
+    /// A browser download, held by the gateway.
+    Download { bytes: std::sync::Arc<Vec<u8>> },
+}
+
+impl std::fmt::Debug for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Source::Gmail { message_id, .. } => write!(f, "Gmail({message_id})"),
+            Source::Document { id } => write!(f, "Document({id})"),
+            Source::Download { bytes } => write!(f, "Download({} bytes)", bytes.len()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Attachment {
     pub agent: String,
     pub owner: String,
-    pub message_id: String,
-    pub attachment_id: String,
+    pub source: Source,
     pub filename: String,
     pub mime: String,
     pub size: u64,
@@ -34,6 +58,23 @@ impl Refs {
         r
     }
 
+    /// How many live references `agent` holds of downloads.
+    pub fn downloads_of(&self, agent: &str) -> Vec<(String, Attachment)> {
+        let m = self.map.lock().expect("lock");
+        let now = Instant::now();
+        m.iter()
+            .filter(|(_, (a, until))| {
+                *until > now && a.agent == agent && matches!(a.source, Source::Download { .. })
+            })
+            .map(|(r, (a, _))| (r.clone(), a.clone()))
+            .collect()
+    }
+
+    /// Forgets `r` (the oldest download, when an agent holds too many).
+    pub fn drop_ref(&self, r: &str) {
+        self.map.lock().expect("lock").remove(r);
+    }
+
     /// The attachment, if `r` is live and was issued to `agent`.
     pub fn resolve(&self, r: &str, agent: &str) -> Option<Attachment> {
         let m = self.map.lock().expect("lock");
@@ -52,8 +93,10 @@ mod tests {
         Attachment {
             agent: agent.into(),
             owner: "ana".into(),
-            message_id: "m1".into(),
-            attachment_id: "a1".into(),
+            source: Source::Gmail {
+                message_id: "m1".into(),
+                attachment_id: "a1".into(),
+            },
             filename: "invoice.pdf".into(),
             mime: "application/pdf".into(),
             size: 10,

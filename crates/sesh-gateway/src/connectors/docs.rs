@@ -42,14 +42,34 @@ pub fn descriptor() -> ConnectorDescriptor {
             (
                 "upload",
                 super::method(
-                    "File an email attachment, by the reference mail.read gave you, into your owner's documents.",
+                    "File a file, by a reference mail.read, browser.downloads or a click's download gave you, into your owner's documents.",
                     json!({"type": "object", "required": ["ref", "title"], "properties": {"ref": s(32, 32), "title": s(1, 200),
                     "tags": json!({"type": "array", "items": s(1, 50), "maxItems": 10})}}),
                     false,
                 ),
             ),
+            (
+                "ref",
+                super::method(
+                    "A reference to one of your documents, to upload it with browser.upload (the file itself never comes back).",
+                    json!({"type": "object", "required": ["id"], "properties": {"id": json!({"type": "integer", "minimum": 1, "maximum": 1_000_000_000})}}),
+                    false,
+                ),
+            ),
         ],
     )
+}
+
+/// A document's original file, by id (the caller checked the owner when
+/// it issued the reference: specs/010 R9).
+pub async fn document_bytes(gw: &Gateway, _owner: &str, id: u64) -> Result<Vec<u8>, String> {
+    let base = gw
+        .settings
+        .upstreams
+        .paperless
+        .trim_end_matches('/')
+        .to_string();
+    gw.paperless.original(&base, id).await
 }
 
 #[derive(Clone)]
@@ -258,6 +278,25 @@ impl Paperless {
             ids.push(id);
         }
         Ok(ids)
+    }
+
+    /// A document's original file.
+    async fn original(&self, base: &str, id: u64) -> Result<Vec<u8>, String> {
+        let tok = self.token(base).await?;
+        let r = self
+            .http
+            .get(format!("{base}/api/documents/{id}/download/?original=true"))
+            .header("Authorization", format!("Token {tok}"))
+            .send()
+            .await
+            .map_err(|_| "the document service is unavailable".to_string())?;
+        if !r.status().is_success() {
+            return Err("document not found".into());
+        }
+        Ok(r.bytes()
+            .await
+            .map_err(|_| "the document service sent an unreadable reply".to_string())?
+            .to_vec())
     }
 
     /// Hands the file to Paperless; returns its consumption task id.
@@ -617,7 +656,7 @@ pub async fn call(
             if att.size > gw.settings.upload_max_bytes {
                 return Err("file too large".into());
             }
-            let bytes = super::google::attachment_bytes(gw, &att).await?;
+            let bytes = super::file_bytes(gw, &att).await?;
             if bytes.len() as u64 > gw.settings.upload_max_bytes {
                 return Err("file too large".into());
             }
@@ -667,6 +706,46 @@ pub async fn call(
                     )
                 }
             }
+        }
+        "ref" => {
+            let id = args["id"].as_u64().unwrap_or(0);
+            let d = p
+                .req(
+                    &base,
+                    reqwest::Method::GET,
+                    &format!("/api/documents/{id}/"),
+                    &[],
+                    None,
+                )
+                .await?;
+            if d["owner"]
+                .as_u64()
+                .is_none_or(|o| !readable.contains_key(&o))
+            {
+                return Err("document not found".into());
+            }
+            let filename = d["original_file_name"]
+                .as_str()
+                .or(d["title"].as_str())
+                .unwrap_or("document")
+                .to_string();
+            let mime = d["mime_type"]
+                .as_str()
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let a = crate::refs::Attachment {
+                agent: agent.into(),
+                owner: scope.owner.clone(),
+                source: crate::refs::Source::Document { id },
+                filename: filename.clone(),
+                mime: mime.clone(),
+                size: d["original_size"].as_u64().unwrap_or(0),
+            };
+            let size = a.size;
+            let r = gw
+                .refs
+                .issue(a, std::time::Duration::from_secs(gw.settings.ref_ttl_secs));
+            Ok(json!({"ref": r, "filename": filename, "mime": mime, "size": size}))
         }
         _ => Err(format!("docs.{method} has no upstream")),
     }
@@ -837,8 +916,10 @@ mod tests {
             Attachment {
                 agent: "bob".into(),
                 owner: "ana".into(),
-                message_id: "m".into(),
-                attachment_id: "a".into(),
+                source: crate::refs::Source::Gmail {
+                    message_id: "m".into(),
+                    attachment_id: "a".into(),
+                },
                 filename: "x.pdf".into(),
                 mime: "application/pdf".into(),
                 size: 10,
@@ -856,8 +937,10 @@ mod tests {
             Attachment {
                 agent: "alice".into(),
                 owner: "ana".into(),
-                message_id: "m".into(),
-                attachment_id: "a".into(),
+                source: crate::refs::Source::Gmail {
+                    message_id: "m".into(),
+                    attachment_id: "a".into(),
+                },
                 filename: "x.exe".into(),
                 mime: "application/x-msdownload".into(),
                 size: 10,
