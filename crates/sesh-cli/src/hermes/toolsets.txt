@@ -1,0 +1,38 @@
+# Hermes Agent's built-in toolsets (its docs, reference/toolsets-reference,
+# v0.23.4) and its /v1/toolsets list. sesh disables every one (specs/009 research.md R2); the only
+# toolset left is the gateway's MCP server, `mcp-sesh`.
+a2a
+browser
+catalog
+clarify
+code_execution
+coding
+computer_use
+connections
+context_engine
+cronjob
+debugging
+delegation
+desktop_ui
+discord
+discord_admin
+feishu_doc
+feishu_drive
+file
+image_gen
+kanban
+memory
+project
+safe
+search
+session_search
+skills
+stt
+terminal
+todo
+tts
+video
+video_gen
+vision
+web
+x_search

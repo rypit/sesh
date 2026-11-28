@@ -954,6 +954,7 @@ pub mod tests {
             name: n.into(),
             token_sha256: token_hash(&format!("tok-{n}")),
             connectors: vec!["feeds".into()],
+            runtime: None,
             owner: owner.into(),
         };
         gw.agents = crate::Agents::fixed(AgentsFile {

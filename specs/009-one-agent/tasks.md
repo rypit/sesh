@@ -21,9 +21,9 @@ description: "Task list for feature 009: one agent end to end"
 
 ## Phase 2: Foundational
 
-- [ ] T003 `Agent.runtime: Option<String>` (`#[serde(default, skip_serializing_if)]`) in `crates/sesh-core/src/lib.rs`; a unit test that an old `agents.toml` still loads and the gateway ignores the field.
-- [ ] T004 Unit tests, then `crates/sesh-cli/src/agent.rs`: `--runtime hermes` (unknown runtime → error per contracts/cli.md); creates `AGENT_<NAME>_API_KEY` in `secrets.env`; `remove` deletes it and the router key's secret; `list` shows the runtime. Wire the flag in `main.rs`.
-- [ ] T005 Unit tests, then `crates/sesh-cli/src/hermes.rs`:
+- [x] T003 `Agent.runtime: Option<String>` (`#[serde(default, skip_serializing_if)]`) in `crates/sesh-core/src/lib.rs`; a unit test that an old `agents.toml` still loads and the gateway ignores the field.
+- [x] T004 Unit tests, then `crates/sesh-cli/src/agent.rs`: `--runtime hermes` (unknown runtime → error per contracts/cli.md); creates `AGENT_<NAME>_API_KEY` in `secrets.env`; `remove` deletes it and the router key's secret; `list` shows the runtime. Wire the flag in `main.rs`.
+- [x] T005 Unit tests, then `crates/sesh-cli/src/hermes.rs`:
   - `config_yaml(agent)`: `platform_toolsets.api_server: [mcp-sesh]`; `agent.disabled_toolsets` = every name in `hermes/toolsets.txt`; `mcp_servers.sesh` with `http://gateway:7000/mcp` and `Authorization: Bearer ${SESH_GATEWAY_TOKEN}`; the model (`custom`, `http://litellm:4000/v1`, `agent-main`, `${SESH_ROUTER_KEY}`) and every auxiliary task on `main`; memory off. Tests: no secret value in it; every built-in toolset disabled; `mcp-sesh` is the only platform toolset.
   - `env_file(token, router_key, api_key)`: the three variables, written 0600.
   - `service(agent)`: the Compose block per data-model.md (image, `env_file`, volume, read-only config mount, three networks, `API_SERVER_*` settings without values, healthcheck on `/health`, hardening per R9).

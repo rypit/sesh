@@ -60,6 +60,7 @@ mod tests {
             name: "a".into(),
             token_sha256: "0".repeat(64),
             connectors: vec!["mail".into()],
+            runtime: None,
             owner: owner.into(),
         }
     }

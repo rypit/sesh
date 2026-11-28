@@ -212,3 +212,43 @@ readable at `GET /stub/requests`.
 is large; pulling it in a group with other heavy tests would slow
 them). It needs the image pulled with the internet allowed for the
 runner, as the other adopted images are.
+
+## R12. Findings from running v0.23.4 (2026-11-28)
+
+Run locally on an internal network with a fake gateway (MCP over HTTP)
+and a fake model, using the configuration `hermes.rs` writes:
+
+- **Tool search bridge.** By default Hermes hides MCP tools behind three
+  bridge tools (`tool_search`, `tool_describe`, `tool_call`).
+  `tools.tool_search.enabled: off` makes the model see exactly the
+  gateway's two tools, named `mcp__sesh__execute` and
+  `mcp__sesh__search`. The stub's suffix match (R10) holds.
+- **Built-ins are refused.** A model call to `terminal` gets "Tool
+  'terminal' does not exist. Available tools: mcp__sesh__execute,
+  mcp__sesh__search", and nothing runs.
+- **`/v1/toolsets`** lists only built-in toolsets (26 of them, `stt` and
+  `a2a` beyond the docs' table, now in `toolsets.txt`), every one
+  `enabled: false`. MCP toolsets aren't listed, so the doctor checks
+  that no listed toolset is enabled, and the stack test checks the tools
+  the model is offered (contracts/cli.md updated).
+- **The router key** is read from `model.key_env: SESH_ROUTER_KEY`.
+  `OPENAI_API_KEY` and an interpolated `model.api_key` were ignored, and
+  a key that looks like a placeholder (too short) is replaced by
+  `no-key-required`; LiteLLM's `sk-…` keys are used as given.
+- **The MCP token** is interpolated in `mcp_servers.sesh.headers` from the
+  environment, as documented. If the gateway is unreachable at start,
+  Hermes parks the server until a reconnect; `depends_on: gateway:
+  service_healthy` keeps that from happening at `sesh up`.
+- **Read-only `config.yaml` works.** Hermes's start-up schema migration
+  fails to write it, logs the error, and continues; the configuration
+  is used as written (R8 holds, no fallback needed).
+- **Hardening works** (R9): a read-only root filesystem with tmpfs
+  `/run` (exec) and `/tmp`, `cap_drop: ALL` plus `CHOWN`,
+  `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`, and `no-new-privileges`.
+  The agent runs as `hermes`; only s6's init runs as root.
+- **Listeners**: `0.0.0.0:8642` (the API server, 401 without its key) and
+  one loopback-only port (Hermes's internal); nothing else.
+- **Model name**: `API_SERVER_MODEL_NAME` sets the `/v1/models` id.
+- Hermes couldn't determine the alias's context length and assumes
+  256k tokens. Follow-up: set `model.context_length` from the router's
+  model info once real hardware is in use.

@@ -5,7 +5,7 @@
 //! and never printed. The gateway sees only its SHA-256, in
 //! `$SESH_DATA_DIR/gateway/agents.toml`.
 
-use crate::secrets::{ensure_private_dir, random_token};
+use crate::secrets::{self, Secrets, ensure_private_dir, random_token};
 use anyhow::{Result, bail};
 use sesh_core::{Agent, AgentsFile, token_hash, valid_agent_name};
 use std::path::{Path, PathBuf};
@@ -15,6 +15,8 @@ pub const KNOWN_CONNECTORS: [&str; 7] = [
 ];
 /// Test-only connectors (specs/004 research.md R7), allowed in stub mode only.
 pub const TEST_CONNECTORS: [&str; 2] = ["testgate", "testcred"];
+/// The agent runtimes sesh can run (specs/009).
+pub const RUNTIMES: [&str; 1] = ["hermes"];
 
 fn stub_mode(dir: &Path) -> bool {
     crate::config::Config::load(dir)
@@ -34,7 +36,18 @@ pub fn load(dir: &Path) -> Result<AgentsFile> {
     AgentsFile::load(&gateway_dir(dir))
 }
 
-pub fn add(dir: &Path, name: &str, connectors: &[String], owner: &str) -> Result<String> {
+pub fn add(
+    dir: &Path,
+    name: &str,
+    connectors: &[String],
+    owner: &str,
+    runtime: Option<&str>,
+) -> Result<String> {
+    if let Some(r) = runtime
+        && !RUNTIMES.contains(&r)
+    {
+        bail!("unknown runtime {r:?}; the only one is hermes");
+    }
     let users = sesh_core::UsersFile::load(&gateway_dir(dir))?;
     if !users.knows(owner) {
         bail!("no user named {owner}; add them with `sesh user add {owner}` (or use household)");
@@ -72,15 +85,29 @@ pub fn add(dir: &Path, name: &str, connectors: &[String], owner: &str) -> Result
         name: name.to_string(),
         token_sha256: token_hash(&token),
         connectors: connectors.to_vec(),
+        runtime: runtime.map(str::to_string),
         owner: owner.to_string(),
     });
     std::fs::create_dir_all(gateway_dir(dir))?;
     file.save(&gateway_dir(dir))?;
-    Ok(format!(
+    let mut msg = format!(
         "added agent {name} for {owner} ({}); token in {} (not shown). Run `sesh up` to start its executor.",
         connectors.join(", "),
         path.display()
-    ))
+    );
+    if let Some(r) = runtime {
+        // The key Open WebUI sends to the runtime (specs/009 research.md R7).
+        let mut s = Secrets::load(dir)?;
+        s.set(
+            &secrets::agent_key(name, secrets::API_KEY),
+            &random_token()?,
+        );
+        s.save(dir)?;
+        msg.push_str(&format!(
+            "\nit will run as a {r} agent after the next `sesh up`"
+        ));
+    }
+    Ok(msg)
 }
 
 pub fn remove(dir: &Path, name: &str) -> Result<String> {
@@ -92,6 +119,14 @@ pub fn remove(dir: &Path, name: &str) -> Result<String> {
     }
     file.save(&gateway_dir(dir))?;
     let _ = std::fs::remove_file(token_path(dir, name));
+    let mut s = Secrets::load(dir)?;
+    let api = secrets::agent_key(name, secrets::API_KEY);
+    if s.get(&api).is_some() {
+        // The router key is revoked in LiteLLM by the next `sesh up`,
+        // which still needs it to find the key; only the API key goes now.
+        s.remove(&api);
+        s.save(dir)?;
+    }
     Ok(format!(
         "removed agent {name}; its token no longer works. Run `sesh up` to remove its executor."
     ))
@@ -101,7 +136,15 @@ pub fn list(dir: &Path) -> Result<Vec<String>> {
     Ok(load(dir)?
         .agents
         .iter()
-        .map(|a| format!("{}  {}  {}", a.name, a.owner, a.connectors.join(",")))
+        .map(|a| {
+            format!(
+                "{}  {}  {}  {}",
+                a.name,
+                a.owner,
+                a.connectors.join(","),
+                a.runtime.as_deref().unwrap_or("-")
+            )
+        })
         .collect())
 }
 
@@ -128,7 +171,14 @@ mod tests {
     #[test]
     fn add_stores_only_the_hash_for_the_gateway() {
         let dir = tempdir("add");
-        let msg = add(&dir, "alice", &["search".into(), "geo".into()], "household").unwrap();
+        let msg = add(
+            &dir,
+            "alice",
+            &["search".into(), "geo".into()],
+            "household",
+            None,
+        )
+        .unwrap();
         let token = std::fs::read_to_string(token_path(&dir, "alice")).unwrap();
         assert!(!msg.contains(&token), "the token must never be printed");
         let gw = std::fs::read_to_string(gateway_dir(&dir).join("agents.toml")).unwrap();
@@ -144,7 +194,7 @@ mod tests {
             assert_eq!(mode & 0o777, 0o600);
         }
         assert!(
-            add(&dir, "alice", &["search".into()], "household").is_err(),
+            add(&dir, "alice", &["search".into()], "household", None).is_err(),
             "duplicate"
         );
     }
@@ -152,15 +202,53 @@ mod tests {
     #[test]
     fn validates_names_and_connectors() {
         let dir = tempdir("val");
-        assert!(add(&dir, "Bad Name", &["search".into()], "household").is_err());
-        assert!(add(&dir, "bob", &[], "household").is_err());
-        assert!(add(&dir, "bob", &["email".into()], "household").is_err());
+        assert!(add(&dir, "Bad Name", &["search".into()], "household", None).is_err());
+        assert!(add(&dir, "bob", &[], "household", None).is_err());
+        assert!(add(&dir, "bob", &["email".into()], "household", None).is_err());
+    }
+
+    #[test]
+    fn a_runtime_agent_gets_an_api_key_and_loses_it_on_removal() {
+        let dir = tempdir("rt");
+        assert!(
+            add(&dir, "h", &["search".into()], "household", Some("other"))
+                .unwrap_err()
+                .to_string()
+                .contains("the only one is hermes")
+        );
+        let msg = add(
+            &dir,
+            "house-hold",
+            &["search".into()],
+            "household",
+            Some("hermes"),
+        )
+        .unwrap();
+        assert!(
+            msg.contains("hermes agent after the next `sesh up`"),
+            "{msg}"
+        );
+        let key = "AGENT_HOUSE_HOLD_API_KEY";
+        let v = Secrets::load(&dir).unwrap().get(key).unwrap().to_string();
+        assert!(v.len() >= 32 && !msg.contains(&v));
+        assert_eq!(
+            load(&dir)
+                .unwrap()
+                .get("house-hold")
+                .unwrap()
+                .runtime
+                .as_deref(),
+            Some("hermes")
+        );
+        assert!(list(&dir).unwrap()[0].ends_with("  hermes"));
+        remove(&dir, "house-hold").unwrap();
+        assert!(Secrets::load(&dir).unwrap().get(key).is_none());
     }
 
     #[test]
     fn remove_revokes() {
         let dir = tempdir("rm");
-        add(&dir, "bob", &["search".into()], "household").unwrap();
+        add(&dir, "bob", &["search".into()], "household", None).unwrap();
         let token = std::fs::read_to_string(token_path(&dir, "bob")).unwrap();
         remove(&dir, "bob").unwrap();
         assert!(load(&dir).unwrap().by_token(&token).is_none());

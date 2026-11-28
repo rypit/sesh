@@ -76,6 +76,19 @@ pub const WEBUI_ROUTER_KEY: &str = "WEBUI_ROUTER_KEY";
 pub const EVAL_ROUTER_KEY: &str = "EVAL_ROUTER_KEY";
 pub const WEBUI_ADMIN_EMAIL: &str = "WEBUI_ADMIN_EMAIL";
 
+/// An agent runtime's key in `secrets.env` (specs/009 data-model.md):
+/// `AGENT_<NAME>_<what>`, the name upper-cased with `-` as `_`.
+pub fn agent_key(agent: &str, what: &str) -> String {
+    format!(
+        "AGENT_{}_{what}",
+        agent.to_ascii_uppercase().replace('-', "_")
+    )
+}
+/// The key Open WebUI sends to an agent's runtime, which requires it.
+pub const API_KEY: &str = "API_KEY";
+/// The agent runtime's own router key, limited to the aliases.
+pub const ROUTER_KEY: &str = "ROUTER_KEY";
+
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Secrets {
     values: BTreeMap<String, String>,

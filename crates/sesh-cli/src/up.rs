@@ -996,7 +996,7 @@ mod tests {
     #[test]
     fn first_up_migrates_then_starts_services_and_webui_last() {
         let dir = ready("first");
-        crate::agent::add(&dir, "alice", &["search".into()], "household").unwrap();
+        crate::agent::add(&dir, "alice", &["search".into()], "household", None).unwrap();
         let compose = fake();
         run(&dir, &compose, &router()).unwrap();
         assert_eq!(
@@ -1098,6 +1098,7 @@ mod tests {
                 name: n.into(),
                 token_sha256: "0".repeat(64),
                 connectors: vec!["search".into()],
+                runtime: None,
             });
         }
         let y = generated_overlay(&f, false);

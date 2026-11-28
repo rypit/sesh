@@ -47,11 +47,10 @@ removed household-agent's router key
 New check `agent-runtimes`, per agent with a runtime:
 - the container is running and healthy;
 - `GET /v1/toolsets` (with its API key, on loopback inside the
-  runtime's container through `docker exec`) lists exactly one enabled
-  toolset, `mcp-sesh`, whose tools are the gateway's `search` and
-  `execute`;
+  runtime's container through `docker exec`) lists no enabled toolset
+  (it lists only built-ins; research.md R12);
 - its `config.yaml` matches what sesh would write.
 
-Fail line: `agent-runtimes: household-agent offers toolsets beyond the gateway's: terminal`.
+Fail line: `agent-runtimes: household-agent has built-in toolsets enabled: terminal`.
 
 `network-layout` includes the agent networks.
