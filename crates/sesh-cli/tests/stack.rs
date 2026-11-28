@@ -777,7 +777,7 @@ fn gateway_stack() {
     );
     let log = stack.sql("SELECT string_agg(args_summary::text, ' ') FROM audit");
     assert!(
-        !log.contains(&alice_t) && !log.contains(&bob_t),
+        !log.contains(leak_probe(&alice_t)) && !log.contains(leak_probe(&bob_t)),
         "SC-006: a token reached the audit log"
     );
     let pw = stack.secret("GATEWAY_DB_PASSWORD");
@@ -889,6 +889,32 @@ fn capability_shape_matches_43_base64url_characters() {
     assert!(!has_capability_shape(
         "https://example.org/fake exec-0123456789abcdef"
     ));
+}
+
+/// What a secret scan looks for: the secret's first 20 characters (all of
+/// a shorter one), which survive the audit log's cut and still can't
+/// appear by chance.
+fn leak_probe(secret: &str) -> &str {
+    secret
+        .char_indices()
+        .nth(20)
+        .map_or(secret, |(i, _)| &secret[..i])
+}
+
+/// The audit log cuts every string to 40 characters
+/// (`crates/sesh-gateway/src/redact.rs`, `MAX_STRING`), so a scan of it
+/// for a whole 43-character secret could never fail.
+#[test]
+fn leak_probe_fits_in_an_audited_string() {
+    let token = "A".repeat(43);
+    let audited: String = format!("\"{token}\"").chars().take(40).collect();
+    assert!(
+        !audited.contains(&token),
+        "why whole-token scans can't fail"
+    );
+    assert!(audited.contains(leak_probe(&token)));
+    assert_eq!(leak_probe("short"), "short");
+    assert_eq!(leak_probe(&"\u{e9}".repeat(30)), "\u{e9}".repeat(20));
 }
 
 // ---- Feature 003: model evals ----
@@ -1538,7 +1564,7 @@ fn secrets_stack() {
     {
         for s in [&value, &value2, &secret, &form_secret.to_string()] {
             assert!(
-                !text.contains(s.as_str()),
+                !text.contains(leak_probe(s)),
                 "SC-004: a secret reached {what}"
             );
         }
@@ -2292,7 +2318,7 @@ fn feeds_stack() {
         .chain(seen.into_iter().map(|t| ("a result", t)))
     {
         assert!(
-            !text.contains(&pw),
+            !text.contains(leak_probe(&pw)),
             "SC-004: the Miniflux password reached {what}"
         );
     }
