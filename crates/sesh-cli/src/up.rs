@@ -26,6 +26,10 @@ pub const GATEWAY_SQL: &str = include_str!("../../../deploy/postgres/gateway.sql
 /// Run in each service database after [`GATEWAY_SQL`] (specs/007 R2).
 pub const OWNERS_SQL: &str = include_str!("../../../deploy/postgres/owners.sql");
 pub const SEARXNG_SETTINGS: &str = include_str!("../../../deploy/searxng/settings.yml");
+/// The browser's seccomp profile (specs/010 research.md R3): Docker's
+/// default (moby v28.3.3) plus one rule letting Chromium build its own
+/// sandbox (user namespaces and chroot) without any capability.
+pub const BROWSER_SECCOMP: &str = include_str!("../../../deploy/browser/seccomp.json");
 
 const KIWIX_IMAGE: &str = "ghcr.io/kiwix/kiwix-serve:3.8.2@sha256:e478554a9920412eeb5ce1d73f24e4b28445ebed233187cdd03c623c32be46a5";
 /// Each adopted service with its own Postgres login (specs/007 R1,
@@ -159,7 +163,7 @@ pub fn generated_overlay(agents: &AgentsFile, kiwix: bool) -> String {
 /// hardened, its profile in a volume, its proxy the gateway.
 pub fn browser_service(agent: &str) -> String {
     format!(
-        "  browser-{agent}:\n    image: ${{SESH_BROWSER_IMAGE:-sesh-browser:dev}}\n    environment:\n      SESH_PROXY: http://gateway-browser-{agent}:7004\n      SESH_BROWSER_FLAGS: ${{SESH_BROWSER_FLAGS:-}}\n    volumes:\n      - browser-{agent}-profile:/profile\n    networks: [browser-{agent}]\n    read_only: true\n    tmpfs: [/tmp, \"/home/browser:uid=10001,gid=10001\"]\n    shm_size: 512m\n    cap_drop: [ALL]\n    security_opt: [\"no-new-privileges:true\"]\n    mem_limit: 1536m\n    pids_limit: 512\n    depends_on:\n      gateway:\n        condition: service_healthy\n    restart: unless-stopped\n"
+        "  browser-{agent}:\n    image: ${{SESH_BROWSER_IMAGE:-sesh-browser:dev}}\n    environment:\n      SESH_PROXY: http://gateway-browser-{agent}:7004\n      SESH_BROWSER_FLAGS: ${{SESH_BROWSER_FLAGS:-}}\n    volumes:\n      - browser-{agent}-profile:/profile\n    networks: [browser-{agent}]\n    read_only: true\n    tmpfs: [/tmp, \"/home/browser:uid=10001,gid=10001\"]\n    shm_size: 512m\n    cap_drop: [ALL]\n    security_opt: [\"no-new-privileges:true\", \"seccomp=${{SESH_DATA_DIR:?}}/compose/browser-seccomp.json\"]\n    mem_limit: 1536m\n    pids_limit: 512\n    depends_on:\n      gateway:\n        condition: service_healthy\n    restart: unless-stopped\n"
     )
 }
 
@@ -236,6 +240,7 @@ pub fn write_compose_files(dir: &Path, config: &Config) -> Result<Vec<PathBuf>> 
     std::fs::write(cdir.join("compose.yaml"), COMPOSE_YAML)?;
     std::fs::write(cdir.join("postgres-init.sql"), POSTGRES_INIT_SQL)?;
     std::fs::write(cdir.join("searxng-settings.yml"), SEARXNG_SETTINGS)?;
+    std::fs::write(cdir.join("browser-seccomp.json"), BROWSER_SECCOMP)?;
     // Postgres's login rules (specs/008 R10): local administration only,
     // until `sesh up` has read the networks' ranges.
     let hba_dir = dir.join(crate::pg_hba::DIR);
@@ -1399,6 +1404,50 @@ mod tests {
                 .any(|c| c.contains("hermes-house"))
         );
         assert!(!crate::hermes::env_path(&dir, "house").exists());
+    }
+
+    #[test]
+    fn the_browsers_seccomp_profile_is_dockers_default_plus_chromiums_sandbox() {
+        let p: Value = serde_json::from_str(BROWSER_SECCOMP).unwrap();
+        assert_eq!(p["defaultAction"], "SCMP_ACT_ERRNO", "deny by default");
+        let rules = p["syscalls"].as_array().unwrap();
+        let last = rules.last().unwrap();
+        assert_eq!(last["action"], "SCMP_ACT_ALLOW");
+        assert_eq!(
+            last["names"],
+            json!(["clone", "unshare", "setns", "chroot"])
+        );
+        assert!(last.get("args").is_none() && last.get("includes").is_none());
+        // Nothing else is opened up: no other unconditional rule names
+        // these, or mount, ptrace, bpf or keyctl.
+        for r in &rules[..rules.len() - 1] {
+            let names: Vec<&str> = r["names"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
+            let conditional = r.get("includes").is_some()
+                || r.get("args").is_some()
+                || r["action"] != "SCMP_ACT_ALLOW";
+            for n in [
+                "unshare", "setns", "chroot", "mount", "ptrace", "bpf", "keyctl",
+            ] {
+                assert!(
+                    !names.contains(&n) || conditional,
+                    "{n} is unconditionally allowed elsewhere"
+                );
+            }
+        }
+        let mut f = runtime_agents();
+        f.agents[1].connectors.push("browser".into());
+        let y = generated_overlay(&f, false);
+        let b = block(&y, "browser-bob");
+        assert!(
+            b.contains("seccomp=${SESH_DATA_DIR:?}/compose/browser-seccomp.json"),
+            "{b}"
+        );
+        assert!(!b.contains("unconfined") && !b.contains("--no-sandbox"));
     }
 
     #[test]

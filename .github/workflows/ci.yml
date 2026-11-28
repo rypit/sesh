@@ -173,6 +173,10 @@ jobs:
       # SC-005 (specs/002-gateway-core): containers get no internet while
       # the stack tests run. DOCKER-USER filters only traffic forwarded from
       # containers, so image pulls and cargo (host traffic) still work.
+      # Chromium's own sandbox needs unprivileged user namespaces, which
+      # Ubuntu 23.10+ restricts with AppArmor (specs/010 research.md R3).
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Block containers' internet access
         run: |
           ext=$(ip -o route show default | awk '{print $5; exit}')

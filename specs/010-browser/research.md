@@ -286,3 +286,14 @@ can be uploaded.
   `--remote-debugging-address` and listens on 127.0.0.1 (checked with
   Chromium 153 locally), so the image runs `socat` to expose port 9222 on
   the container's address, which is only on `browser-<agent>`.
+- **Chromium's own sandbox stays on** (decided 2026-11-28, after CI showed
+  "No usable sandbox"). The browser container gets a seccomp profile,
+  `deploy/browser/seccomp.json`: Docker's default (moby v28.3.3) plus one
+  rule allowing `clone`, `unshare`, `setns` and `chroot`, which Chromium
+  needs to build its namespace sandbox without any capability. Everything
+  else stays as locked down: no capabilities, `no-new-privileges`,
+  read-only root, non-root user. Hosts that restrict unprivileged user
+  namespaces with AppArmor (Ubuntu 23.10+, GitHub's runners) need
+  `kernel.apparmor_restrict_unprivileged_userns=0`; CI sets it, and
+  `sesh doctor`'s `browsers` check names the fix when a browser keeps
+  restarting. `--no-sandbox` is never used.

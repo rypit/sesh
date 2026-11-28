@@ -21,7 +21,11 @@ a TypeScript controller inside it. Two facts changed that:
    - read-only root, tmpfs, no capabilities, `no-new-privileges`, memory
      and process limits;
    - its profile in a per-agent volume;
-   - Chromium's own sandbox stays on.
+   - Chromium's own sandbox stays on: a seccomp profile (Docker's default
+     plus `clone`, `unshare`, `setns`, `chroot`) lets it build its
+     namespace sandbox without any capability. Hosts must allow
+     unprivileged user namespaces; `sesh doctor` checks the browser
+     starts. `--no-sandbox` is never used.
 
    No microVM: the household decided the hardened container is enough
    (2026-11-28), which also drops sbx and its Docker sign-in.
