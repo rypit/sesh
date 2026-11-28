@@ -4547,6 +4547,58 @@ fn memory_stack() {
         assert!(got.iter().any(|f| f.contains(want)), "SC-003: {q}: {got:?}");
     }
 
+    // Other languages, each asked in its own words: the model matches
+    // within a language too. Mandarin has no spaces, so only meaning
+    // can find it.
+    let others = [
+        (
+            "Arabic",
+            "موعد طبيب الأسنان يوم الأحد",
+            "متى أذهب إلى عيادة الأسنان؟",
+            "طبيب",
+        ),
+        (
+            "German",
+            "Der Schlüssel für den Keller hängt neben der Tür",
+            "Wo finde ich den Kellerschlüssel?",
+            "Keller",
+        ),
+        (
+            "Spanish",
+            "Las plantas del balcón necesitan agua cada dos días",
+            "¿Con qué frecuencia hay que regar las plantas?",
+            "balcón",
+        ),
+        (
+            "Italian",
+            "La nonna arriva in treno sabato",
+            "Quando viene la nonna a trovarci?",
+            "treno",
+        ),
+        (
+            "French",
+            "Le chat doit prendre son médicament le soir",
+            "À quelle heure faut-il soigner le chat ?",
+            "médicament",
+        ),
+        (
+            "Mandarin",
+            "妈妈的生日是十月五日",
+            "妈妈什么时候过生日？",
+            "十月",
+        ),
+    ];
+    for (_, fact, _, _) in &others {
+        remember(&mut house, fact, false);
+    }
+    for (lang, _, q, want) in &others {
+        let got = recall(&mut house, q, false);
+        assert!(
+            got.iter().any(|f| f.contains(want)),
+            "SC-003 ({lang}): {q}: {got:?}"
+        );
+    }
+
     // FR-009: with the embedding service down, saving still works and
     // recall falls back to words; the gap is filled after it returns.
     assert!(stack.compose(&[], &[], &["stop", "embed"]).status.success());

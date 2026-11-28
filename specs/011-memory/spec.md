@@ -84,7 +84,7 @@ Text an attacker plants (from an email, a web page, a document) might get saved 
 - **The embedding container is down or slow**: saving still works (the fact is embedded later) and recall falls back to word search; `sesh doctor` reports it.
 - **Nothing relevant is remembered**: no recall block is added to the chat at all.
 - **A trivial message** ("thanks", "ok"): no recall is looked up.
-- **The household's languages**: English, primarily. A fact or question in another language is still found (a multilingual model), but only English and one cross-language case are tested.
+- **The household's languages**: English, primarily. A fact or question in another language is still found (a multilingual model), and the tests check English, one cross-language case, and a fact found in its own language for Arabic, German, Spanish, Italian, French and Mandarin.
 - **A user is removed** (012): their memories go with them; for now, `sesh memory forget <owner> --all`.
 - **Backups**: memories are in the gateway's database, so they're backed up with it (012).
 
