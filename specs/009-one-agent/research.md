@@ -254,3 +254,16 @@ and a fake model, using the configuration `hermes.rs` writes:
 - Hermes couldn't determine the alias's context length and assumes
   256k tokens. Follow-up: set `model.context_length` from the router's
   model info once real hardware is in use.
+
+## R13. CI results (T019)
+
+- PR #16's final run (`a29434b`) passed every job: `check`, `images` and
+  all four stack groups, including `agent_stack` on the real Hermes
+  image with containers' internet blocked.
+- Two test fixes were needed on the way, both in the test, not the
+  runtime: the stub also serves the doctor's `ping` probe, and the real
+  gateway offers three tools (`search`, `execute`, `describe`), not the
+  fake's two; `agent_stack` now compares against the gateway's own
+  `tools/list`.
+- No deviations from R8 (read-only `config.yaml`) or R9 (hardening,
+  including a read-only root filesystem).

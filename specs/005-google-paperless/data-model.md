@@ -4,7 +4,7 @@
 
 | Field | Notes |
 |---|---|
-| `name` | `[a-z][a-z0-9-]{0,31}`; `household` is reserved and always present |
+| `name` | `[a-z][a-z0-9-]{0,31}`; `household` is reserved and always present; `gateway` is reserved (`sesh-gateway` is the Paperless, Miniflux and ntfy service account) |
 | `topic` | ntfy topic `sesh-<name>-<8 hex>`; Household = `gateway.ntfy_topic` |
 
 ## Agent (`gateway/agents.toml`, extends feature 002)

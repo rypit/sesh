@@ -1,9 +1,10 @@
 name: ci
 
 # A push to any branch runs the quick `check` (fmt, clippy, unit tests,
-# cargo-deny, diagram and Compose checks). The images and stack tests run
-# only for pull requests, pushes to main, and on demand (workflow_dispatch),
-# so intermediate pushes to a branch without a PR stay cheap. A newer run
+# cargo-deny, diagram and Compose checks), as does a pull request from a
+# fork. The images and stack tests run only for pull requests, pushes to
+# main, and on demand (workflow_dispatch), so intermediate pushes to a
+# branch without a PR stay cheap. A newer run
 # for the same branch or PR cancels the one it supersedes.
 on:
   push:
@@ -51,8 +52,11 @@ jobs:
           fi
 
   check:
-    # On a PR, the push run's `check` already covers the head commit.
-    if: github.event_name != 'pull_request'
+    # On a same-repo PR, the push run's `check` already covers the head
+    # commit. A fork's pushes run no workflow here, so its PR runs `check`.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
