@@ -95,6 +95,11 @@ enum Command {
         #[command(subcommand)]
         command: CredentialCommand,
     },
+    /// The agents' browser: store a login an agent may use on one site.
+    Browser {
+        #[command(subcommand)]
+        command: BrowserCommand,
+    },
     /// Connect or disconnect a user's (or the Household's) Google account.
     Google {
         #[command(subcommand)]
@@ -167,6 +172,13 @@ enum CredentialCommand {
     Request { connector: String, name: String },
     /// List the credentials connectors need, and whether each is set.
     List,
+}
+
+#[derive(Subcommand)]
+enum BrowserCommand {
+    /// Print a one-time link where the person enters their login for a site
+    /// (the agent can use it only on that site and never sees it).
+    Login { owner: String, site: String },
 }
 
 #[derive(Subcommand)]
@@ -318,6 +330,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 println!("{line}");
             }
         }
+        Command::Browser { command } => {
+            let http = UreqHttp::new(Duration::from_secs(15));
+            let BrowserCommand::Login { owner, site } = command;
+            for line in credential::site_login(&dir, &http, &owner, &site)? {
+                println!("{line}");
+            }
+        }
         Command::Google { command } => {
             let http = UreqHttp::new(Duration::from_secs(30));
             let lines = match command {
@@ -384,12 +403,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 .filter(|a| a.runtime.is_some())
                 .map(|a| a.name.clone())
                 .collect();
+            let browsers: Vec<String> = all
+                .iter()
+                .filter(|a| a.connectors.iter().any(|c| c == "browser"))
+                .map(|a| a.name.clone())
+                .collect();
             let agents: Vec<String> = all.into_iter().map(|a| a.name).collect();
             let checks = doctor::run_with(
                 &config,
                 &secrets,
                 &agents,
                 &runtimes,
+                &browsers,
                 &compose_for(&dir)?,
                 &http,
                 &TailscaleCli,

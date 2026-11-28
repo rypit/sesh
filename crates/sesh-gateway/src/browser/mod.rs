@@ -31,6 +31,9 @@ pub struct Hub {
     /// (owner, site) pairs whose first login the person approved.
     approved_sites: std::sync::Mutex<HashSet<(String, String)>>,
     pub live: live::Grants,
+    /// Site-login forms: credential name → (owner, site), to show the
+    /// site on the form (`sesh browser login`).
+    pub site_forms: std::sync::Mutex<HashMap<String, (String, String)>>,
 }
 
 impl Default for Hub {
@@ -41,6 +44,7 @@ impl Default for Hub {
             in_use: broadcast::channel(64).0,
             approved_sites: std::sync::Mutex::default(),
             live: live::Grants::default(),
+            site_forms: std::sync::Mutex::default(),
         }
     }
 }

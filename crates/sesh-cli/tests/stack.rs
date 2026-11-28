@@ -3456,7 +3456,11 @@ impl Stack {
     fn assert_runtime_reachability(&self, sources: &[&str]) {
         let agents = [RT_AGENT];
         let executor = format!("executor-{RT_AGENT}");
-        let mut all: Vec<String> = layout::services_with(true, &agents);
+        let install = layout::Install {
+            runtimes: &agents,
+            browsers: &[],
+        };
+        let mut all: Vec<String> = layout::services_with(true, &install);
         all.push(executor.clone());
         let addrs: std::collections::BTreeMap<String, Vec<String>> = all
             .iter()
@@ -3466,14 +3470,14 @@ impl Stack {
         for from in sources {
             let mut targets = vec![("1.1.1.1".to_string(), 443)];
             let mut expect = vec![("internet".to_string(), 443, false)];
-            for (to, port) in layout::listens_with(&agents) {
+            for (to, port) in layout::listens_with(&install) {
                 if to == *from || !addrs.contains_key(&to) {
                     continue;
                 }
                 let want = if *from == executor {
                     to == "gateway" && port == 7001
                 } else {
-                    layout::reachable_with(from, &to, port, true, &agents)
+                    layout::reachable_with(from, &to, port, true, &install)
                 };
                 for a in &addrs[&to] {
                     targets.push((a.clone(), port));
@@ -3684,10 +3688,17 @@ fn agent_stack() {
     // US3 (scenario 3, SC-003): the runtime reaches the gateway's agent
     // listener and the router, nothing else; nothing else reaches the
     // agent listener; the executor still reaches only :7001.
-    let mut want: Vec<String> = layout::networks_of_with(&rt, true, &[RT_AGENT])
-        .iter()
-        .map(|n| format!("sesh_{n}"))
-        .collect();
+    let mut want: Vec<String> = layout::networks_of_with(
+        &rt,
+        true,
+        &layout::Install {
+            runtimes: &[RT_AGENT],
+            browsers: &[],
+        },
+    )
+    .iter()
+    .map(|n| format!("sesh_{n}"))
+    .collect();
     want.sort();
     let mut got: Vec<String> = stack
         .networks_of(&rt)

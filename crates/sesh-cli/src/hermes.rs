@@ -35,15 +35,20 @@ pub fn gateway_alias(agent: &str) -> String {
     format!("gateway-agent-{agent}")
 }
 
-/// The three pair networks (research.md R6): with the gateway, with the
-/// model router, with the chat UI.
-pub fn networks(agent: &str) -> [String; 3] {
-    [
-        format!("agent-{agent}"),
-        format!("agent-{agent}-model"),
-        format!("agent-{agent}-chat"),
-    ]
+/// The pair networks (specs/009 research.md R6): with the gateway and
+/// with the model router. Open WebUI reaches the runtime through the
+/// gateway's chat listener (specs/010 R2), so there is no chat network.
+pub fn networks(agent: &str) -> [String; 2] {
+    [format!("agent-{agent}"), format!("agent-{agent}-model")]
 }
+
+/// The chat listener's address for an agent, as Open WebUI's connection.
+pub fn chat_url(agent: &str) -> String {
+    format!("http://{CHAT_ALIAS}:7003/agent/{agent}/v1")
+}
+
+/// The gateway's alias on the `chat` network (specs/010 R2).
+pub const CHAT_ALIAS: &str = "gateway-chat";
 
 pub fn config_path(dir: &Path, agent: &str) -> PathBuf {
     dir.join("agents").join(agent).join("config.yaml")
@@ -110,9 +115,9 @@ pub fn env_text(gateway_token: &str, router_key: &str, api_key: &str) -> String 
 /// The Compose service, for the generated overlay.
 pub fn compose_service(agent: &str) -> String {
     let svc = service(agent);
-    let [a, m, c] = networks(agent);
+    let [a, m] = networks(agent);
     format!(
-        "  {svc}:\n    image: ${{SESH_HERMES_IMAGE:-{IMAGE}}}\n    command: [\"gateway\", \"run\"]\n    env_file: [\"${{SESH_DATA_DIR:?}}/agents/{agent}.env\"]\n    environment:\n      API_SERVER_ENABLED: \"true\"\n      API_SERVER_HOST: 0.0.0.0\n      API_SERVER_PORT: \"{PORT}\"\n      API_SERVER_MODEL_NAME: {agent}\n    volumes:\n      - {svc}-data:/opt/data\n      - ${{SESH_DATA_DIR:?}}/agents/{agent}/config.yaml:/opt/data/config.yaml:ro\n    networks: [{a}, {m}, {c}]\n    read_only: true\n    tmpfs: [\"/run:exec\", /tmp]\n    security_opt: [\"no-new-privileges:true\"]\n    cap_drop: [ALL]\n    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]\n    mem_limit: 2g\n    pids_limit: 512\n    healthcheck:\n      test: [\"CMD-SHELL\", \"curl -fsS http://127.0.0.1:{PORT}/health >/dev/null\"]\n      interval: 10s\n      timeout: 5s\n      retries: 60\n    depends_on:\n      gateway:\n        condition: service_healthy\n      litellm:\n        condition: service_healthy\n    restart: unless-stopped\n"
+        "  {svc}:\n    image: ${{SESH_HERMES_IMAGE:-{IMAGE}}}\n    command: [\"gateway\", \"run\"]\n    env_file: [\"${{SESH_DATA_DIR:?}}/agents/{agent}.env\"]\n    environment:\n      API_SERVER_ENABLED: \"true\"\n      API_SERVER_HOST: 0.0.0.0\n      API_SERVER_PORT: \"{PORT}\"\n      API_SERVER_MODEL_NAME: {agent}\n    volumes:\n      - {svc}-data:/opt/data\n      - ${{SESH_DATA_DIR:?}}/agents/{agent}/config.yaml:/opt/data/config.yaml:ro\n    networks: [{a}, {m}]\n    read_only: true\n    tmpfs: [\"/run:exec\", /tmp]\n    security_opt: [\"no-new-privileges:true\"]\n    cap_drop: [ALL]\n    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]\n    mem_limit: 2g\n    pids_limit: 512\n    healthcheck:\n      test: [\"CMD-SHELL\", \"curl -fsS http://127.0.0.1:{PORT}/health >/dev/null\"]\n      interval: 10s\n      timeout: 5s\n      retries: 60\n    depends_on:\n      gateway:\n        condition: service_healthy\n      litellm:\n        condition: service_healthy\n    restart: unless-stopped\n"
     )
 }
 
@@ -214,7 +219,7 @@ mod tests {
     #[test]
     fn the_service_has_no_way_out_and_no_privilege_escalation() {
         let s = compose_service("h");
-        assert!(s.contains("networks: [agent-h, agent-h-model, agent-h-chat]"));
+        assert!(s.contains("networks: [agent-h, agent-h-model]"));
         assert!(!s.contains("ports:"), "no published port");
         assert!(s.contains("no-new-privileges:true") && s.contains("cap_drop: [ALL]"));
         assert!(s.contains("read_only: true"));

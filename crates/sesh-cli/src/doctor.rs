@@ -83,9 +83,10 @@ pub fn run(
     http: &dyn Http,
     tailscale: &dyn Tailscale,
 ) -> Vec<Check> {
-    run_with(config, secrets, agents, &[], compose, http, tailscale)
+    run_with(config, secrets, agents, &[], &[], compose, http, tailscale)
 }
 
+#[allow(clippy::too_many_arguments)]
 /// [`run`] for a stack with agent runtimes (`runtimes`: their agents'
 /// names; specs/009).
 pub fn run_with(
@@ -93,6 +94,7 @@ pub fn run_with(
     secrets: &Secrets,
     agents: &[String],
     runtimes: &[String],
+    browsers: &[String],
     compose: &dyn Compose,
     http: &dyn Http,
     tailscale: &dyn Tailscale,
@@ -106,7 +108,7 @@ pub fn run_with(
     checks.push(feeds_check(secrets, http));
     checks.push(audit_check(compose));
     checks.push(isolation_check(compose));
-    checks.push(network_check_with(config, compose, runtimes));
+    checks.push(network_check_with(config, compose, runtimes, browsers));
     if !runtimes.is_empty() {
         checks.push(runtime_check(runtimes, compose));
     }
@@ -655,12 +657,22 @@ fn runtime_check(runtimes: &[String], compose: &dyn Compose) -> Check {
 /// rules bind each login to its own network's current ranges.
 #[cfg(test)]
 fn network_check(config: &Config, compose: &dyn Compose) -> Check {
-    network_check_with(config, compose, &[])
+    network_check_with(config, compose, &[], &[])
 }
 
-fn network_check_with(config: &Config, compose: &dyn Compose, runtimes: &[String]) -> Check {
+fn network_check_with(
+    config: &Config,
+    compose: &dyn Compose,
+    runtimes: &[String],
+    browsers: &[String],
+) -> Check {
     let stub = crate::init::is_stub(config);
     let runtimes: Vec<&str> = runtimes.iter().map(String::as_str).collect();
+    let browsers: Vec<&str> = browsers.iter().map(String::as_str).collect();
+    let install = crate::layout::Install {
+        runtimes: &runtimes,
+        browsers: &browsers,
+    };
     let mut problems = vec![];
     match compose.service_networks() {
         Ok(running) => {
@@ -668,10 +680,13 @@ fn network_check_with(config: &Config, compose: &dyn Compose, runtimes: &[String
                 if svc.starts_with("executor-") || svc == "kiwix" {
                     continue;
                 }
-                let want = crate::layout::networks_of_with(&svc, stub, &runtimes);
+                let want = crate::layout::networks_of_with(&svc, stub, &install);
                 if want.is_empty() {
                     if svc.starts_with("hermes-") {
                         problems.push(format!("{svc} runs but its agent has no runtime"));
+                    }
+                    if svc.starts_with("browser-") {
+                        problems.push(format!("{svc} runs but its agent has no browser"));
                     }
                     continue;
                 }

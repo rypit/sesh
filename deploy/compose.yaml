@@ -134,7 +134,7 @@ services:
       - open-webui-data:/app/backend/data
     ports:
       - "127.0.0.1:${SESH_WEBUI_PORT:-3000}:8080"
-    networks: [openwebui-db, models, openwebui-redis, webui-edge]
+    networks: [openwebui-db, models, chat, openwebui-redis, webui-edge]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health >/dev/null"]
       interval: 10s
@@ -174,6 +174,8 @@ services:
       # enforces owners itself.
       SESH_MINIFLUX_USER: sesh-gateway
       SESH_MINIFLUX_PASSWORD: ${MINIFLUX_ADMIN_PASSWORD:?run sesh init}
+      # Checks Open WebUI's signed user header (specs/010 R2).
+      SESH_WEBUI_JWT_SECRET: ${WEBUI_JWT_SECRET:-}
     volumes:
       - ${SESH_DATA_DIR:?}/gateway:/etc/sesh:ro
     ports:
@@ -184,7 +186,7 @@ services:
     # Its database, Infisical (`secrets`), ntfy (`notify`), the resource
     # networks, and its edge for its ports and Google, weather and maps.
     # Executor networks come from the generated overlay (specs/008).
-    networks: [gateway-db, secrets, notify, search, docs, feeds, gateway-edge]
+    networks: [gateway-db, secrets, notify, chat, search, docs, feeds, gateway-edge]
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -367,6 +369,10 @@ networks:
   secrets:
     internal: true
   notify:
+    internal: true
+  # Open WebUI to the gateway's chat listener, which forwards to the agent
+  # runtimes and adds the live browser window (specs/010, ADR 0014).
+  chat:
     internal: true
   # One member each: its published loopback port and its outbound access.
   webui-edge: {}

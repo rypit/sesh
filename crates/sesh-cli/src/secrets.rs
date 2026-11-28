@@ -13,7 +13,7 @@ use std::path::Path;
 pub const FILE_NAME: &str = "secrets.env";
 
 /// Values `sesh init` generates when missing.
-pub const GENERATED: [&str; 24] = [
+pub const GENERATED: [&str; 25] = [
     "POSTGRES_PASSWORD",
     "GATEWAY_DB_PASSWORD",
     "SEARXNG_SECRET",
@@ -43,6 +43,8 @@ pub const GENERATED: [&str; 24] = [
     "REDIS_OPENWEBUI_PASSWORD",
     "REDIS_INFISICAL_PASSWORD",
     "REDIS_PAPERLESS_PASSWORD",
+    // Feature 010: Open WebUI signs its user header for the gateway.
+    "WEBUI_JWT_SECRET",
 ];
 
 /// Set by `sesh up` when it bootstraps Infisical (specs/004 research.md R5).
@@ -72,6 +74,9 @@ fn generate(key: &str) -> Result<String> {
 
 /// The restricted router key for Open WebUI, created by `sesh up`.
 pub const WEBUI_ROUTER_KEY: &str = "WEBUI_ROUTER_KEY";
+/// The secret Open WebUI signs its user header with, shared with the
+/// gateway's chat listener (specs/010 R2).
+pub const WEBUI_JWT_SECRET: &str = "WEBUI_JWT_SECRET";
 /// The router key `sesh eval` uses; limited to the aliases (specs/003 R9).
 pub const EVAL_ROUTER_KEY: &str = "EVAL_ROUTER_KEY";
 pub const WEBUI_ADMIN_EMAIL: &str = "WEBUI_ADMIN_EMAIL";

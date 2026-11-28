@@ -39,6 +39,9 @@ pub const SERVICE_DATABASES: [(&str, &str); 5] = [
     ("miniflux", "MINIFLUX_DB_PASSWORD"),
 ];
 
+/// The stub's fake web sites (specs/010 R8), as network aliases of the stub.
+pub const STUB_SITES: [&str; 3] = ["fake-news.test", "fake-bank.test", "fake-shop.test"];
+
 /// Where the stub serves the fake upstreams (stub mode only).
 const STUB_UPSTREAM: &str = "http://stub-llm:8000";
 
@@ -59,15 +62,15 @@ pub fn generated_overlay(agents: &AgentsFile, kiwix: bool) -> String {
     let mut gateway_nets = Vec::new();
     let mut volumes = String::new();
     let mut litellm_nets = vec![];
-    let mut webui_nets = vec![];
     let mut urls = vec!["http://litellm:4000/v1".to_string()];
     let mut keys = vec![format!("${{{}:-pending}}", secrets::WEBUI_ROUTER_KEY)];
-    // Agent runtimes (specs/009 research.md R4-R6).
+    // Agent runtimes (specs/009 research.md R4-R6), reached by Open WebUI
+    // through the gateway's chat listener (specs/010 R2).
     for a in agents.agents.iter().filter(|a| a.runtime.is_some()) {
         let n = &a.name;
         services.push_str(&crate::hermes::compose_service(n));
-        let [own, model, chat] = crate::hermes::networks(n);
-        for net in [&own, &model, &chat] {
+        let [own, model] = crate::hermes::networks(n);
+        for net in [&own, &model] {
             networks.push_str(&format!("  {net}:\n    internal: true\n"));
         }
         gateway_nets.push(format!(
@@ -75,29 +78,43 @@ pub fn generated_overlay(agents: &AgentsFile, kiwix: bool) -> String {
             crate::hermes::gateway_alias(n)
         ));
         litellm_nets.push(model);
-        webui_nets.push(chat);
         volumes.push_str(&format!("  {}-data: {{}}\n", crate::hermes::service(n)));
-        urls.push(format!(
-            "http://{}:{}/v1",
-            crate::hermes::service(n),
-            crate::hermes::PORT
-        ));
+        urls.push(crate::hermes::chat_url(n));
         keys.push(format!(
             "${{{}:-pending}}",
             secrets::agent_key(n, secrets::API_KEY)
         ));
     }
     if !litellm_nets.is_empty() {
+        gateway_nets.push(format!(
+            "      chat:\n        aliases: [{}]\n",
+            crate::hermes::CHAT_ALIAS
+        ));
         services.push_str(&format!(
             "  litellm:\n    networks: [{}]\n",
             litellm_nets.join(", ")
         ));
         services.push_str(&format!(
-            "  open-webui:\n    networks: [{}]\n    environment:\n      OPENAI_API_BASE_URLS: \"{}\"\n      OPENAI_API_KEYS: \"{}\"\n",
-            webui_nets.join(", "),
+            "  open-webui:\n    environment:\n      OPENAI_API_BASE_URLS: \"{}\"\n      OPENAI_API_KEYS: \"{}\"\n      ENABLE_FORWARD_USER_INFO_HEADERS: \"true\"\n      FORWARD_USER_INFO_HEADER_JWT_SECRET: ${{{}:?run sesh up}}\n",
             urls.join(";"),
-            keys.join(";")
+            keys.join(";"),
+            secrets::WEBUI_JWT_SECRET
         ));
+    }
+    // Agent browsers (specs/010 research.md R3, R4): one network, shared
+    // only with the gateway, whose alias there is the egress proxy.
+    for a in agents
+        .agents
+        .iter()
+        .filter(|a| a.connectors.iter().any(|c| c == "browser"))
+    {
+        let n = &a.name;
+        services.push_str(&browser_service(n));
+        networks.push_str(&format!("  browser-{n}:\n    internal: true\n"));
+        gateway_nets.push(format!(
+            "      browser-{n}:\n        aliases: [gateway-browser-{n}]\n"
+        ));
+        volumes.push_str(&format!("  browser-{n}-profile: {{}}\n"));
     }
     for a in &agents.agents {
         let n = &a.name;
@@ -138,6 +155,14 @@ pub fn generated_overlay(agents: &AgentsFile, kiwix: bool) -> String {
     out
 }
 
+/// An agent's browser container (specs/010 research.md R3): Chromium,
+/// hardened, its profile in a volume, its proxy the gateway.
+pub fn browser_service(agent: &str) -> String {
+    format!(
+        "  browser-{agent}:\n    image: ${{SESH_BROWSER_IMAGE:-sesh-browser:dev}}\n    environment:\n      SESH_PROXY: http://gateway-browser-{agent}:7004\n      SESH_BROWSER_FLAGS: ${{SESH_BROWSER_FLAGS:-}}\n    volumes:\n      - browser-{agent}-profile:/profile\n    networks: [browser-{agent}]\n    read_only: true\n    tmpfs: [/tmp, \"/home/browser:uid=10001,gid=10001\"]\n    shm_size: 512m\n    cap_drop: [ALL]\n    security_opt: [\"no-new-privileges:true\"]\n    mem_limit: 1536m\n    pids_limit: 512\n    depends_on:\n      gateway:\n        condition: service_healthy\n    restart: unless-stopped\n"
+    )
+}
+
 /// The gateway's alias on each agent runtime's network, for `gateway.toml`.
 pub fn agent_listen(agents: &AgentsFile) -> Vec<String> {
     agents
@@ -172,6 +197,10 @@ pub fn effective_gateway(config: &Config) -> GatewaySettings {
         ] {
             *u = format!("{STUB_UPSTREAM}/fake/google");
         }
+        // The stub's fake sites (specs/010 R8): their private address is
+        // allowed by the browser's egress proxy, in stub mode only.
+        g.browser.egress_allow = STUB_SITES.iter().map(|s| s.to_string()).collect();
+        g.browser.allow_http_login = true;
         g.home.get_or_insert(Home {
             latitude: 59.91,
             longitude: 10.75,
@@ -222,6 +251,15 @@ pub fn write_compose_files(dir: &Path, config: &Config) -> Result<Vec<PathBuf>> 
     write_runtime_files(dir, &agents)?;
     let mut gw = effective_gateway(config);
     gw.agent_listen = agent_listen(&agents);
+    gw.browser.agents = agents
+        .agents
+        .iter()
+        .filter(|a| a.connectors.iter().any(|c| c == "browser"))
+        .map(|a| a.name.clone())
+        .collect();
+    if agents.agents.iter().any(|a| a.runtime.is_some()) {
+        gw.browser.chat_alias = crate::hermes::CHAT_ALIAS.into();
+    }
     std::fs::write(gdir.join("gateway.toml"), toml::to_string_pretty(&gw)?)?;
     let mut files = vec![cdir.join("compose.yaml")];
     if is_stub(config) {
@@ -834,6 +872,8 @@ mod tests {
             .unwrap_or(y.len());
         let mut services = std::collections::BTreeMap::new();
         let mut current: Option<String> = None;
+        // Inside a map-form `networks:` block: its entries are 6-space keys.
+        let mut in_map = false;
         for line in y[svc_start..svc_end].lines() {
             if let Some(name) = line.strip_prefix("  ").and_then(|l| l.strip_suffix(':'))
                 && !name.starts_with(' ')
@@ -841,6 +881,30 @@ mod tests {
             {
                 current = Some(name.to_string());
                 services.insert(name.to_string(), vec!["default".to_string()]);
+                in_map = false;
+            }
+            if line == "    networks:"
+                && let Some(c) = &current
+            {
+                services.insert(c.clone(), vec![]);
+                in_map = true;
+                continue;
+            }
+            if in_map {
+                if let Some(rest) = line.strip_prefix("      ")
+                    && !rest.starts_with(' ')
+                    && let Some(n) = rest.split(':').next()
+                    && let Some(c) = &current
+                {
+                    services
+                        .get_mut(c)
+                        .expect("service")
+                        .push(n.trim().to_string());
+                    continue;
+                }
+                if !line.starts_with("       ") {
+                    in_map = false;
+                }
             }
             if let (Some(c), Some(list)) = (&current, line.trim().strip_prefix("networks: ["))
                 && line.starts_with("    networks:")
@@ -1432,31 +1496,37 @@ mod tests {
     }
 
     #[test]
-    fn a_runtime_agent_gets_its_container_and_three_pair_networks() {
+    fn a_runtime_agent_gets_its_container_and_is_reached_through_the_gateway() {
         let y = generated_overlay(&runtime_agents(), false);
         let h = block(&y, "hermes-house");
         assert!(
-            h.contains("networks: [agent-house, agent-house-model, agent-house-chat]"),
+            h.contains("networks: [agent-house, agent-house-model]"),
             "{h}"
         );
         assert!(
             !y.contains("hermes-bob"),
             "an identity-only agent gets no runtime"
         );
-        // The gateway is on the agent's own network with its alias there.
+        // The gateway is on the agent's own network and on `chat`, with its
+        // aliases there (specs/009 R5, specs/010 R2).
         let gw = block(&y, "gateway");
         assert!(
             gw.contains("      agent-house:\n        aliases: [gateway-agent-house]\n"),
             "{gw}"
         );
-        assert!(!gw.contains("agent-house-model") && !gw.contains("agent-house-chat"));
+        assert!(
+            gw.contains("      chat:\n        aliases: [gateway-chat]\n"),
+            "{gw}"
+        );
+        assert!(!gw.contains("agent-house-model"));
         assert!(block(&y, "litellm").contains("networks: [agent-house-model]"));
         let ow = block(&y, "open-webui");
-        assert!(ow.contains("networks: [agent-house-chat]"), "{ow}");
         assert!(
-            ow.contains(
-                "OPENAI_API_BASE_URLS: \"http://litellm:4000/v1;http://hermes-house:8642/v1\""
-            ),
+            !ow.contains("networks:"),
+            "Open WebUI reaches no runtime directly: {ow}"
+        );
+        assert!(
+            ow.contains("OPENAI_API_BASE_URLS: \"http://litellm:4000/v1;http://gateway-chat:7003/agent/house/v1\""),
             "{ow}"
         );
         assert!(
@@ -1465,18 +1535,52 @@ mod tests {
             ),
             "{ow}"
         );
-        for n in ["agent-house", "agent-house-model", "agent-house-chat"] {
+        assert!(ow.contains("ENABLE_FORWARD_USER_INFO_HEADERS: \"true\""));
+        assert!(
+            ow.contains("FORWARD_USER_INFO_HEADER_JWT_SECRET: ${WEBUI_JWT_SECRET:?run sesh up}")
+        );
+        for n in ["agent-house", "agent-house-model"] {
             assert!(
                 y.contains(&format!("\n  {n}:\n    internal: true\n")),
                 "{n}"
             );
         }
+        assert!(!y.contains("agent-house-chat"));
         assert!(y.contains("\nvolumes:\n  hermes-house-data: {}\n"));
         // Without runtimes, Open WebUI and LiteLLM aren't touched.
         let mut f = runtime_agents();
         f.agents[0].runtime = None;
         let y = generated_overlay(&f, false);
         assert!(!y.contains("open-webui:") && !y.contains("litellm:") && !y.contains("volumes:"));
+    }
+
+    #[test]
+    fn an_agent_with_the_browser_gets_a_hardened_browser_on_its_own_network() {
+        let mut f = runtime_agents();
+        f.agents[1].connectors.push("browser".into());
+        let y = generated_overlay(&f, false);
+        let b = block(&y, "browser-bob");
+        for want in [
+            "networks: [browser-bob]",
+            "read_only: true",
+            "cap_drop: [ALL]",
+            "no-new-privileges:true",
+            "SESH_PROXY: http://gateway-browser-bob:7004",
+            "browser-bob-profile:/profile",
+        ] {
+            assert!(b.contains(want), "{want}: {b}");
+        }
+        assert!(!b.contains("ports:"));
+        assert!(y.contains("\n  browser-bob:\n    internal: true\n"));
+        let gw = block(&y, "gateway");
+        assert!(
+            gw.contains("      browser-bob:\n        aliases: [gateway-browser-bob]\n"),
+            "{gw}"
+        );
+        assert!(
+            !y.contains("browser-house:"),
+            "only agents granted the browser"
+        );
     }
 
     #[test]
