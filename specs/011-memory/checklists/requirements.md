@@ -18,7 +18,7 @@
 - [x] Success criteria are technology-agnostic
 - [x] All acceptance scenarios are defined
 - [x] Edge cases are identified
-- [x] Scope is clearly bounded (downloads and uploads are out)
+- [x] Scope is clearly bounded (automatic extraction and the per-person page are out)
 - [x] Dependencies and assumptions identified
 
 ## Feature Readiness
@@ -30,5 +30,5 @@
 
 ## Notes
 
-- Open WebUI and Chromium are named because the household and the
-  architecture already fixed them.
+- text-embeddings-inference and pgvector are named because the household
+  chose them (ADR 0015).
