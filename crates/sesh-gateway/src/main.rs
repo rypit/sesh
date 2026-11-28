@@ -138,6 +138,7 @@ async fn main() -> anyhow::Result<()> {
         pending: Default::default(),
         google: Default::default(),
         refs: Default::default(),
+        browser: Default::default(),
         miniflux: connectors::feeds::Miniflux::new(
             &env("SESH_MINIFLUX_USER").unwrap_or_default(),
             &env("SESH_MINIFLUX_PASSWORD").unwrap_or_default(),

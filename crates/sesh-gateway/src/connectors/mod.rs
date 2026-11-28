@@ -135,6 +135,7 @@ pub fn all(test_connectors: bool) -> Vec<ConnectorDescriptor> {
     out.extend(google::descriptors());
     out.push(docs::descriptor());
     out.push(feeds::descriptor());
+    out.push(crate::browser::descriptor());
     if test_connectors {
         out.push(connector(
             "testgate",

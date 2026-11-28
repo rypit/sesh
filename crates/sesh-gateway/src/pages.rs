@@ -36,6 +36,7 @@ pub fn router(gw: Arc<Gateway>) -> Router {
         )
         .route("/google/callback", get(google_callback))
         .route("/health", get(|| async { "ok" }))
+        .merge(crate::browser::live::router())
         .layer(axum::middleware::from_fn_with_state(
             gw.clone(),
             refuse_agent_tokens,
