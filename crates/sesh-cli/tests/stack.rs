@@ -3294,12 +3294,17 @@ fn network_stack() {
     )
     .unwrap();
     stack.sql_in("sesh", "SELECT pg_reload_conf()");
-    let out = stack.compose(
+    // Every service but the embedding service, which came later (specs/011)
+    // and isn't in stub mode: Compose would pull its image even at scale 0.
+    let listed = stack.compose(
         &[&fixture("pre-008.compose.yaml")],
         &stub_env,
-        // The embedding service came later (specs/011) and isn't in stub mode.
-        &["up", "-d", "--wait", "--scale", "embed=0"],
+        &["config", "--services"],
     );
+    let listed = String::from_utf8_lossy(&listed.stdout).into_owned();
+    let mut up_args = vec!["up", "-d", "--wait"];
+    up_args.extend(listed.lines().filter(|s| !s.is_empty() && *s != "embed"));
+    let out = stack.compose(&[&fixture("pre-008.compose.yaml")], &stub_env, &up_args);
     assert!(
         out.status.success(),
         "the pre-008 stack didn't start: {}",
