@@ -4429,7 +4429,12 @@ fn memory_stack() {
     let out = remember(&mut ana2, "ana prefers oat milk in her coffee.", false);
     assert!(out.contains("\"updated\""), "FR-007: {out}");
     let out = remember(&mut ana2, &"x".repeat(501), false);
-    assert!(out.contains("at most 500 characters"), "FR-008: {out}");
+    // The schema (maxLength) or the gateway refuses it; nothing is saved.
+    assert!(
+        (out.contains("too long") || out.contains("at most 500 characters"))
+            && !out.contains("\"added\""),
+        "FR-008: {out}"
+    );
     // FR-012: no fact text in the audit log.
     for text in ["Okafor", "oat milk", "4512"] {
         assert_eq!(
