@@ -9,11 +9,11 @@ Every agent reaches the world through **one trusted gateway**, so no
 agent ever holds a secret, and anything with side effects waits for a
 person's yes. See [Status](#status) for what works today.
 
-- **Assistant mode**: today, the gateway serves search (SearXNG, Kiwix),
-  weather and maps, Google mail, calendar and contacts, documents
-  (Paperless-ngx) and feeds (Miniflux) to any MCP client. Planned:
-  Hermes agents in Open WebUI (009), a sandboxed browser (010), memory
-  with Mem0 (011) and Telegram (012).
+- **Assistant mode**: today, the Household agent (Hermes, in Open
+  WebUI) uses search (SearXNG, Kiwix), weather and maps, Google mail,
+  calendar and contacts, documents (Paperless-ngx) and feeds (Miniflux),
+  all through the gateway. Planned: a sandboxed browser (010), memory
+  with Mem0 (011), and each person's own agents and Telegram (012).
 - **Operator mode**: the `sesh` admin CLI sets up the stack, users,
   agents and credentials. Planned (012): backups, secret rotation and
   Claude Code operator skills. No agent can reach them.

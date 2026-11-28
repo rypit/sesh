@@ -71,7 +71,7 @@ Written first: it's the safety guarantee, and its tests define the wiring the ot
 
 - [x] T017 [P] Architecture doc (the runtime, its networks, the listener rule, phase 9 done) and `diagram.jsx` + `docs/architecture.svg` (Hermes per agent, its three links); README status; AGENTS.md (the runtime flag).
 - [x] T018 [P] `.github/workflows/ci.yml`: `agent_stack` in its own stack group.
-- [ ] T019 Record CI results and any deviations (R8's read-only config, R9's hardening) in `research.md`.
+- [x] T019 Record CI results and any deviations (R8's read-only config, R9's hardening) in `research.md`.
 
 ## Dependencies
 
