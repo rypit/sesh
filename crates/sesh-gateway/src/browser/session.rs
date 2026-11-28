@@ -40,6 +40,11 @@ const DOWNLOAD_TYPES: &[(&str, &str)] = &[
     ),
 ];
 
+enum BodyError {
+    TooLarge,
+    Failed,
+}
+
 /// Who drives the browser.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Control {
@@ -320,15 +325,14 @@ impl Session {
         if declared > DOWNLOAD_MAX_BYTES {
             return refuse(format!("{name}: that download is too large (limit 25 MB)")).await;
         }
-        let body = self
-            .page_call("Fetch.getResponseBody", json!({"requestId": id}))
-            .await;
-        let bytes = match body {
-            Ok(b) if b["base64Encoded"] == true => {
-                B64.decode(b["body"].as_str().unwrap_or("")).ok()
+        // Read the body as a stream, 1 MB at a time, stopping past the
+        // limit: a server may not say the size up front (research.md R9).
+        let bytes = match self.read_body(&id).await {
+            Ok(b) => Some(b),
+            Err(BodyError::TooLarge) => {
+                return refuse(format!("{name}: that download is too large (limit 25 MB)")).await;
             }
-            Ok(b) => b["body"].as_str().map(|t| t.as_bytes().to_vec()),
-            Err(_) => None,
+            Err(BodyError::Failed) => None,
         };
         let Some(bytes) = bytes else {
             return refuse(format!("{name}: the download didn't arrive")).await;
@@ -368,6 +372,43 @@ impl Session {
                 json!({"requestId": id, "errorReason": "Aborted"}),
             )
             .await;
+    }
+
+    /// A paused response's body through `Fetch.takeResponseBodyAsStream`,
+    /// in pieces small enough for one CDP message each.
+    async fn read_body(&self, id: &Value) -> Result<Vec<u8>, BodyError> {
+        let handle = self
+            .page_call("Fetch.takeResponseBodyAsStream", json!({"requestId": id}))
+            .await
+            .map_err(|_| BodyError::Failed)?["stream"]
+            .clone();
+        let mut out = Vec::new();
+        let result = loop {
+            let chunk = match self
+                .page_call("IO.read", json!({"handle": handle, "size": 1024 * 1024}))
+                .await
+            {
+                Ok(c) => c,
+                Err(_) => break Err(BodyError::Failed),
+            };
+            let data = chunk["data"].as_str().unwrap_or("");
+            if chunk["base64Encoded"] == true {
+                match B64.decode(data) {
+                    Ok(b) => out.extend_from_slice(&b),
+                    Err(_) => break Err(BodyError::Failed),
+                }
+            } else {
+                out.extend_from_slice(data.as_bytes());
+            }
+            if out.len() as u64 > DOWNLOAD_MAX_BYTES {
+                break Err(BodyError::TooLarge);
+            }
+            if chunk["eof"] == true {
+                break Ok(out);
+            }
+        };
+        let _ = self.page_call("IO.close", json!({"handle": handle})).await;
+        result
     }
 
     /// Downloads captured (and refusals) since the last call.

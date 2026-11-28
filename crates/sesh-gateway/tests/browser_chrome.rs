@@ -22,9 +22,15 @@ struct Seen(Arc<Mutex<Vec<String>>>);
 async fn site(seen: Seen) -> u16 {
     let app = Router::new()
         .route("/article", get(|| async { Html("<html><head><title>Varden</title><style>p{color:red}</style></head><body><nav>menu</nav><article><h1>The Varden beacon</h1><p>It was first lit in 1873 on Skarvøy.</p><p><a href='/form'>The form</a></p></article></body></html>") }))
-        .route("/form", get(|| async { Html("<html><body><form action='/got' method='post'><label for='q'>Search</label><input id='q' name='q'><input type='password' name='pw'><button>Go</button></form><a href='/dl'>Bill</a><a href='/exe'>Setup</a><form action='/got' method='post' enctype='multipart/form-data'><label>Your file <input type='file' name='f'></label></form></body></html>") }))
+        .route("/form", get(|| async { Html("<html><body><form action='/got' method='post'><label for='q'>Search</label><input id='q' name='q'><input type='password' name='pw'><button>Go</button></form><a href='/dl'>Bill</a><a href='/exe'>Setup</a><a href='/big'>Archive</a><a href='/bigchunked'>Chunked</a><form action='/got' method='post' enctype='multipart/form-data'><label>Your file <input type='file' name='f'></label></form></body></html>") }))
         .route("/dl", get(|| async { ([(header::CONTENT_TYPE, "application/pdf"), (header::CONTENT_DISPOSITION, "attachment; filename=\"bill.pdf\"")], "%PDF-1.4 fake bill") }))
         .route("/exe", get(|| async { ([(header::CONTENT_TYPE, "application/x-msdownload"), (header::CONTENT_DISPOSITION, "attachment; filename=\"setup.exe\"")], "MZ") }))
+        .route("/big", get(|| async { let mut b = b"%PDF-1.4\n".to_vec(); b.resize(26 * 1024 * 1024, b' '); ([(header::CONTENT_TYPE, "application/pdf"), (header::CONTENT_DISPOSITION, "attachment; filename=\"big.pdf\"")], b) }))
+        .route("/bigchunked", get(|| async {
+            // No Content-Length: the size is only known by reading.
+            let chunks = (0..27).map(|_| Ok::<_, std::io::Error>(vec![b' '; 1024 * 1024]));
+            ([(header::CONTENT_TYPE, "application/pdf"), (header::CONTENT_DISPOSITION, "attachment; filename=\"chunked.pdf\"")], axum::body::Body::from_stream(futures_util::stream::iter(chunks)))
+        }))
         .route("/redirect", get(|| async { Redirect::temporary("http://10.0.0.1/secret") }))
         .route("/sub", get(|| async { Html("<html><body><p>Hello</p><img src='http://192.168.1.1/x.png'></body></html>") }))
         .route("/got", post(|State(s): State<Seen>, body: String| async move { s.0.lock().unwrap().push(body); Html("<p>thanks</p>") }))
@@ -181,6 +187,55 @@ async fn the_session_drives_a_real_browser_through_the_egress_proxy() {
         dl.is_empty() && refused.iter().any(|r| r.contains("isn't allowed")),
         "{dl:?} {refused:?}"
     );
+
+    // An oversized download is refused and the connection survives.
+    let snap = s.run("snapshot", json!({})).await.unwrap();
+    let big = snap["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["label"] == "Archive")
+        .unwrap()["n"]
+        .as_u64()
+        .unwrap();
+    let tb = s.run("target", json!({"n": big})).await.unwrap();
+    s.click_at(tb["x"].as_f64().unwrap(), tb["y"].as_f64().unwrap())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let (dl, refused) = s.take_downloads();
+    assert!(
+        dl.is_empty() && refused.iter().any(|r| r.contains("too large")),
+        "{dl:?} {refused:?}"
+    );
+    assert!(!s.is_closed(), "the CDP connection survives");
+    let snap = s.run("snapshot", json!({})).await.unwrap();
+    let ch = snap["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["label"] == "Chunked")
+        .unwrap()["n"]
+        .as_u64()
+        .unwrap();
+    let tc = s.run("target", json!({"n": ch})).await.unwrap();
+    s.click_at(tc["x"].as_f64().unwrap(), tc["y"].as_f64().unwrap())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let (dl, refused) = s.take_downloads();
+    assert!(
+        dl.is_empty()
+            && refused
+                .iter()
+                .any(|r| r.contains("chunked.pdf") && r.contains("too large")),
+        "{dl:?} {refused:?}"
+    );
+    assert!(
+        !s.is_closed(),
+        "the CDP connection survives an unsized download"
+    );
+    s.run("snapshot", json!({})).await.unwrap();
 
     // Upload: the gateway's script puts the file in the field.
     let snap = s.run("snapshot", json!({})).await.unwrap();
