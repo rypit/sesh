@@ -727,6 +727,7 @@ before or during its phase.
 | A service release that needs a superuser-only database extension | Constraint | The migration creates it as the superuser; none needed so far (`vector` will be, for memory) | 7, 11 |
 | Prompt injection via email, pages, documents or other agents | Risk | Untrusted labels, approvals, domain-pinned login, egress guard, audit alerts | 4–13 |
 | Stale facts accumulate | Risk | Near-duplicates update; `sesh memory forget`; a per-user editing page later | 11 |
+| Docker's default address pools hold about 30 networks; sesh uses one per pair, plus 3–4 per agent | Risk | Set Docker's `default-address-pools` to /24s (CI does); decide in 012 whether sesh assigns subnets itself or `sesh doctor` checks the pools | 12 |
 | sbx requires a Docker sign-in (cloud dependency) | Resolved | Not used: the browser runs in a hardened container (ADR 0013) | 10 |
 | The live window needs the approvals listener over HTTPS when Open WebUI is | Constraint | Serve both through `tailscale serve` (HTTPS); a mixed-content iframe is blocked by the browser | 10 |
 | Telegram content passes Telegram servers | Risk | Convenience only; sensitive work in Open WebUI | 12 |

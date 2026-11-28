@@ -178,6 +178,17 @@ jobs:
       - name: Rust toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      # Docker's default address pools hold about 30 networks; one agent
+      # with a browser plus a second agent needs more since the embed
+      # network (specs/011). /24s from one /16 give 256.
+      - name: Give Docker room for sesh's networks
+        run: |
+          f=/etc/docker/daemon.json
+          [ -s "$f" ] || echo '{}' | sudo tee "$f" >/dev/null
+          jq '. + {"default-address-pools": [{"base": "10.200.0.0/16", "size": 24}]}' "$f" | sudo tee "$f.new" >/dev/null
+          sudo mv "$f.new" "$f"
+          sudo systemctl restart docker
+          docker info --format '{{json .}}' >/dev/null
       - uses: actions/download-artifact@v4
         with:
           name: sesh-images

@@ -3297,7 +3297,8 @@ fn network_stack() {
     let out = stack.compose(
         &[&fixture("pre-008.compose.yaml")],
         &stub_env,
-        &["up", "-d", "--wait"],
+        // The embedding service came later (specs/011) and isn't in stub mode.
+        &["up", "-d", "--wait", "--scale", "embed=0"],
     );
     assert!(
         out.status.success(),
@@ -4246,12 +4247,13 @@ printf 'user = "sesh-gateway:%s"\n' "$PAPERLESS_ADMIN_PASSWORD" > /tmp/k
 c() {{ curl -fsS -K /tmp/k "$@"; }}
 printf '%s\n' {text} > /tmp/doc.txt
 task=$(c -F document=@/tmp/doc.txt -F title=memory-stack http://127.0.0.1:8000/api/documents/post_document/ | tr -d '"')
+id=
 for i in $(seq 90); do
-  id=$(c "http://127.0.0.1:8000/api/tasks/?task_id=$task" | python3 -c 'import sys,json; t=json.load(sys.stdin); t=t if isinstance(t,list) else t["results"]; print((t[0].get("related_document") or "") if t else "")')
+  id=$(c "http://127.0.0.1:8000/api/documents/?title__iexact=memory-stack" | python3 -c 'import sys,json; r=json.load(sys.stdin)["results"]; print(r[0]["id"] if r else "")')
   [ -n "$id" ] && break
   sleep 2
 done
-[ -n "$id" ]
+if [ -z "$id" ]; then echo "task $task never made a document:"; c "http://127.0.0.1:8000/api/tasks/?task_id=$task"; exit 1; fi
 uid=$(c "http://127.0.0.1:8000/api/users/?username__iexact=sesh-{owner}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["results"][0]["id"])')
 c -X PATCH -H 'Content-Type: application/json' -d "{{\"owner\":$uid}}" "http://127.0.0.1:8000/api/documents/$id/" >/dev/null
 rm -f /tmp/k
