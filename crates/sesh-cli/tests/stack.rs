@@ -4273,10 +4273,10 @@ impl Stack {
 printf 'user = "sesh-gateway:%s"\n' "$PAPERLESS_ADMIN_PASSWORD" > /tmp/k
 c() {{ curl -fsS -K /tmp/k "$@"; }}
 printf '%s\n' {text} > /tmp/doc.txt
-task=$(c -F document=@/tmp/doc.txt -F title=memory-stack http://127.0.0.1:8000/api/documents/post_document/ | tr -d '"')
+task=$(c -F document=@/tmp/doc.txt -F title=ben-marigold-policy http://127.0.0.1:8000/api/documents/post_document/ | tr -d '"')
 id=
 for i in $(seq 90); do
-  id=$(c "http://127.0.0.1:8000/api/documents/?title__iexact=memory-stack" | python3 -c 'import sys,json; r=json.load(sys.stdin)["results"]; print(r[0]["id"] if r else "")')
+  id=$(c "http://127.0.0.1:8000/api/documents/?title__iexact=ben-marigold-policy" | python3 -c 'import sys,json; r=json.load(sys.stdin)["results"]; print(r[0]["id"] if r else "")')
   [ -n "$id" ] && break
   sleep 2
 done
@@ -4379,7 +4379,8 @@ fn memory_stack() {
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
     loop {
         let out = ben.execute("async () => await docs.search({ query: \"marigold\" })");
-        if out.contains("77-4410") || out.contains("bike insurance") {
+        // Search results show titles, not text.
+        if out.contains("ben-marigold-policy") {
             break;
         }
         assert!(
@@ -4392,7 +4393,7 @@ fn memory_stack() {
         "async () => ({ m: await memory.recall({ query: \"bike lock code\" }), d: await docs.search({ query: \"marigold bike\" }) })",
     );
     assert!(
-        !out.contains("4512") && !out.contains("77-4410") && !out.contains("bike insurance"),
+        !out.contains("4512") && !out.contains("ben-marigold-policy"),
         "T009: ana's script saw ben's: {out}"
     );
 
