@@ -47,13 +47,24 @@ pub struct UsersFile {
     pub users: Vec<User>,
 }
 
-/// `[a-z][a-z0-9-]{0,31}`, and not the reserved `household`.
+/// Names no user may take: `household` is the shared identity, and an
+/// owner maps to the account `sesh-<name>` in Paperless and Miniflux,
+/// where `sesh-gateway` is the gateway's admin account (also its ntfy
+/// login).
+pub const RESERVED_USER_NAMES: [&str; 2] = [HOUSEHOLD, "gateway"];
+
+/// Whether `name` is one of [`RESERVED_USER_NAMES`].
+pub fn reserved_user_name(name: &str) -> bool {
+    RESERVED_USER_NAMES.contains(&name)
+}
+
+/// `[a-z][a-z0-9-]{0,31}`, and not a [reserved name](RESERVED_USER_NAMES).
 pub fn valid_user_name(name: &str) -> bool {
     let mut c = name.chars();
     matches!(c.next(), Some('a'..='z'))
         && name.len() <= 32
         && c.all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || x == '-')
-        && name != HOUSEHOLD
+        && !reserved_user_name(name)
 }
 
 impl UsersFile {
@@ -82,8 +93,9 @@ impl UsersFile {
         for u in &self.users {
             if !valid_user_name(&u.name) {
                 bail!(
-                    "user name {:?} must be a-z, 0-9 and -, start with a letter, and not be `household`",
-                    u.name
+                    "user name {:?} must be a-z, 0-9 and -, start with a letter, and not be reserved ({})",
+                    u.name,
+                    RESERVED_USER_NAMES.join(", ")
                 );
             }
             if !seen.insert(&u.name) {
@@ -246,7 +258,7 @@ mod tests {
         .unwrap();
         assert_eq!(f.agents[0].owner, HOUSEHOLD, "older agents.toml files load");
         assert!(valid_user_name("ana") && valid_user_name("ben-2"));
-        for bad in ["", "Ana", "1ana", "household", &"a".repeat(33)] {
+        for bad in ["", "Ana", "1ana", "household", "gateway", &"a".repeat(33)] {
             assert!(!valid_user_name(bad), "{bad}");
         }
         let u = UsersFile {
