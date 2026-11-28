@@ -5,7 +5,9 @@
 use crate::agent::gateway_dir;
 use crate::secrets::{self, Secrets};
 use anyhow::{Result, bail};
-use sesh_core::{User, UsersFile, valid_user_name};
+use sesh_core::{
+    HOUSEHOLD, RESERVED_USER_NAMES, User, UsersFile, reserved_user_name, valid_user_name,
+};
 use std::path::Path;
 
 /// `secrets.env` key for a user's ntfy password.
@@ -21,9 +23,20 @@ pub fn load(dir: &Path) -> Result<UsersFile> {
 }
 
 pub fn add(dir: &Path, name: &str) -> Result<Vec<String>> {
+    if reserved_user_name(name) {
+        bail!(
+            "`{name}` is reserved (sesh uses it for {}); pick another user name",
+            if name == HOUSEHOLD {
+                "the shared Household"
+            } else {
+                "its own service accounts"
+            }
+        );
+    }
     if !valid_user_name(name) {
         bail!(
-            "user names are a-z, 0-9 and -, start with a letter, up to 32 characters, and can't be `household`"
+            "user names are a-z, 0-9 and -, start with a letter, up to 32 characters, and can't be {}",
+            RESERVED_USER_NAMES.join(" or ")
         );
     }
     let mut users = load(dir)?;
@@ -104,6 +117,11 @@ mod tests {
         );
         assert!(add(&d, "ana").is_err());
         assert!(add(&d, "household").is_err());
+        let e = add(&d, "gateway").unwrap_err().to_string();
+        assert!(
+            e.contains("gateway") && e.contains("reserved"),
+            "a clear error: {e}"
+        );
         assert!(add(&d, "Bad").is_err());
         assert_eq!(list(&d).unwrap().len(), 1);
         remove(&d, "ana").unwrap();

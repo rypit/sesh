@@ -175,10 +175,27 @@ impl Secrets {
         Self::parse(&text)
     }
 
+    /// Writes a 0600 temp file in `dir`, then renames it over
+    /// `secrets.env`, so a crash or full disk never leaves a truncated
+    /// file and the values are never readable by others, even briefly.
     pub fn save(&self, dir: &Path) -> Result<()> {
+        use std::io::Write;
         let path = dir.join(FILE_NAME);
-        std::fs::write(&path, self.render())?;
-        restrict(&path, 0o600)?;
+        let tmp = dir.join(format!(".{FILE_NAME}.tmp-{}", std::process::id()));
+        let written = (|| -> Result<()> {
+            let mut f = create_private(&tmp)?;
+            f.write_all(self.render().as_bytes())?;
+            f.sync_all()?;
+            Ok(())
+        })();
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.context(format!("can't write {}", path.display())));
+        }
+        if let Err(e) = std::fs::rename(&tmp, &path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(anyhow::Error::new(e).context(format!("can't replace {}", path.display())));
+        }
         Ok(())
     }
 }
@@ -201,6 +218,30 @@ fn restrict(path: &Path, mode: u32) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
     Ok(())
+}
+
+/// Creates `path` (replacing a stale one) readable by the owner only.
+#[cfg(unix)]
+fn create_private(path: &Path) -> Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let _ = std::fs::remove_file(path);
+    let f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    // The umask can only narrow the mode; set it exactly.
+    restrict(path, 0o600)?;
+    Ok(f)
+}
+
+#[cfg(not(unix))]
+fn create_private(path: &Path) -> Result<std::fs::File> {
+    let _ = std::fs::remove_file(path);
+    Ok(std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?)
 }
 
 #[cfg(not(unix))]
@@ -268,6 +309,38 @@ mod tests {
             let dmode = std::fs::metadata(&dir).unwrap().permissions().mode();
             assert_eq!(dmode & 0o777, 0o700);
         }
+    }
+
+    #[test]
+    fn save_replaces_atomically_and_leaves_no_temp_file() {
+        let dir = tempdir("atomic");
+        let path = dir.join(FILE_NAME);
+        // An existing file with loose permissions is replaced, not rewritten.
+        std::fs::write(&path, "OLD=1\n").unwrap();
+        #[cfg(unix)]
+        restrict(&path, 0o644).unwrap();
+        #[cfg(unix)]
+        let old_inode = {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(&path).unwrap().ino()
+        };
+        let mut s = Secrets::default();
+        s.set("A", "b");
+        s.save(&dir).unwrap();
+        assert_eq!(Secrets::load(&dir).unwrap(), s);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let meta = std::fs::metadata(&path).unwrap();
+            assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+            // Renamed over the target: a new file, never truncated in place.
+            assert_ne!(meta.ino(), old_inode);
+        }
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(names, vec![FILE_NAME.to_string()]);
     }
 
     #[test]

@@ -2,19 +2,21 @@
 
 [![ci](https://github.com/rypit/sesh/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rypit/sesh/actions/workflows/ci.yml?query=branch%3Amain)
 
-A local-first AI agent platform for one household. Each person gets an
-always-on agent, plus a shared Household agent, that can handle email,
-calendar, documents, browsing and errands. Every agent reaches the world
-through **one trusted gateway**, so no agent ever holds a secret, and
-anything with side effects waits for a person's yes.
+A local-first AI agent platform for one household, being built: the
+aim is an always-on agent for each person, plus a shared Household
+agent, that can handle email, calendar, documents, browsing and errands.
+Every agent reaches the world through **one trusted gateway**, so no
+agent ever holds a secret, and anything with side effects waits for a
+person's yes. See [Status](#status) for what works today.
 
-- **Assistant mode**: Hermes agents, reached through Open WebUI or
-  Telegram, using Google, memory (Mem0), documents (Paperless-ngx),
-  search (SearXNG, Kiwix) and a sandboxed browser, all through the
-  gateway.
-- **Operator mode**: the `sesh` admin CLI and Claude Code operator
-  skills set up users, rotate secrets and run backups. No agent can reach
-  them.
+- **Assistant mode**: today, the Household agent (Hermes, in Open
+  WebUI) uses search (SearXNG, Kiwix), weather and maps, Google mail,
+  calendar and contacts, documents (Paperless-ngx) and feeds (Miniflux),
+  all through the gateway. Planned: a sandboxed browser (010), memory
+  with Mem0 (011), and each person's own agents and Telegram (012).
+- **Operator mode**: the `sesh` admin CLI sets up the stack, users,
+  agents and credentials. Planned (012): backups, secret rotation and
+  Claude Code operator skills. No agent can reach them.
 - **Local-first**: models run on the home server, on any
   OpenAI-compatible inference server (oMLX, Ollama, llama.cpp, vLLM…);
   household data stays there.
@@ -25,9 +27,10 @@ anything with side effects waits for a person's yes.
   <img src="docs/architecture.svg" alt="sesh architecture: household users reach Hermes agents through Open WebUI or Telegram; agents, and the per-agent code executor that runs their scripts, reach Google, search, weather and maps, Paperless-ngx, a sandboxed browser and Mem0 only through the Code Mode gateway, which uses Infisical for secrets, an append-only audit log, and ntfy for approvals; inference runs on any OpenAI-compatible server" width="760">
 </p>
 
-Agents are untrusted; the gateway is their only way out. Approvals and
-one-time links go from the gateway to people through ntfy, never through
-an agent. The design is in the
+The diagram shows the whole design; [Status](#status) says which parts
+are built. Agents are untrusted; the gateway is their only way out.
+Approvals and one-time links go from the gateway to people through ntfy,
+never through an agent. The design is in the
 [Solutions Architecture](docs/architecture/solutions-architecture.md);
 see [`docs/architecture/`](docs/architecture/) to update the diagram.
 
@@ -62,7 +65,7 @@ in [`docs/decisions/`](docs/decisions/) and reference notes in
 - [x] 009 One agent end to end ([`specs/009-one-agent/`](specs/009-one-agent/)): a Hermes agent in Open WebUI, using everything through the gateway
 - [ ] 010 Browser (with an in-chat live view and takeover in Open WebUI): reading pages and logging in for you
 - [ ] 011 Memory: facts recalled across sessions, per person
-- [ ] 012 Multi-user and household: everyone's agents, the Household agent, backups
+- [ ] 012 Multi-user and household: everyone's agents, the Household agent, Telegram, backups, secret rotation, operator skills
 - [ ] 013 Google Docs (read-only): search and read your Google Docs
 
 ## Try it
@@ -115,9 +118,10 @@ model behind an alias.
 
 ## Repository
 
-This repo is the project monorepo (code, deployment, operator skills,
-specs). It never holds household data or per-user repositories, such as
-agents' skills repos; those live on the server (ADR 0003).
+This repo is the project monorepo (code, deployment and specs; operator
+skills will live here too). It never holds household data or per-user
+repositories, such as agents' skills repos; those live on the server
+(ADR 0003).
 
 ## Development
 
