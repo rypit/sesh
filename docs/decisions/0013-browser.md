@@ -23,7 +23,8 @@ a TypeScript controller inside it. Two facts changed that:
    - its profile in a per-agent volume;
    - Chromium's own sandbox stays on.
 
-   An sbx microVM remains the target on the Mac mini, as a follow-up.
+   No microVM: the household decided the hardened container is enough
+   (2026-11-28), which also drops sbx and its Docker sign-in.
 2. **One internal network**, `browser-<agent>`, shared only with the
    gateway. The browser has no route anywhere else.
 3. **Online only through the gateway's egress proxy** (`:7004`). The
@@ -51,8 +52,8 @@ a TypeScript controller inside it. Two facts changed that:
 
 ## Alternatives
 
-- **An sbx microVM now**: needs a Docker account and can't be tested in
-  CI. Deferred.
+- **An sbx microVM**: needs a Docker account sign-in and can't be
+  tested in CI; not needed for the household's threat model. Rejected.
 - **A Playwright controller inside the sandbox** (the architecture's
   `sesh-browser`): it would put credentials and the domain check in
   untrusted code. Rejected.

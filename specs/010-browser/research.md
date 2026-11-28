@@ -78,7 +78,7 @@ session. It is already on the runtime's network.
 with the same knowledge, for no gain); polling from the live page (no
 way to get the window into the message). Rejected.
 
-## R3. Isolation: a container per agent, not an sbx microVM (yet)
+## R3. Isolation: a container per agent, not an sbx microVM
 
 **Finding**: Docker Sandboxes (`sbx`) run coding agents in microVMs,
 need the `sbx` CLI and a Docker sign-in, and are not available on CI's
@@ -92,8 +92,9 @@ by sesh (`deploy/browser.Dockerfile`, Debian Chromium, pinned base):
   user namespaces; if the runner refuses, the stack test records it and
   the seccomp profile is adjusted, never `--no-sandbox` silently).
 
-The microVM stays the target for the Mac mini and is recorded as a
-follow-up.
+The household decided (2026-11-28) that no microVM is needed: the
+hardened container is the isolation, and sbx is dropped from the
+architecture.
 
 ## R4. No route out except through the gateway's egress check
 

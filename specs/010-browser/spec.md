@@ -328,9 +328,8 @@ agent does on a logged-in site is fetching or sending a file.
   Office documents only; references live 24 hours.
 - **Files attached in the Open WebUI chat** aren't a file source yet
   (Open WebUI sends their extracted text, not the file); later work.
-- **Isolation is a hardened container per agent**; a microVM (sbx) is
-  deferred, because it needs a Docker account sign-in and can't run in
-  CI (research.md).
+- **Isolation is a hardened container per agent**; no microVM (the
+  household's decision; research.md R3).
 - **Only agents with a runtime** (feature 009) get the live window; the
   connector works for any agent granted `browser`.
 - **Per-user agents** come in 012; until then the Household agent's live
