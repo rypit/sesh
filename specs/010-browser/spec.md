@@ -6,7 +6,7 @@
 
 **Status**: Draft
 
-**Input**: User description: "Proceed with 010 (browser). Browser usage is critical. I don't want to use a one-time link to see the session live and take over, I want that experience integrated into Open WebUI. If an agent uses a browser, I want a small window to show in chat that shows the browser. Clicking it would then launch the browser in a larger window and controls to take over would be shown. When the user closes the browser, its control is returned to the agent." Architecture phase 10: a persistent browser profile per agent, `read(url)` and `login(site)`; accept: `read(url)` returns Markdown and refuses a LAN address, `login(site)` refuses on a lookalike domain, the agent can't read a filled password field, the live window shows the session, takeover pauses the agent and closing returns control, another user can't open the view.
+**Input**: User description: "Proceed with 010 (browser). Downloads and uploads should be supported. Browser usage is critical. I don't want to use a one-time link to see the session live and take over, I want that experience integrated into Open WebUI. If an agent uses a browser, I want a small window to show in chat that shows the browser. Clicking it would then launch the browser in a larger window and controls to take over would be shown. When the user closes the browser, its control is returned to the agent." Architecture phase 10: a persistent browser profile per agent, `read(url)` and `login(site)`; accept: `read(url)` returns Markdown and refuses a LAN address, `login(site)` refuses on a lookalike domain, the agent can't read a filled password field, the live window shows the session, takeover pauses the agent and closing returns control, another user can't open the view.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -150,6 +150,52 @@ across a restart of the browser.
    **Then** its cookies and logins are still there; another agent's
    profile is never visible to it.
 
+---
+
+### User Story 5 - Downloads and uploads (Priority: P1)
+
+The agent downloads a bill from a utility's site and files it in the
+household's documents; or it uploads a document the household already
+has (a mail attachment, a stored document, an earlier download) into a
+site's form, after the person approves. The file's contents never pass
+through the model.
+
+**Why this priority**: The household asked for it, and much of what an
+agent does on a logged-in site is fetching or sending a file.
+
+**Independent Test**: In stub mode:
+- clicking a download link on a fake site gives the agent a file
+  reference (name, type, size), never the bytes;
+- `docs.upload` of that reference files it in Paperless;
+- `browser.upload` of a mail attachment's reference into the fake form
+  waits for approval, and after the person approves, the fake site
+  receives exactly that file;
+- a download over the size limit, or of a type that isn't allowed, is
+  refused and nothing is kept.
+
+**Acceptance Scenarios**:
+
+1. **Given** a page with a download, **When** the agent clicks it,
+   **Then** the gateway keeps the file and the agent gets a reference
+   with its name, type and size.
+2. **Given** a download reference, **When** the agent files it with
+   `docs.upload`, **Then** the document is stored for the agent's owner,
+   as with mail attachments.
+3. **Given** a file reference the agent holds (a mail attachment, a
+   stored document or a download) and a file field on the page,
+   **When** the agent uploads it, **Then** the person is asked first,
+   with the file's name and the site; only after a yes does the page
+   receive the file.
+4. **Given** a reference issued to another agent, or one that has
+   expired, **When** the agent uses it, **Then** it is refused.
+5. **Given** a download over the size limit, or of a type that isn't
+   allowed, **When** the agent clicks it, **Then** it is refused and
+   nothing is kept.
+6. **Given** the person has taken over, **When** they download or
+   upload a file themselves in the larger window, **Then** downloads
+   are kept as references for the agent, and uploads use the person's
+   own device's file picker.
+
 ### Edge Cases
 
 - **The person never hands back**: the agent's browser calls time out
@@ -160,8 +206,13 @@ across a restart of the browser.
   larger window fills the screen.
 - **Two chats with the same agent**: one browser per agent; the live
   window appears in the chat whose request opened or used the browser.
-- **The agent tries JavaScript, file:// or chrome:// addresses, or
-  downloads**: refused; downloads are out of scope for this feature.
+- **The agent tries JavaScript, file:// or chrome:// addresses**:
+  refused.
+- **A download never ends, or a site sends many files**: the size,
+  time and count limits apply; partial files are discarded.
+- **A downloaded file is malicious**: it is never opened by the gateway
+  or the browser; it is only stored and handed on as bytes (to
+  Paperless, or to an upload the person approved).
 - **A page tries to reach the home network** (images, scripts,
   redirects, WebSockets): blocked like navigation.
 - **The browser crashes or is restarted**: the next call starts it
@@ -209,6 +260,18 @@ across a restart of the browser.
   gateway.
 - **FR-012**: What the person types during a takeover MUST NOT be
   shown to the agent.
+- **FR-017**: A download MUST be kept by the gateway, outside the
+  browser, within size, type and count limits, and the agent MUST get
+  only a reference (name, type, size) that works only for that agent
+  and expires.
+- **FR-018**: Download references MUST be usable wherever file
+  references are (`docs.upload`).
+- **FR-019**: `browser.upload` MUST put a file the agent holds by
+  reference (a mail attachment, a stored document or a download) into a
+  page's file field, only after the person approves; the approval MUST
+  show the file's name and size and the site.
+- **FR-020**: A person who has taken over MAY download (kept as a
+  reference for the agent) or upload from their own device.
 - **FR-013**: Every browser call, takeover and hand-back MUST be in
   the audit log, without page content, typed text or credentials.
 - **FR-014**: The browser MUST run isolated from the household
@@ -230,6 +293,9 @@ across a restart of the browser.
   take over, one agent's browser for a short time.
 - **Site login**: a stored credential with the site it belongs to, and
   whether the person has approved its first use.
+- **File reference**: an opaque, expiring id the gateway issues to one
+  agent for one file it holds or can fetch (a mail attachment, a stored
+  document, a browser download).
 
 ## Success Criteria *(mandatory)*
 
@@ -248,14 +314,20 @@ across a restart of the browser.
 - **SC-005**: Another user's attempt to open or drive the live view
   fails every time.
 - **SC-006**: Every existing stack test still passes.
+- **SC-007**: 0 bytes of a downloaded or uploaded file appear in
+  anything the agent receives; an upload reaches the site only after
+  approval, every time.
 
 ## Assumptions
 
 - **The live window is an Open WebUI message embed** (an iframe Open
   WebUI shows in the message), served by the gateway over the same
   private address as approval pages. Open WebUI is not modified.
-- **The browser is Chromium**, driven by the gateway; downloads and file
-  uploads are later work.
+- **The browser is Chromium**, driven by the gateway.
+- **Download limits**: 25 MB per file, PDF, images, plain text, CSV and
+  Office documents only; references live 24 hours.
+- **Files attached in the Open WebUI chat** aren't a file source yet
+  (Open WebUI sends their extracted text, not the file); later work.
 - **Isolation is a hardened container per agent**; a microVM (sbx) is
   deferred, because it needs a Docker account sign-in and can't run in
   CI (research.md).

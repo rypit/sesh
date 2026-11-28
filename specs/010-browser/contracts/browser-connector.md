@@ -10,6 +10,14 @@ Code mode methods (the agent calls them inside `execute`):
 | `browser.click` | `{n}` | a snapshot | yes, when `n` submits a form |
 | `browser.type` | `{n, text}` (no line breaks) | a snapshot | no |
 | `browser.login` | `{site}` | `{ok}` | the first time per owner and site |
+| `browser.downloads` | `{}` | `[{ref, filename, type, size, from}]` (this session's) | no |
+| `browser.upload` | `{n, ref}` | a snapshot | yes, always (shows file name, size, site) |
+| `docs.ref` | `{id}` | `{ref, filename, type, size}` | no |
+
+A click that triggers a download returns the snapshot plus
+`downloads: [{ref, filename, type, size}]`. References work with
+`docs.upload` and `browser.upload`, only for the agent they were issued
+to, for 24 hours.
 
 Errors (as text, like other connectors):
 - `that address is on the home network; the browser can't open it`
@@ -17,6 +25,9 @@ Errors (as text, like other connectors):
 - `no login is stored for <site>; ask the person to add one with sesh credential request browser SITE_<site>`
 - `the person is in control of the browser; try again later`
 - `only http and https addresses can be opened`
+- `that download is too large (limit 25 MB)` / `that kind of file isn't allowed`
+- `element <n> isn't a file field`
+- `that file reference isn't yours or has expired`
 
 # Contract: the live view (approvals listener, `:7002`)
 

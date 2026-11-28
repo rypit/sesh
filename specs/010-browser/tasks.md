@@ -63,6 +63,24 @@ description: "Task list for feature 010: browser, with a live view and takeover 
   - another agent's browser doesn't have it.
 - [ ] T015 `open`, `snapshot`, `click` (with the submit gate) and `type`.
 
+## Phase 5b: US5 — downloads and uploads (P1)
+
+- [ ] T023 Unit tests, then `refs.rs`:
+  - references gain a source kind (`GmailAttachment`, `Download`, `Document`) and a byte fetcher per kind;
+  - `docs.upload` accepts every kind;
+  - `docs.ref({id})` is scope-checked like `docs.get`.
+- [ ] T024 Unit tests, then `browser/downloads.rs`:
+  - the `Fetch`-domain capture: it detects attachments, enforces the size, type and count limits, discards partial files, and fails the request in the browser;
+  - the store (memory, spilled to a gateway-owned directory, 24 h TTL).
+- [ ] T025 `browser.upload` (gated, with the approval text from research R9) and `browser.downloads`; the page script sets the file with `DataTransfer`.
+- [ ] T026 Stub fake sites: a download link (a PDF), an oversized download, a disallowed type, and an upload form that records what it received.
+- [ ] T027 Stack test part 5:
+  - a click on the download gives a ref and no bytes, and `docs.upload` of it files it in Paperless;
+  - `browser.upload` of a Gmail attachment's ref waits for approval, and the fake form has nothing until the approval, then exactly those bytes;
+  - another agent's ref is refused;
+  - the oversized and disallowed downloads are refused;
+  - nothing is left in the browser container's filesystem.
+
 ## Phase 6: US2 — live window in the chat, takeover (P1)
 
 - [ ] T016 Unit tests, then `relay.rs`:
@@ -86,7 +104,8 @@ description: "Task list for feature 010: browser, with a live view and takeover 
   - input from the control page changes the page;
   - closing hands back, and the next call succeeds;
   - a grant used with another user's JWT, a wrong secret or after expiry is refused (SC-005);
-  - text typed in a takeover never appears in the agent's replies (SC-003).
+  - text typed in a takeover never appears in the agent's replies (SC-003);
+  - a file chosen in the control page reaches the fake form, and a download during the takeover shows up in `browser.downloads`.
 
 ## Phase 7: Polish
 
@@ -97,4 +116,4 @@ description: "Task list for feature 010: browser, with a live view and takeover 
 ## Dependencies
 
 - T004–T007 come before everything else; T011 comes before T008's run.
-- US1 → US3 → US4 → US2: US2 builds on sessions and the screencast.
+- US1 → US3 → US4 → US5 → US2: US2 builds on sessions and the screencast; US5 needs `click` (US4).

@@ -38,7 +38,16 @@ a TypeScript controller inside it. Two facts changed that:
    - `login(site)` checks the browser's current host against the
      credential's site, fills the fields itself (TOTP included), and
      reports success or failure.
-   - Form submits and the first login per owner and site are gated.
+   - Form submits, uploads, and the first login per owner and site are
+     gated.
+5. **Downloads stay in the gateway.**
+   - The gateway captures downloads over CDP and keeps them outside the
+     browser.
+   - The agent gets a file reference, like a mail attachment's, usable
+     with `docs.upload` and `browser.upload`.
+   - Uploads put a referenced file into a page's file field after the
+     person approves.
+   - In neither direction do the bytes reach the model.
 
 ## Alternatives
 

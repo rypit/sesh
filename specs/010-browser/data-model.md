@@ -51,3 +51,18 @@ read only by the gateway.
   one way; the egress proxy `:7004` the other)
 - `chat` (internal): Open WebUI and the gateway (chat listener `:7003`)
 - removed: `agent-<agent>-chat`
+
+## File reference (gateway memory, `refs.rs`)
+
+| Field | Notes |
+|---|---|
+| `ref` | 32 hex characters, issued to one agent |
+| `source` | `GmailAttachment {message, attachment}`, `Download {store id}`, or `Document {paperless id}` |
+| `filename`, `type`, `size` | as shown to the agent and in approvals |
+| `expires` | 24 hours (downloads) or as today (attachments) |
+
+## Download store (gateway)
+
+Bytes per download: in memory up to 1 MB, otherwise in a gateway-owned
+directory (`/var/lib/sesh-gateway/downloads`, tmpfs-backed volume),
+deleted when the reference expires. At most 20 per agent.

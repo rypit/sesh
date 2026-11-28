@@ -202,3 +202,53 @@ gateway's database, keyed by owner and site.
   the test.
 - **`agent_stack`** gains one step: the stub script makes Hermes open
   the browser, and the Open WebUI message has an embed.
+
+## R9. Downloads and uploads without the bytes reaching the model
+
+**Downloads**:
+- **Capture**: the gateway enables CDP's `Fetch` domain at the response
+  stage. It recognises a download by `Content-Disposition: attachment`,
+  or by a type the browser wouldn't render.
+  - It reads the body (`Fetch.takeResponseBodyAsStream`, stopping at the
+    size limit) into its own store.
+  - It then fails the request in the browser, so nothing is saved
+    inside the container.
+- **Limits**: 25 MB per file; only PDF, PNG, JPEG, plain text, CSV and
+  Office types; at most 20 kept per agent.
+- **Storage**: kept in memory, then spilled to a gateway-owned
+  directory for larger files, for 24 hours.
+- **What the agent gets**: a reference, via `refs.rs`, which grows a
+  source kind: `GmailAttachment` (fetched when used, as today),
+  `Download` (bytes held) or `Document` (a Paperless document of the
+  owner's).
+
+**Why not a shared volume** (browser writes, gateway reads): it adds a
+file channel between an untrusted container and the gateway, and leaves
+copies in the browser's filesystem. The `Fetch` capture keeps one copy,
+in the gateway.
+
+**Uploads**:
+- `browser.upload({n, ref})` needs the field to be a file input in the
+  current snapshot.
+- It is gated: the approval text shows the file name, size, type, the
+  page's host and the field's label.
+- After a yes, the gateway resolves the ref and fetches the bytes (from
+  Gmail, Paperless or its download store). Its own page script builds a
+  `File` from them and assigns it to the input with a `DataTransfer`,
+  then fires `input` and `change`. Bytes are passed as a CDP call
+  argument, capped at 25 MB.
+- `DOM.setFileInputFiles` would need the file on the container's disk,
+  so it isn't used.
+
+**Takeover**:
+- While the person is in control, downloads are captured the same way,
+  and the control page lists them as kept for the agent.
+- A file field clicked by the person opens a picker in the control
+  page, on the person's own device. The chosen file is sent over the
+  live view's WebSocket and set the same way. The person's own action
+  needs no approval.
+
+**Documents as a source**: `docs.ref({id})` issues a reference to one of
+the owner's Paperless documents (scope checked as in `docs.get`). It
+is a small addition to the `docs` connector, needed so stored documents
+can be uploaded.
