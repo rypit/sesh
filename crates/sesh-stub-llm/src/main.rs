@@ -123,6 +123,8 @@ const FILE: &str = "async () => { const r = await mail.search({ query: \"power b
 // Suite v4 (specs/006 research.md R11).
 const FEED_LATEST: &str = "async () => await feeds.latest({ feed: \"harbour\", limit: 3 })";
 const FEED_ADD: &str = "async () => await feeds.add({ url: \"http://fakes:8000/fake/feeds/ferry.xml\", name: \"ferry\" })";
+// specs/010: the agent opens a page in its browser (the live window).
+const BROWSE: &str = "async () => { const p = await browser.open({ url: \"http://fake-news.test:8000/article\" }); return p.title; }";
 const READ_ONLY: &str = "async () => { const r = await mail.search({ query: \"power bill\" }); return await mail.read({ id: r.messages[0].id }); }";
 
 /// One step of a scripted eval conversation (contracts/stub-script.md).
@@ -243,6 +245,7 @@ fn agent_scripted(req: &Value) -> Option<Value> {
             "feeds" => "Feeds",
             "send" => "Send",
             "terminal" => "Terminal",
+            "browse" => "Browser",
             _ => "Result",
         };
         let r: String = r.chars().take(1500).collect();
@@ -254,6 +257,7 @@ fn agent_scripted(req: &Value) -> Option<Value> {
         "mail" => READ_ONLY,
         "feeds" => FEED_LATEST,
         "send" => SEND,
+        "browse" => BROWSE,
         "terminal" => {
             return Some(
                 json!({"role": "assistant", "content": null, "tool_calls": [{
@@ -443,6 +447,7 @@ mod fake_feeds;
 mod fake_google;
 mod fake_miniflux;
 mod fake_paperless;
+mod fake_sites;
 
 fn main() {
     let port = std::env::var("STUB_PORT").unwrap_or_else(|_| "8000".into());
@@ -460,10 +465,43 @@ fn main() {
     let mut feeds = fake_feeds::Fake;
     let mut miniflux = fake_miniflux::Fake::default();
     let mut recent: std::collections::VecDeque<Value> = Default::default();
+    let mut sites = fake_sites::Fake::default();
     for mut request in server.incoming_requests() {
         let path = request.url().split('?').next().unwrap_or("").to_string();
         let method = request.method().as_str().to_string();
         let json_ct = header("Content-Type", "application/json");
+        fn head(r: &tiny_http::Request, name: &str) -> String {
+            r.headers()
+                .iter()
+                .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
+                .map(|h| h.value.as_str().to_string())
+                .unwrap_or_default()
+        }
+        let (host, cookie, ctype) = (
+            head(&request, "Host"),
+            head(&request, "Cookie"),
+            head(&request, "Content-Type"),
+        );
+        if path == "/fake/sites/seen" {
+            let _ = request.respond(
+                tiny_http::Response::from_string(sites.seen().to_string()).with_header(json_ct),
+            );
+            continue;
+        }
+        if fake_sites::HOSTS.contains(&host.split(':').next().unwrap_or("")) {
+            let mut body = vec![];
+            let _ = std::io::Read::read_to_end(request.as_reader(), &mut body);
+            if let Some(r) = sites.handle(&host, &method, &path, &cookie, &ctype, &body) {
+                let mut resp = tiny_http::Response::from_data(r.body)
+                    .with_status_code(r.status)
+                    .with_header(header("Content-Type", r.content_type));
+                for (k, v) in r.headers {
+                    resp = resp.with_header(header(k, &v));
+                }
+                let _ = request.respond(resp);
+                continue;
+            }
+        }
         if path.starts_with("/fake/google/") {
             let auth = request
                 .headers()

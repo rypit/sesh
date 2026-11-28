@@ -105,6 +105,15 @@ jobs:
           outputs: type=docker,dest=/tmp/sesh-executor.tar
           cache-from: type=gha,scope=executor
           cache-to: type=gha,scope=executor,mode=max
+      - name: Build the browser image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/browser.Dockerfile
+          tags: sesh-browser:dev
+          outputs: type=docker,dest=/tmp/sesh-browser.tar
+          cache-from: type=gha,scope=browser
+          cache-to: type=gha,scope=browser,mode=max
       - uses: actions/upload-artifact@v4
         with:
           name: sesh-images
@@ -133,6 +142,7 @@ jobs:
           - gateway_stack
           - secrets_stack
           - google_docs_stack
+          - browser_stack
     name: stack (${{ matrix.tests }})
     steps:
       - uses: actions/checkout@v4

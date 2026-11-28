@@ -2033,12 +2033,14 @@ dependencies = [
  "clap",
  "ctrlc",
  "getrandom 0.4.3",
+ "hmac",
  "serde",
  "serde_json",
  "sesh-core",
  "sha2",
  "tiny_http",
  "toml",
+ "tungstenite 0.29.0",
  "ureq",
 ]
 
@@ -2096,6 +2098,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tiny_http",
+ "url",
 ]
 
 [[package]]

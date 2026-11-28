@@ -63,7 +63,7 @@ in [`docs/decisions/`](docs/decisions/) and reference notes in
 - [x] 007 Service isolation ([`specs/007-service-isolation/`](specs/007-service-isolation/)): a database login and a Redis per service
 - [x] 008 Network isolation ([`specs/008-network-isolation/`](specs/008-network-isolation/)): no shared network; each service reaches only its neighbours (merged; this follow-up finishes its remaining tasks)
 - [x] 009 One agent end to end ([`specs/009-one-agent/`](specs/009-one-agent/)): a Hermes agent in Open WebUI, using everything through the gateway
-- [ ] 010 Browser (with an in-chat live view and takeover in Open WebUI): reading pages and logging in for you
+- [x] 010 Browser ([`specs/010-browser/`](specs/010-browser/)): reading pages, logging in for you, downloads and uploads, with a live view and takeover inside the chat
 - [ ] 011 Memory: facts recalled across sessions, per person
 - [ ] 012 Multi-user and household: everyone's agents, the Household agent, Telegram, backups, secret rotation, operator skills
 - [ ] 013 Google Docs (read-only): search and read your Google Docs

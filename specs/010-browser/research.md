@@ -253,3 +253,32 @@ in the gateway.
 the owner's Paperless documents (scope checked as in `docs.get`). It
 is a small addition to the `docs` connector, needed so stored documents
 can be uploaded.
+
+## R10. Implementation notes and deviations (2026-11-28)
+
+- **Tested against a real Chromium.** `crates/sesh-gateway/tests/browser_chrome.rs`
+  ran against Chromium 153 locally, through the egress proxy, covering
+  `read`, the refused redirect and subresource, field masking, submit
+  detection, download capture and refusal, upload, screencast frames and
+  takeover. It is ignored unless `SESH_TEST_CHROME` is set; `browser_stack`
+  covers the same in the containers.
+- **Live grants and approved first logins are kept in the gateway's
+  memory**, not in Postgres tables (data-model.md). A gateway restart ends
+  open live views (the window says so) and asks again for a site's first
+  login. Persisting them is a small follow-up if that proves annoying.
+- **Downloads are held in memory** (at most 20 per agent, 25 MB each),
+  not spilled to a directory; references last 24 hours.
+- **Uploading from the person's own device during a takeover** (FR-020,
+  a MAY) is not built: the person can click and type in the page, and
+  downloads during a takeover are captured, but the control window has no
+  file picker yet. Follow-up.
+- **Site logins** use a dedicated form (`sesh browser login <owner>
+  <site>`, username, password, optional authenticator key), stored under
+  a credential name derived from a hash of owner and site, so the store's
+  name rules (`[A-Z0-9_]{1,64}`) hold.
+- **The chat listener doesn't check the agent's API key itself**: the
+  runtime does (`API_SERVER_KEY`), and the live window is added only to a
+  successful streamed reply with a valid signed user header.
+- **Debian's apt mirrors aren't reachable from the development sandbox**,
+  so the browser image was built only in CI; the image's flags were
+  checked with the same Chromium locally.

@@ -41,7 +41,7 @@ architecture-diagram check, Compose validation and the instance-data
 guard. `make stack-test` starts the stack with the stub model server and
 runs the stack tests (needs Docker and the dev images:
 `docker build -f deploy/<name>.Dockerfile -t sesh-<name>:dev .` for
-`stub` (tagged `sesh-stub-llm:dev`), `gateway` and `executor`).
+`stub` (tagged `sesh-stub-llm:dev`), `gateway`, `executor` and `browser`).
 `sesh eval` runs the model-eval suite (feature 003); in stub mode,
 `STUB_SCRIPT=pass sesh up` (or `fail`) makes the stub model play the
 suite's scripted conversations.
@@ -67,6 +67,13 @@ through `connectors/feeds.rs` (ADR 0009).
 `sesh agent add … --runtime hermes` also runs a Hermes Agent container
 for the agent (feature 009, ADR 0012), configured only by
 `crates/sesh-cli/src/hermes.rs`: the gateway's MCP tools and nothing
-else, on three internal pair networks (with the gateway, LiteLLM and
-Open WebUI) and no route out. `STUB_SCRIPT=agent sesh up` makes the
+else, on two internal pair networks (with the gateway and LiteLLM) and
+no route out. `STUB_SCRIPT=agent sesh up` makes the
 stub play the runtime's scripted chat; `agent_stack` tests it.
+The `browser` connector (feature 010, ADRs 0013 and 0014) is driven by
+the gateway over CDP from `crates/sesh-gateway/src/browser/`; the
+browser container (`deploy/browser.Dockerfile`, `sesh-browser:dev`)
+reaches the web only through the gateway's egress proxy, and Open WebUI
+reaches agent runtimes only through the gateway's chat listener, which
+adds the live browser window. `sesh browser login <owner> <site>` prints
+a one-time form for a site login.

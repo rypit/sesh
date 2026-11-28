@@ -201,6 +201,8 @@ pub fn effective_gateway(config: &Config) -> GatewaySettings {
         // allowed by the browser's egress proxy, in stub mode only.
         g.browser.egress_allow = STUB_SITES.iter().map(|s| s.to_string()).collect();
         g.browser.allow_http_login = true;
+        // Tests wait for a takeover to time out; the household keeps 60 s.
+        g.browser.wait_secs = 5;
         g.home.get_or_insert(Home {
             latitude: 59.91,
             longitude: 10.75,
