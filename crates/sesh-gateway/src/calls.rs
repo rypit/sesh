@@ -73,7 +73,12 @@ pub async fn handle_from(
         execution: None,
         connector: Some(connector.clone()).filter(|c| !c.is_empty()),
         method: Some(method.clone()).filter(|m| !m.is_empty()),
-        args_summary: summarize(&args),
+        // Memory text is about people: only its length is audited (FR-012).
+        args_summary: if connector == "memory" {
+            crate::connectors::memory::audit_summary(&args)
+        } else {
+            summarize(&args)
+        },
         outcome: "refused",
         reason: None,
     };

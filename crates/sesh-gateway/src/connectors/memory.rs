@@ -547,6 +547,20 @@ fn now_text() -> String {
     format!("day {}", secs / 86_400)
 }
 
+/// What the audit log keeps of a memory call (FR-012): the arguments, with
+/// any fact or query replaced by its length.
+pub fn audit_summary(args: &Value) -> Value {
+    let mut out = crate::redact::summarize(args);
+    if let Some(o) = out.as_object_mut() {
+        for k in ["fact", "query"] {
+            if let Some(t) = args[k].as_str() {
+                o.insert(k.into(), json!(format!("({} chars)", t.chars().count())));
+            }
+        }
+    }
+    out
+}
+
 /// The owners a recall covers: the agent's owner, plus the Household when
 /// asked (never another user: FR-004).
 pub fn recall_owners(scope: &Scope, include_household: bool) -> Vec<String> {
@@ -802,6 +816,15 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(s.forget_all("ben").await.unwrap(), 1);
+    }
+
+    #[test]
+    fn the_audit_keeps_no_fact_or_query_text() {
+        let a = audit_summary(&json!({"fact": "Ana's dentist is Dr Okafor", "household": true}));
+        assert_eq!(a, json!({"fact": "(26 chars)", "household": true}));
+        let a = audit_summary(&json!({"query": "dentist", "limit": 3}));
+        assert_eq!(a, json!({"query": "(7 chars)", "limit": 3}));
+        assert_eq!(audit_summary(&json!({"id": "x"})), json!({"id": "x"}));
     }
 
     #[test]
