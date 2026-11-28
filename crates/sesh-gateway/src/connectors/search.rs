@@ -84,16 +84,24 @@ pub fn article_path(path: &str) -> Result<String, String> {
     Ok(format!("/content/{path}"))
 }
 
+/// Whether `b` starts with the ASCII `pat`, ignoring ASCII case.
+fn starts_with_ci(b: &[u8], pat: &str) -> bool {
+    b.get(..pat.len())
+        .is_some_and(|h| h.eq_ignore_ascii_case(pat.as_bytes()))
+}
+
+/// Strips tags, `<script>` and `<style>` blocks. Safe on any UTF-8: tag
+/// names are matched as ASCII bytes, and text is only sliced at char
+/// boundaries.
 pub fn strip_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut in_tag = false;
     let mut skip_until: Option<&str> = None;
-    let lower = html.to_ascii_lowercase();
-    let mut i = 0;
     let bytes = html.as_bytes();
+    let mut i = 0;
     while i < bytes.len() {
         if let Some(end) = skip_until {
-            if lower[i..].starts_with(end) {
+            if starts_with_ci(&bytes[i..], end) {
                 i += end.len();
                 skip_until = None;
             } else {
@@ -101,15 +109,19 @@ pub fn strip_tags(html: &str) -> String {
             }
             continue;
         }
-        if lower[i..].starts_with("<script") {
+        if starts_with_ci(&bytes[i..], "<script") {
             skip_until = Some("</script>");
             continue;
         }
-        if lower[i..].starts_with("<style") {
+        if starts_with_ci(&bytes[i..], "<style") {
             skip_until = Some("</style>");
             continue;
         }
-        let c = html[i..].chars().next().expect("char");
+        // `i` is on a char boundary here (skipping ends after an ASCII
+        // pattern); if it ever weren't, stop rather than panic.
+        let Some(c) = html.get(i..).and_then(|r| r.chars().next()) else {
+            break;
+        };
         match c {
             '<' => in_tag = true,
             '>' => {
@@ -142,6 +154,19 @@ pub fn parse_article(path: &str, html: &str, cap: usize) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_tags_is_safe_on_any_utf8() {
+        // Multi-byte characters inside skipped blocks, next to tags, and
+        // characters whose lowercase has a different byte length.
+        let html = "<p>caf\u{e9}</p><style>p{content:\"\u{e9}\u{2603}\u{1f600}\"}</style>\
+                    <SCRIPT>let s='\u{130}\u{e9}';</SCRIPT>\u{130}stanbul <b>\u{2603}</b>";
+        assert_eq!(strip_tags(html), "caf\u{e9} \u{130}stanbul \u{2603}");
+        // Unclosed blocks and stray brackets never panic.
+        assert_eq!(strip_tags("a<style>\u{e9}\u{e9}"), "a");
+        assert_eq!(strip_tags("\u{e9}<script\u{e9}"), "\u{e9}");
+        assert_eq!(strip_tags("<\u{e9}>x"), "x");
+    }
 
     #[test]
     fn web_parsing_takes_limit_and_maps_fields() {

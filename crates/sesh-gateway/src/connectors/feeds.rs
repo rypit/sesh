@@ -153,7 +153,12 @@ fn num(s: &str) -> Option<i64> {
         .flatten()
 }
 
+/// RFC 3339 is ASCII-only, so anything else is rejected up front: every
+/// byte index below is then a char boundary and slicing can't panic.
 fn parse_rfc3339(s: &str) -> Option<i64> {
+    if !s.is_ascii() {
+        return None;
+    }
     let b = s.as_bytes();
     if b.len() < 10 || b[4] != b'-' || b[7] != b'-' {
         return None;
@@ -808,6 +813,26 @@ pub mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["title"], "new");
         assert_eq!(parse_date("yesterday"), None);
+    }
+
+    #[test]
+    fn dates_with_multibyte_characters_are_rejected_not_panics() {
+        for bad in [
+            "2026-11-2\u{e9}",
+            "2026-11-2\u{e9}T08:30:00Z",
+            "2026-11-27T08:3\u{e9}",
+            "2026-11-27T08:30\u{e9}",
+            "2026-11-27T08:30:0\u{e9}Z",
+            "2026-11-27T08:30:00+1\u{e9}0",
+            "2026-11-27T08:30:00+01:\u{e9}",
+            "2026-11-27T08:30:00.\u{e9}Z",
+            "\u{e9}026-11-27",
+            "2026-\u{e9}-27T08:30Z",
+        ] {
+            assert_eq!(parse_date(bad), None, "{bad}");
+        }
+        assert_eq!(parse_date("2026-11-27"), Some(1_795_737_600));
+        assert_eq!(parse_date("2026-11-27T01:00:00+0100"), Some(1_795_737_600));
     }
 
     /// A fake Miniflux that answers every request with every user's
