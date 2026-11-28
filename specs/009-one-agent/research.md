@@ -194,9 +194,9 @@ script keyed by an `[agent:<step>]` tag in the latest user message,
 reusing the eval script's `execute` code:
 - `weather`: `execute` with `geo.forecast({})`;
 - `search`: `execute` with `search.web({query:"varden beacon"})`;
-- `mail`: `execute` with `mail.search({query:"electricity"})`;
-- `feeds`: `execute` with `feeds.entries({})`;
-- `send`: `execute` with `mail.send({...})` (gated);
+- `mail`: `execute` with the eval's `mail.search` + `mail.read`;
+- `feeds`: `execute` with `feeds.latest({feed:"harbour"})`;
+- `send`: `execute` with the eval's `mail.send` (gated);
 - `terminal`: a call to a tool named `terminal` with `{"command":"id"}`,
   which the runtime doesn't offer.
 

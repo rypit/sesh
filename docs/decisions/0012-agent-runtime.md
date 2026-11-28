@@ -1,6 +1,6 @@
 # 0012. Hermes as the agent runtime, reaching only the gateway
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-27
 - Feature: specs/009-one-agent
 

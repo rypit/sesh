@@ -14,8 +14,8 @@ description: "Task list for feature 009: one agent end to end"
 
 ## Phase 1: Setup
 
-- [x] T001 [P] ADR `docs/decisions/0012-agent-runtime.md` (status proposed): the runtime, the tools, the networks, the listener change, the credentials (research.md R1–R9).
-- [ ] T002 [P] Pin the image in `crates/sesh-cli/src/hermes.rs` (`HERMES_IMAGE`, research.md R1) and add it to the CI image pull list in `.github/workflows/ci.yml`.
+- [x] T001 [P] ADR `docs/decisions/0012-agent-runtime.md` (accepted): the runtime, the tools, the networks, the listener change, the credentials (research.md R1–R9).
+- [x] T002 [P] Pin the image in `crates/sesh-cli/src/hermes.rs` (`HERMES_IMAGE`, research.md R1) (`IMAGE`); Compose pulls it, in CI too.
 
 ---
 
@@ -42,7 +42,7 @@ Written first: it's the safety guarantee, and its tests define the wiring the ot
   - `[agent:terminal]`: no command runs (the reply says the tool isn't available) and the audit log has no new entry;
   - reachability from the runtime's namespace (`probe_from`): `gateway:7000`, `litellm:4000` connect; the internet (`1.1.1.1:443`), Postgres, Infisical, ntfy, Redis, SearXNG, Paperless, Miniflux, the gateway's `:7002`, an executor and the stub fail (SC-003);
   - the container's environment holds only `SESH_GATEWAY_TOKEN`, `SESH_ROUTER_KEY`, `API_SERVER_KEY` as secrets (US3 scenario 4).
-- [ ] T010 [US3] Extend `network_stack` to run with one runtime agent: the layout and the matrix from `matrix_with`.
+- [x] T010 [US3] The layout and the matrix with a runtime agent (`matrix_with`): checked in `agent_stack` (`assert_runtime_reachability`) rather than `network_stack`, so only one CI group pulls the runtime's image.
 
 ---
 
@@ -69,8 +69,8 @@ Written first: it's the safety guarantee, and its tests define the wiring the ot
 
 ## Phase 7: Polish
 
-- [ ] T017 [P] Architecture doc (the runtime, its networks, the listener rule, phase 9 done) and `diagram.jsx` + `docs/architecture.svg` (Hermes per agent, its three links); README status; AGENTS.md (the runtime flag).
-- [ ] T018 [P] `.github/workflows/ci.yml`: `agent_stack` in its own stack group.
+- [x] T017 [P] Architecture doc (the runtime, its networks, the listener rule, phase 9 done) and `diagram.jsx` + `docs/architecture.svg` (Hermes per agent, its three links); README status; AGENTS.md (the runtime flag).
+- [x] T018 [P] `.github/workflows/ci.yml`: `agent_stack` in its own stack group.
 - [ ] T019 Record CI results and any deviations (R8's read-only config, R9's hardening) in `research.md`.
 
 ## Dependencies

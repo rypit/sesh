@@ -312,7 +312,7 @@ that touches untrusted content runs in sbx microVMs.
 | Placement | Components | Why |
 | --- | --- | --- |
 | Bare metal (macOS) | Inference server, when it needs the GPU (for example oMLX) | Needs the Metal GPU |
-| Docker (Compose) | Open WebUI, Hermes (container per profile), gateway, workerd executor per agent (only its own network to the gateway), Infisical, ntfy, Mem0, Paperless, Miniflux, SearXNG, Kiwix, LiteLLM, Postgres, Redis (one per service) | Long-lived services; one Compose file moves to the Mac mini unchanged; no shared network (see Network layout) |
+| Docker (Compose) | Open WebUI, Hermes (container per agent with a runtime, no route out), gateway, workerd executor per agent (only its own network to the gateway), Infisical, ntfy, Mem0, Paperless, Miniflux, SearXNG, Kiwix, LiteLLM, Postgres, Redis (one per service) | Long-lived services; one Compose file moves to the Mac mini unchanged; no shared network (see Network layout) |
 | sbx microVM | Browser sessions | VM boundary for code execution and untrusted web content |
 
 **Memory budget on a 64GB Mac mini (estimates)**
@@ -372,6 +372,11 @@ files' unit test, `sesh doctor` and the `network_stack` stack test
   one non-internal network, so its only way out is unambiguous.
 - In stub mode only, an internal `stub` network joins the stub model
   server with LiteLLM and the gateway.
+- Each agent runtime (`hermes-<agent>`, ADR 0012) is on three internal
+  pair networks and nothing else: `agent-<agent>` (with the gateway),
+  `agent-<agent>-model` (with LiteLLM) and `agent-<agent>-chat` (with
+  Open WebUI). It has no edge network, so no route out and no published
+  port.
 
 **The reachability rule**
 
@@ -382,7 +387,10 @@ files' unit test, `sesh doctor` and the `network_stack` stack test
   so the stack test expects them and notices a change.
 - The one exception is the gateway's agent (`:7000`) and approvals
   (`:7002`) listeners, which bind only loopback and `gateway-edge`, so no
-  other container reaches them. Its executor listener (`:7001`) accepts
+  other container reaches them, except that `:7000` also binds the
+  gateway's address on each `agent-<agent>` network, found by resolving
+  its alias there (`gateway-agent-<agent>`, ADR 0012). So each agent
+  runtime, and nothing else, reaches the agent endpoint. Its executor listener (`:7001`) accepts
   connections on its other networks but refuses every call that isn't
   from the calling agent's own executor (ADR 0009).
 - Every other pair is refused, probed by every address the destination
@@ -612,7 +620,8 @@ is a feature under `specs/`.
        row.
 9. **One agent end to end:** one Hermes profile in a container, with
    built-in tools off and the gateway as its only MCP server; Open WebUI
-   connected to it. Memory comes in phase 11.
+   connected to it. Memory comes in phase 11. Done in specs/009
+   (ADR 0012): the Household agent, `sesh agent add … --runtime hermes`.
    - Accept: chatting in Open WebUI, the agent answers a weather and a
      search question, and uses mail, documents and feeds via the
      gateway; attempts to use terminal or file tools fail.
@@ -689,8 +698,9 @@ before or during its phase.
 | --- | --- | --- | --- |
 | `agent-main` tool-calling and memory quality on a ~30B local model | Risk | Benchmark candidate models on real tasks (`sesh eval`); keep prompts and tool docs short | 3 |
 | Code Mode durable runtime (snippets, replay) outside Cloudflare | Resolved | Verified under local workerd; it enforces no CPU limits, so one executor per agent and gateway-enforced deadlines | 2 |
-| Hermes skill writing still works with file and terminal tools off | Open question | Verify the skills tool writes only inside the profile's skills folder | 9 |
-| Hermes memory provider interface fits a gateway-backed plugin | Open question | Read the provider ABC; prototype against the `memory` connector | 9 |
+| Hermes skill writing still works with file and terminal tools off | Open question | Phase 9 runs Hermes with every built-in toolset off, skills included (specs/009 research.md R12); verify the skills tool writes only inside the profile's skills folder before turning it on | 12 |
+| Hermes memory provider interface fits a gateway-backed plugin | Open question | Read the provider ABC; prototype against the `memory` connector | 11 |
+| Hermes hides MCP tools behind its tool-search bridge, and parks an MCP server it can't reach at start | Resolved | `tools.tool_search.enabled: off`; the runtime starts after the gateway is healthy and is restarted with it (specs/009 R12) | 9 |
 | Browser server choice (Auto Browser, easi.run, Nod, or build) | Open question | Vet code and isolation; confirm CDP fill and field-read blocking | 10 |
 | Paperless built-in AI covers semantic search | Open question | Check the current release; add Paperless-AI only if needed | 5 |
 | Feed addresses used for server-side request forgery or exfiltration | Risk | Only Miniflux fetches, from its own egress network, which no other service is on; agent adds need approval (ADR 0009) | 6 |
