@@ -4201,6 +4201,10 @@ fn browser_stack() {
 
 const MEM_AGENT: &str = "house";
 
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// The facts in a `memory.recall` reply.
 fn recalled(reply: &str) -> Vec<String> {
     let start = reply.find('{').unwrap_or(0);
@@ -4232,6 +4236,35 @@ fn remember(mcp: &mut Mcp, fact: &str, household: bool) -> String {
 }
 
 impl Stack {
+    /// Files a text document straight into Paperless (as the gateway's
+    /// admin) and gives it to `owner`'s Paperless user, as the gateway
+    /// would; the user exists once that owner's agent has used `docs`.
+    fn file_document_for(&self, owner: &str, text: &str) {
+        let script = format!(
+            r#"set -e
+printf 'user = "sesh-gateway:%s"\n' "$PAPERLESS_ADMIN_PASSWORD" > /tmp/k
+c() {{ curl -fsS -K /tmp/k "$@"; }}
+printf '%s\n' {text} > /tmp/doc.txt
+task=$(c -F document=@/tmp/doc.txt -F title=memory-stack http://127.0.0.1:8000/api/documents/post_document/ | tr -d '"')
+for i in $(seq 90); do
+  id=$(c "http://127.0.0.1:8000/api/tasks/?task_id=$task" | python3 -c 'import sys,json; t=json.load(sys.stdin); t=t if isinstance(t,list) else t["results"]; print((t[0].get("related_document") or "") if t else "")')
+  [ -n "$id" ] && break
+  sleep 2
+done
+[ -n "$id" ]
+uid=$(c "http://127.0.0.1:8000/api/users/?username__iexact=sesh-{owner}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["results"][0]["id"])')
+c -X PATCH -H 'Content-Type: application/json' -d "{{\"owner\":$uid}}" "http://127.0.0.1:8000/api/documents/$id/" >/dev/null
+rm -f /tmp/k
+echo filed $id"#,
+            text = shell_quote(text)
+        );
+        let (ok, out) = self.bash_in("paperless", &script);
+        assert!(
+            ok && out.contains("filed"),
+            "filing a document for {owner}: {out}"
+        );
+    }
+
     fn missing_embeddings(&self) -> u64 {
         self.sql("SELECT count(*) FROM memories WHERE embedding IS NULL")
             .parse()
@@ -4307,11 +4340,32 @@ fn memory_stack() {
         !out.contains("4512"),
         "FR-004: a model can't pick the owner: {out}"
     );
-    // T009: one script reaching two stores still sees only ana's.
-    let out = ana2.execute(
-        "async () => ({ m: await memory.recall({ query: \"bike lock code\" }), d: await docs.search({ query: \"bike\" }) })",
+    // T009: one script reaching two stores still sees only ana's, with a
+    // real document of ben's in Paperless that ben's agent can find.
+    ben.execute("async () => await docs.search({ query: \"anything\" })");
+    stack.file_document_for(
+        "ben",
+        "Ben's bike insurance policy 77-4410 covers the marigold bike",
     );
-    assert!(!out.contains("4512"), "T009: {out}");
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        let out = ben.execute("async () => await docs.search({ query: \"marigold\" })");
+        if out.contains("77-4410") || out.contains("bike insurance") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "T009: ben's document: {out}"
+        );
+        std::thread::sleep(Duration::from_secs(3));
+    }
+    let out = ana2.execute(
+        "async () => ({ m: await memory.recall({ query: \"bike lock code\" }), d: await docs.search({ query: \"marigold bike\" }) })",
+    );
+    assert!(
+        !out.contains("4512") && !out.contains("77-4410") && !out.contains("bike insurance"),
+        "T009: ana's script saw ben's: {out}"
+    );
 
     // FR-005: a personal agent's Household write waits for the owner.
     let house_fact = "The bins go out on Tuesday evening";
@@ -4407,6 +4461,27 @@ fn memory_stack() {
         recall(&mut ana2, "dentist", false)
             .iter()
             .all(|f| !f.contains("Okafor"))
+    );
+
+    // FR-008: the per-owner limit holds at its real size (2000), seeded
+    // directly; updating an existing fact still works at the limit.
+    stack.sql(
+        "INSERT INTO memories (owner, agent, fact) SELECT 'ben', 'seed', 'seeded fact ' || g FROM generate_series(1, 1999) g",
+    );
+    let out = remember(&mut ben, "Ben's favourite colour is green", false);
+    assert!(out.contains("you have 2000 facts"), "FR-008: {out}");
+    let out = remember(&mut ben, "ben's bike lock code is 4512.", false);
+    assert!(out.contains("\"updated\""), "FR-007 at the limit: {out}");
+    let out = stack.sesh_ok(&["memory", "forget", "ben", "--all"]);
+    assert!(out.contains("forgot 2000 memories for ben"), "US3: {out}");
+    assert!(
+        stack
+            .sesh_ok(&["memory", "list", "ben"])
+            .contains("ben has no memories")
+    );
+    assert!(
+        !recall(&mut ana2, "bins", true).is_empty(),
+        "forget --all is one owner's"
     );
 
     // T014 (SC-003): the real model finds paraphrases, Norwegian and English.
