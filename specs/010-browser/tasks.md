@@ -111,7 +111,7 @@ description: "Task list for feature 010: browser, with a live view and takeover 
 
 - [x] T020 [P] Architecture doc (Browser row: container, not sbx; drop sbx from Deployment, Adopt list, risks and references; Security, Network layout, phase 10) and the diagram (the browser connects only to the gateway; Open WebUI connects to the gateway); README status; AGENTS.md.
 - [x] T021 [P] CI: build `sesh-browser:dev` in `images`; add `browser_stack` (the matrix guard test enforces it).
-- [ ] T022 Record CI results and deviations (Chromium's sandbox on the runner) in research.md.
+- [x] T022 Record CI results and deviations (Chromium's sandbox on the runner) in research.md.
 
 ## Dependencies
 

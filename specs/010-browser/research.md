@@ -297,3 +297,19 @@ can be uploaded.
   `kernel.apparmor_restrict_unprivileged_userns=0`; CI sets it, and
   `sesh doctor`'s `browsers` check names the fix when a browser keeps
   restarting. `--no-sandbox` is never used.
+
+## R11. CI results (T022)
+
+- PR #21's run on `45cef6c` passed every job: `check`, `images` (with the
+  new browser image) and all ten stack tests, `browser_stack` included
+  (6.3 min), with containers' internet blocked and Chromium's own sandbox
+  on.
+- Fixes on the way, none weakening the household configuration:
+  - the egress proxy tries every allowed address (a dual-stack host);
+  - `sesh up` starts each agent's browser;
+  - CDP through `socat` (new headless Chromium binds loopback only);
+  - the profile volume owned by the browser user;
+  - the seccomp profile that keeps Chromium's sandbox on, and the CI
+    step allowing unprivileged user namespaces on the runner;
+  - downloads read as a stream, stopping past 25 MB;
+  - the fake bank serves a real PDF.
