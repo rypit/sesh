@@ -185,8 +185,8 @@ is the API server's `GET /health`.
 
 ## R10. The stub model plays the runtime's conversation
 
-The gateway exposes two MCP tools (code mode, feature 002): `search`
-and `execute`. The runtime prefixes MCP tool names, so the model sees
+The gateway exposes three MCP tools (code mode, feature 002): `search`,
+`execute` and `describe`. The runtime prefixes MCP tool names, so the model sees
 them as something like `mcp_sesh_execute`.
 
 **Decision**: `STUB_SCRIPT=agent` (contracts/stub-script.md) adds a
@@ -221,8 +221,10 @@ and a fake model, using the configuration `hermes.rs` writes:
 - **Tool search bridge.** By default Hermes hides MCP tools behind three
   bridge tools (`tool_search`, `tool_describe`, `tool_call`).
   `tools.tool_search.enabled: off` makes the model see exactly the
-  gateway's two tools, named `mcp__sesh__execute` and
-  `mcp__sesh__search`. The stub's suffix match (R10) holds.
+  gateway's tools, named `mcp__sesh__<tool>` (the fake gateway offered
+  two; the real one offers `search`, `execute` and `describe`, and
+  `agent_stack` compares against its `tools/list`). The stub's suffix
+  match (R10) holds.
 - **Built-ins are refused.** A model call to `terminal` gets "Tool
   'terminal' does not exist. Available tools: mcp__sesh__execute,
   mcp__sesh__search", and nothing runs.

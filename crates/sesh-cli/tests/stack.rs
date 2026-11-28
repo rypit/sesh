@@ -3593,14 +3593,21 @@ fn agent_stack() {
         !runtime.is_empty(),
         "the runtime offered the gateway's tools: {offered:?}"
     );
+    // The gateway's own tool list, as the agent's token sees it.
+    let mut gw = Mcp::connect(&stack.token(RT_AGENT)).expect("the agent's token connects");
+    let (_, listed) = gw.post(json!({"jsonrpc": "2.0", "id": 99, "method": "tools/list"}));
+    let mut want: Vec<String> = listed.expect("tools/list")["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| format!("mcp__sesh__{}", t["name"].as_str().unwrap()))
+        .collect();
+    want.sort();
+    assert!(want.len() >= 2, "{want:?}");
     for tools in &runtime {
-        assert_eq!(tools.len(), 2, "SC-002: {tools:?}");
-        assert!(
-            tools
-                .iter()
-                .all(|t| t.contains("sesh") && (t.ends_with("execute") || t.ends_with("search"))),
-            "SC-002: only the gateway's tools: {tools:?}"
-        );
+        let mut got = (*tools).clone();
+        got.sort();
+        assert_eq!(got, want, "SC-002: exactly the gateway's tools");
     }
 
     // US3 (scenario 2): a built-in tool call is refused; nothing runs.

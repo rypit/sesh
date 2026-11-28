@@ -62,7 +62,7 @@ Written first: it's the safety guarantee, and its tests define the wiring the ot
 
 ## Phase 6: User Story 4 - One command to add or remove (Priority: P2)
 
-- [x] T015 [US4] Unit tests, then `doctor.rs` `agent-runtimes` (contracts/cli.md): health, `/v1/toolsets` (only `mcp-sesh` enabled, with `search` and `execute`), config matches. `network-layout` includes the agent networks.
+- [x] T015 [US4] Unit tests, then `doctor.rs` `agent-runtimes` (contracts/cli.md): health, `/v1/toolsets` (no built-in toolset enabled; research.md R12), config matches. `network-layout` includes the agent networks.
 - [ ] T016 [US4] `agent_stack` part 4: doctor passes; `sesh agent remove household-agent` and `sesh up`: the container and its networks are gone, Open WebUI no longer lists it, its gateway token is refused and its router key is deleted; doctor passes (SC-005).
 
 ---
