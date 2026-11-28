@@ -3553,21 +3553,52 @@ fn agent_stack() {
     );
 
     // US3 (FR-002, SC-002): the model is offered the gateway's tools only.
+    // Other clients (the doctor's tool-calling check) also use the stub,
+    // so the runtime's requests are the ones offering the gateway's tools;
+    // no request at all may offer a runtime built-in.
     let offered: Vec<Vec<String>> = stack
         .stub_requests()
         .iter()
         .filter_map(|r| r["tools"].as_array())
-        .filter(|t| !t.is_empty())
         .map(|t| t.iter().map(|x| x.as_str().unwrap().to_string()).collect())
         .collect();
-    assert!(!offered.is_empty(), "the runtime offered tools");
+    let builtins = [
+        "terminal",
+        "read_file",
+        "write_file",
+        "web_search",
+        "web_extract",
+        "execute_code",
+        "browser_cdp",
+        "memory",
+        "skill_view",
+        "delegate_task",
+        "tool_search",
+        "tool_call",
+        "image_generate",
+        "vision_analyze",
+        "todo_list",
+    ];
     for tools in &offered {
+        assert!(
+            !tools.iter().any(|t| builtins.contains(&t.as_str())),
+            "SC-002: a built-in was offered: {tools:?}"
+        );
+    }
+    let runtime: Vec<&Vec<String>> = offered
+        .iter()
+        .filter(|t| t.iter().any(|x| x.contains("sesh")))
+        .collect();
+    assert!(
+        !runtime.is_empty(),
+        "the runtime offered the gateway's tools: {offered:?}"
+    );
+    for tools in &runtime {
         assert_eq!(tools.len(), 2, "SC-002: {tools:?}");
         assert!(
             tools
                 .iter()
-                .all(|t| t.ends_with("execute") || t.ends_with("search"))
-                && tools.iter().all(|t| t.contains("sesh")),
+                .all(|t| t.contains("sesh") && (t.ends_with("execute") || t.ends_with("search"))),
             "SC-002: only the gateway's tools: {tools:?}"
         );
     }
