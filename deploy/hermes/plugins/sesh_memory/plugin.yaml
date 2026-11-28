@@ -1,0 +1,5 @@
+name: sesh_memory
+version: 1.0.0
+description: "sesh: recall through the household gateway (specs/011)."
+requires_env:
+  - SESH_GATEWAY_TOKEN

@@ -275,6 +275,48 @@ fn agent_scripted(req: &Value) -> Option<Value> {
     )
 }
 
+/// Deterministic stand-in embeddings (specs/011 research.md R4): each word
+/// hashed into one of 384 dimensions, normalised, so texts sharing words
+/// are close. The E5 prefixes are ignored.
+pub fn embed_text(text: &str) -> Vec<f64> {
+    let text = text
+        .strip_prefix("query: ")
+        .or_else(|| text.strip_prefix("passage: "))
+        .unwrap_or(text);
+    let mut v = vec![0.0f64; 384];
+    for w in text
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 1)
+    {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in w.bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        v[(h % 384) as usize] += 1.0;
+    }
+    let n = v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    if n > 0.0 {
+        v.iter_mut().for_each(|x| *x /= n);
+    } else {
+        v[0] = 1.0;
+    }
+    v
+}
+
+fn embeddings(req: &Value) -> Value {
+    let inputs: Vec<String> = match &req["input"] {
+        Value::String(s) => vec![s.clone()],
+        Value::Array(a) => a
+            .iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect(),
+        _ => vec![],
+    };
+    json!({"object": "list", "data": inputs.iter().enumerate().map(|(i, t)| json!({"object": "embedding", "index": i, "embedding": embed_text(t)})).collect::<Vec<_>>(), "model": "stub-embed"})
+}
+
 /// What `GET /stub/requests` reports for one chat request: never content.
 fn request_summary(req: &Value) -> Value {
     let tools: Vec<&str> = req
@@ -572,6 +614,12 @@ fn main() {
             ("GET", "/stub/requests") => {
                 tiny_http::Response::from_string(Value::from(Vec::from(recent.clone())).to_string())
                     .with_header(json_ct)
+            }
+            ("POST", "/v1/embeddings") => {
+                let mut body = String::new();
+                let _ = request.as_reader().read_to_string(&mut body);
+                let req: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+                tiny_http::Response::from_string(embeddings(&req).to_string()).with_header(json_ct)
             }
             ("GET", "/v1/models") => {
                 tiny_http::Response::from_string(models().to_string()).with_header(json_ct)
@@ -912,5 +960,18 @@ mod tests {
             request_summary(&r),
             json!({"model": "agent-main", "tools": ["mcp__sesh__execute", "mcp__sesh__search"]})
         );
+    }
+
+    #[test]
+    fn stub_embeddings_are_deterministic_and_closer_for_shared_words() {
+        let cos = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
+        let a = embed_text("passage: Kari's birthday is 3 May");
+        assert_eq!(a.len(), 384);
+        assert_eq!(a, embed_text("passage: Kari's birthday is 3 May"));
+        let q = embed_text("query: when is Kari's birthday");
+        let other = embed_text("query: the bins go out on Tuesdays");
+        assert!(cos(&a, &q) > cos(&a, &other));
+        let r = embeddings(&json!({"input": ["a b", "c d"]}));
+        assert_eq!(r["data"].as_array().unwrap().len(), 2);
     }
 }

@@ -288,6 +288,29 @@ pub fn write_compose_files(dir: &Path, config: &Config) -> Result<Vec<PathBuf>> 
 pub fn write_runtime_files(dir: &Path, agents: &AgentsFile) -> Result<Vec<String>> {
     let secrets = Secrets::load(dir)?;
     let mut changed = vec![];
+    // sesh's memory plugin, shared read-only by every runtime (specs/011).
+    if agents.agents.iter().any(|a| a.runtime.is_some()) {
+        let pd = crate::hermes::plugin_dir(dir);
+        let a = crate::hermes::write_if_changed(
+            &pd.join("__init__.py"),
+            crate::hermes::PLUGIN_INIT,
+            false,
+        )?;
+        let b = crate::hermes::write_if_changed(
+            &pd.join("plugin.yaml"),
+            crate::hermes::PLUGIN_YAML,
+            false,
+        )?;
+        if a || b {
+            changed.extend(
+                agents
+                    .agents
+                    .iter()
+                    .filter(|x| x.runtime.is_some())
+                    .map(|x| crate::hermes::service(&x.name)),
+            );
+        }
+    }
     for a in agents.agents.iter().filter(|a| a.runtime.is_some()) {
         let n = &a.name;
         let cfg = crate::hermes::write_if_changed(
