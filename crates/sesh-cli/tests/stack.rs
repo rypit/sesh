@@ -4534,7 +4534,7 @@ fn memory_stack() {
     }
     for (q, want) in [
         ("When was Kari born?", "Kari's birthday"),
-        ("Where can I find the login for the internet?", "Wi-Fi"),
+        ("Where did we write down the wireless password?", "Wi-Fi"),
         ("Can grandma eat peanuts?", "allergic"),
         (
             "When does the vehicle need maintenance?",
