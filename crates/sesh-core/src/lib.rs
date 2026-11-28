@@ -441,6 +441,32 @@ pub struct GatewaySettings {
     /// The browser (specs/010 data-model.md, Gateway settings).
     #[serde(default)]
     pub browser: BrowserSettings,
+    /// Memory (specs/011 data-model.md).
+    #[serde(default)]
+    pub memory: MemorySettings,
+}
+
+/// Memory's settings (specs/011).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct MemorySettings {
+    /// The embedding service (OpenAI-style `/v1/embeddings`).
+    pub embed_url: String,
+    pub max_facts: u32,
+    pub max_chars: usize,
+    /// Cosine similarity at which a new fact replaces an existing one.
+    pub dedup_similarity: f64,
+}
+
+impl Default for MemorySettings {
+    fn default() -> Self {
+        MemorySettings {
+            embed_url: "http://embed:80".into(),
+            max_facts: 2000,
+            max_chars: 500,
+            dedup_similarity: 0.92,
+        }
+    }
 }
 
 /// The browser's settings (specs/010).
@@ -649,6 +675,7 @@ impl Default for GatewaySettings {
             feeds_max_per_owner: d_feeds_per_owner(),
             agent_listen: vec![],
             browser: BrowserSettings::default(),
+            memory: MemorySettings::default(),
         }
     }
 }

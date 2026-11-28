@@ -90,6 +90,13 @@ async fn main() -> anyhow::Result<()> {
         Some(url) if url.starts_with("postgres") => approvals::Store::postgres(url),
         _ => approvals::Store::memory(),
     };
+    // Memory (specs/011) lives in the gateway's database, like approvals.
+    let memory = match env("SESH_APPROVALS_DATABASE_URL")
+        .or_else(|| audit_url.clone().filter(|u| u.starts_with("postgres")))
+    {
+        Some(url) if url.starts_with("postgres") => connectors::memory::Store::postgres(url),
+        _ => connectors::memory::Store::memory(),
+    };
     let notifier = match env("SESH_NTFY_URL") {
         Some(url) => notify::Notifier::ntfy(
             &url,
@@ -140,6 +147,7 @@ async fn main() -> anyhow::Result<()> {
         google: Default::default(),
         refs: Default::default(),
         browser: Default::default(),
+        memory,
         miniflux: connectors::feeds::Miniflux::new(
             &env("SESH_MINIFLUX_USER").unwrap_or_default(),
             &env("SESH_MINIFLUX_PASSWORD").unwrap_or_default(),
@@ -203,6 +211,7 @@ async fn main() -> anyhow::Result<()> {
     for addr in &agent_addrs {
         agent_listeners.push(tokio::net::TcpListener::bind(addr).await?);
     }
+    tokio::spawn(connectors::memory::backfill(gw.clone()));
     let approvals_app = pages::router(gw.clone());
     let approval_addrs = listen::addrs_on(
         7002,
