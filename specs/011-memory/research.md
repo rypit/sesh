@@ -21,7 +21,7 @@ All read on 2026-11-28.
 
 **Decision** (the household, 2026-11-28): memories are a table in the gateway's own database.
 - The owner always comes from the token, like every other connector.
-- Search is hybrid: pgvector cosine similarity plus Postgres full-text (`simple` configuration, so Norwegian and English words both match).
+- Search is hybrid: pgvector cosine similarity plus Postgres full-text (`simple` configuration: no stemming, so it works for any language that spaces its words).
 - No new service, network or database login.
 
 **Alternatives**: Mem0 as planned (above); a separate vector database (another adopted service, no gain at household scale).
@@ -43,7 +43,7 @@ It fuses them with reciprocal rank fusion (`score = Σ 1/(60 + rank)`) and retur
 **Finding**:
 - Hugging Face text-embeddings-inference (TEI) publishes CPU images per architecture: `cpu-1.10.0` (amd64, index digest `sha256:f0a4bb206b9d4877746b5b9f638e138fe683eeb9787c14d541a12c993b562d86`) and `cpu-arm64-1.10.0` (arm64, `sha256:446c683eef5bbbdf1eb9899966b8e198921f671e92ee3fe3d7a5f6d770ea0a26`).
 - It serves an OpenAI-compatible `/v1/embeddings` and `/embed`.
-- `intfloat/multilingual-e5-small`: BERT, 118M parameters, 384 dimensions, MIT, about 100 languages including Norwegian (`no`). `model.safetensors` is 470,641,600 bytes.
+- `intfloat/multilingual-e5-small`: BERT, 118M parameters, 384 dimensions, MIT, about 100 languages; the household writes English, and the occasional other language still matches (cross-lingual). `model.safetensors` is 470,641,600 bytes.
 
 **Decision**:
 - **Image**: `deploy/embed.Dockerfile` picks the base by `TARGETARCH` from the two pinned digests. It downloads the model files at build time, so the running container never reaches the internet, and the service runs with the local model path.

@@ -84,7 +84,7 @@ Text an attacker plants (from an email, a web page, a document) might get saved 
 - **The embedding container is down or slow**: saving still works (the fact is embedded later) and recall falls back to word search; `sesh doctor` reports it.
 - **Nothing relevant is remembered**: no recall block is added to the chat at all.
 - **A trivial message** ("thanks", "ok"): no recall is looked up.
-- **The household's languages**: facts and questions in Norwegian or English are found either way (a multilingual model).
+- **The household's languages**: English, primarily. A fact or question in another language is still found (a multilingual model), but only English and one cross-language case are tested.
 - **A user is removed** (012): their memories go with them; for now, `sesh memory forget <owner> --all`.
 - **Backups**: memories are in the gateway's database, so they're backed up with it (012).
 
@@ -127,7 +127,7 @@ Text an attacker plants (from an email, a web page, a document) might get saved 
 ## Assumptions
 
 - **Store**: a table in the gateway's database with pgvector (already in the Postgres image); the migration creates the `vector` extension as the superuser.
-- **Model**: `intfloat/multilingual-e5-small` (118M parameters, 384 dimensions, MIT, includes Norwegian), served by Hugging Face text-embeddings-inference on CPU, baked into a sesh-built image so nothing is downloaded at runtime.
+- **Model**: `intfloat/multilingual-e5-small` (118M parameters, 384 dimensions, MIT, about 100 languages), served by Hugging Face text-embeddings-inference on CPU, baked into a sesh-built image so nothing is downloaded at runtime.
 - **No automatic extraction**: agents save facts deliberately with `remember`; extracting facts from chats automatically is later work.
 - **The runtime's own memory files** (Hermes `MEMORY.md`, `USER.md`) stay off; skills come with 012.
 - **A memory page for each person** comes with 012 (it needs Open WebUI users mapped to sesh users); until then, the operator CLI.

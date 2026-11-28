@@ -4519,21 +4519,29 @@ fn memory_stack() {
         "forget --all is one owner's"
     );
 
-    // T014 (SC-003): the real model finds paraphrases, Norwegian and English.
+    // T014 (SC-003): the real model finds paraphrases that share few
+    // words with the fact. The household writes English; one fact in
+    // another language checks the multilingual model still matches it.
     for f in [
         "Kari's birthday is on 3 May",
         "The Wi-Fi password is on the fridge door",
-        "Søppelet hentes hver tirsdag morgen",
-        "Bestemor er allergisk mot nøtter",
+        "Grandma is allergic to nuts",
         "The car is due for its service in March",
+        "The recycling is collected every other Thursday",
+        "El veterinario del gato está en la calle Mayor",
     ] {
         remember(&mut house, f, false);
     }
     for (q, want) in [
         ("When was Kari born?", "Kari's birthday"),
-        ("Hvilken dag tømmes avfallet?", "Søppelet"),
-        ("Can grandma eat peanuts?", "allergisk"),
-        ("Hvor finner jeg nettverkspassordet?", "Wi-Fi"),
+        ("Where can I find the login for the internet?", "Wi-Fi"),
+        ("Can grandma eat peanuts?", "allergic"),
+        (
+            "When does the vehicle need maintenance?",
+            "service in March",
+        ),
+        ("Which day do they pick up paper and plastic?", "recycling"),
+        ("Where is the cat's vet?", "veterinario"),
     ] {
         let got = recall(&mut house, q, false);
         assert!(got.iter().any(|f| f.contains(want)), "SC-003: {q}: {got:?}");

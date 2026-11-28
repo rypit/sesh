@@ -1,6 +1,6 @@
 # The embedding service for memory (specs/011, ADR 0015):
 # text-embeddings-inference (CPU) with intfloat/multilingual-e5-small
-# (MIT, 384 dimensions, Norwegian and English) baked in, so it needs no
+# (MIT, 384 dimensions, about 100 languages) baked in, so it needs no
 # network at runtime.
 #
 #   docker build -f deploy/embed.Dockerfile -t sesh-embed:dev .

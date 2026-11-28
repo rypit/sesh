@@ -68,7 +68,7 @@ description: "Task list for feature 011: memory"
   - forget removes one;
   - an agent can't forget another owner's;
   - a fact with "ignore previous instructions" comes back inside the untrusted block.
-- [x] T014 Stack test part 4 (`SESH_REAL_EMBED=1`): the real model finds a paraphrase in the top 3, in Norwegian and English (SC-003); with the embedding service stopped, remember still works and recall falls back to words; after a restart, missing embeddings are filled in.
+- [x] T014 Stack test part 4 (`SESH_REAL_EMBED=1`): the real model finds a paraphrase in the top 3, in English, plus one fact in another language (SC-003); with the embedding service stopped, remember still works and recall falls back to words; after a restart, missing embeddings are filled in.
 
 ## Phase 6: Polish
 

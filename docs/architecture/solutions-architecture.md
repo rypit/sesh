@@ -282,7 +282,7 @@ Each store has one job:
   characters), its owner, the agent that wrote it, and a 384-dimension
   embedding; at most 2000 facts per owner.
 - Hybrid search: cosine similarity (pgvector) and full-text (`simple`
-  configuration, for Norwegian and English), fused by reciprocal rank.
+  configuration, for any language that spaces its words), fused by reciprocal rank.
 - Agents write clean facts through `remember`; there is no extraction
   by a model. A near-duplicate (same text, or cosine ≥ 0.92) updates
   the old fact instead of adding one.

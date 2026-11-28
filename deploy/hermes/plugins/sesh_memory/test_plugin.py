@@ -15,7 +15,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(s.count("memory.recall"), 1)
 
     def test_trivial_messages_skip_recall(self):
-        for t in ["ok", "Thanks!", "takk", "hi", ""]:
+        for t in ["ok", "Thanks!", "yep", "hi", ""]:
             self.assertTrue(p.is_trivial(t), t)
         self.assertFalse(p.is_trivial("when is Kari's birthday?"))
 
