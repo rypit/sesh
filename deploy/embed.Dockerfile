@@ -10,7 +10,7 @@ ARG TARGETARCH
 
 FROM debian:bookworm-slim@sha256:e67eeead736ff7bbe258ef088bff683635c561b1fcfefad0806c1df4ab49ce0e AS model
 ARG MODEL=intfloat/multilingual-e5-small
-# Pinned to a commit after the first CI build (research.md R4).
+# The files are pinned by SHA-256 in deploy/embed/model.sha256 (T018).
 ARG MODEL_REVISION=main
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \

@@ -55,6 +55,13 @@ It fuses them with reciprocal rank fusion (`score = Σ 1/(60 + rank)`) and retur
   - `sesh up` doesn't start the embedding container, so the other stack tests don't carry the image;
   - `memory_stack` runs the real container (`SESH_REAL_EMBED=1`) to check search by meaning (SC-003).
 
+**Pin (T018, 2026-11-28):** CI's first build downloaded the model files
+from the `main` revision and printed their SHA-256 (the image is 524 MB as
+a compressed artifact). They are recorded in `deploy/embed/model.sha256`
+and checked on every build, so a changed upstream file fails the build
+instead of entering the image. `model.safetensors` is
+`1a55775f…c98477` (470,641,600 bytes).
+
 ## R5. Automatic recall: a Hermes memory provider plugin
 
 **Finding** (Hermes v0.23.4, `plugins/memory/__init__.py`):
