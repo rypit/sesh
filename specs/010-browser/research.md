@@ -282,3 +282,7 @@ can be uploaded.
 - **Debian's apt mirrors aren't reachable from the development sandbox**,
   so the browser image was built only in CI; the image's flags were
   checked with the same Chromium locally.
+- **CDP on loopback only.** New headless Chromium ignores
+  `--remote-debugging-address` and listens on 127.0.0.1 (checked with
+  Chromium 153 locally), so the image runs `socat` to expose port 9222 on
+  the container's address, which is only on `browser-<agent>`.

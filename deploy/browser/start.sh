@@ -6,10 +6,13 @@ set -eu
 : "${SESH_PROXY:?}"
 PROFILE="${SESH_PROFILE:-/profile}"
 ADDR="$(hostname -i | awk '{print $1}')"
+# New headless Chromium listens for CDP on loopback only (it ignores
+# --remote-debugging-address), so socat exposes it on the container's
+# address, which is only on the network shared with the gateway.
+socat "TCP-LISTEN:9222,bind=$ADDR,fork,reuseaddr" TCP:127.0.0.1:9223 &
 exec chromium \
   --headless=new \
-  --remote-debugging-address="$ADDR" \
-  --remote-debugging-port=9222 \
+  --remote-debugging-port=9223 \
   --remote-allow-origins=* \
   --user-data-dir="$PROFILE" \
   --proxy-server="$SESH_PROXY" \

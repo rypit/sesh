@@ -58,13 +58,20 @@ fn public_v4(ip: Ipv4Addr) -> bool {
 /// The refusal text an agent sees (contracts/browser-connector.md).
 pub const REFUSED: &str = "that address is on the home network; the browser can't open it";
 
-/// Where a host may connect: the first resolved address that is public,
-/// or one in `allow` (stub mode only: the fake sites' own addresses).
-pub fn choose(resolved: &[IpAddr], allow: &[IpAddr]) -> Option<IpAddr> {
+/// Where a host may connect: its resolved addresses that are public, or
+/// in `allow` (stub mode only: the fake sites' own addresses), in order.
+/// Refused addresses are dropped, never tried.
+pub fn choose_all(resolved: &[IpAddr], allow: &[IpAddr]) -> Vec<IpAddr> {
     resolved
         .iter()
         .copied()
-        .find(|ip| public(*ip) || allow.contains(ip))
+        .filter(|ip| public(*ip) || allow.contains(ip))
+        .collect()
+}
+
+/// The first address [`choose_all`] allows.
+pub fn choose(resolved: &[IpAddr], allow: &[IpAddr]) -> Option<IpAddr> {
+    choose_all(resolved, allow).into_iter().next()
 }
 
 /// Refusals the proxy made, per agent, for the connector to report.
@@ -180,8 +187,9 @@ fn split_host_port(target: &str, default: u16) -> Result<(String, u16), &'static
     }
 }
 
-/// Resolves `host`, choosing an allowed address (see [`choose`]).
-pub async fn resolve(host: &str, port: u16, allow: &[IpAddr]) -> Result<SocketAddr, String> {
+/// Resolves `host` to its allowed addresses (see [`choose_all`]); a host
+/// with none is refused.
+pub async fn resolve(host: &str, port: u16, allow: &[IpAddr]) -> Result<Vec<SocketAddr>, String> {
     let resolved: Vec<IpAddr> = match host.parse::<IpAddr>() {
         Ok(ip) => vec![ip],
         Err(_) => tokio::net::lookup_host((host, port))
@@ -190,9 +198,27 @@ pub async fn resolve(host: &str, port: u16, allow: &[IpAddr]) -> Result<SocketAd
             .map(|a| a.ip())
             .collect(),
     };
-    choose(&resolved, allow)
+    let ok: Vec<SocketAddr> = choose_all(&resolved, allow)
+        .into_iter()
         .map(|ip| SocketAddr::new(ip, port))
-        .ok_or_else(|| REFUSED.to_string())
+        .collect();
+    if ok.is_empty() {
+        return Err(REFUSED.to_string());
+    }
+    Ok(ok)
+}
+
+/// Connects to the first of `addrs` that answers (a dual-stack host may
+/// listen on only one family).
+async fn connect_any(addrs: &[SocketAddr]) -> Option<TcpStream> {
+    for a in addrs {
+        if let Ok(Ok(s)) =
+            tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(a)).await
+        {
+            return Some(s);
+        }
+    }
+    None
 }
 
 /// What the proxy listener needs.
@@ -256,7 +282,7 @@ impl Proxy {
             }
         };
         let allow = self.allowed_ips().await;
-        let addr = match resolve(&host, port, &allow).await {
+        let addrs = match resolve(&host, port, &allow).await {
             Ok(a) => a,
             Err(why) => {
                 if why == REFUSED {
@@ -266,11 +292,9 @@ impl Proxy {
                 return reply(&mut client, 403, &why).await;
             }
         };
-        let mut upstream =
-            match tokio::time::timeout(Duration::from_secs(15), TcpStream::connect(addr)).await {
-                Ok(Ok(s)) => s,
-                _ => return reply(&mut client, 502, "can't connect").await,
-            };
+        let Some(mut upstream) = connect_any(&addrs).await else {
+            return reply(&mut client, 502, "can't connect").await;
+        };
         match head {
             Head::Connect { .. } => {
                 client
@@ -385,6 +409,11 @@ mod tests {
             "stub mode only"
         );
         assert_eq!(choose(&[v4(10, 0, 0, 2)], &[private]), None);
+        assert_eq!(
+            choose_all(&[private, pubv, v4(1, 1, 1, 1)], &[]),
+            vec![pubv, v4(1, 1, 1, 1)],
+            "every allowed address, in order; refused ones never tried"
+        );
     }
 
     #[test]
@@ -480,14 +509,14 @@ mod tests {
         tokio::spawn(
             Proxy {
                 agent: "a".into(),
-                allow_hosts: vec!["localhost".into()],
+                allow_hosts: vec!["127.0.0.1".into()],
                 refusals: Refusals::default(),
             }
             .serve(l),
         );
         let mut s = TcpStream::connect(addr).await.unwrap();
         s.write_all(
-            format!("GET http://localhost:{site_port}/hello HTTP/1.1\r\nHost: localhost\r\nProxy-Connection: keep-alive\r\n\r\n")
+            format!("GET http://127.0.0.1:{site_port}/hello HTTP/1.1\r\nHost: 127.0.0.1\r\nProxy-Connection: keep-alive\r\n\r\n")
                 .as_bytes(),
         )
         .await

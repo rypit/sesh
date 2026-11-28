@@ -460,6 +460,15 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
         "gateway",
     ];
     base.extend(executors.iter().map(String::as_str));
+    // Each agent's browser (specs/010); Compose starts it once the
+    // gateway, its only network peer, is healthy.
+    let browsers: Vec<String> = agents
+        .agents
+        .iter()
+        .filter(|a| a.connectors.iter().any(|c| c == "browser"))
+        .map(|a| format!("browser-{}", a.name))
+        .collect();
+    base.extend(browsers.iter().map(String::as_str));
     if is_stub(&config) {
         base.push("stub-llm");
     }
@@ -1390,6 +1399,25 @@ mod tests {
                 .any(|c| c.contains("hermes-house"))
         );
         assert!(!crate::hermes::env_path(&dir, "house").exists());
+    }
+
+    #[test]
+    fn up_starts_each_agents_browser_with_the_gateway() {
+        let dir = ready("browser-up");
+        crate::agent::add(&dir, "bob", &["browser".into()], "household", None).unwrap();
+        let compose = fake();
+        run(&dir, &compose, &router()).unwrap();
+        let calls = compose.calls.borrow().clone();
+        let up = calls
+            .iter()
+            .find(|c| c.contains(" gateway "))
+            .unwrap_or_else(|| panic!("{calls:?}"));
+        assert!(up.contains(" executor-bob browser-bob"), "{up}");
+        let g = std::fs::read_to_string(dir.join("gateway/gateway.toml")).unwrap();
+        assert!(
+            g.contains("agents = [\"bob\"]"),
+            "the gateway's egress proxy for bob: {g}"
+        );
     }
 
     #[test]
