@@ -76,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
         None => GatewaySettings::default(),
     };
     settings.validate()?;
+    let agent_listen = settings.agent_listen.clone();
     let agents = Agents::from_file(
         env("SESH_AGENTS_FILE")
             .unwrap_or_else(|| "/etc/sesh/agents.toml".into())
@@ -191,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
     )
     .map_err(anyhow::Error::msg)?;
     // And each agent runtime's own network (specs/009, ADR 0012).
-    let resolved = listen::resolve_aliases(&settings.agent_listen)
+    let resolved = listen::resolve_aliases(&agent_listen)
         .await
         .map_err(anyhow::Error::msg)?;
     let agent_addrs =

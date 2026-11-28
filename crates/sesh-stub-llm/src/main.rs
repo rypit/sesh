@@ -18,6 +18,10 @@
 //!   for requests whose first user message carries a `[task:<id>]` tag,
 //!   plays a fixed tool-calling conversation for that eval task. Untagged
 //!   requests behave as above.
+//! - `STUB_SCRIPT=agent` (specs/009 contracts/stub-script.md): plays the
+//!   agent runtime's chat, keyed by an `[agent:<step>]` tag in the latest
+//!   user message; eval tags behave as with `pass`. `GET /stub/requests`
+//!   lists the recent chat requests' model and offered tool names.
 //!
 //! Listens on `0.0.0.0:$STUB_PORT` (default 8000) inside its container; the
 //! Compose overlay publishes no port for it.
@@ -194,8 +198,100 @@ fn scripted(req: &Value, script: &str) -> Option<Value> {
     Some(msg)
 }
 
+/// The agent runtime's scripted chat (specs/009 contracts/stub-script.md).
+/// The tool is whichever offered tool's name ends in `execute`, so the
+/// runtime's prefix for MCP tools doesn't matter.
+fn agent_scripted(req: &Value) -> Option<Value> {
+    let messages = req.get("messages")?.as_array()?;
+    let at = messages.iter().rposition(|m| m["role"] == "user")?;
+    let text = messages[at]["content"].as_str().unwrap_or_default();
+    let tools: Vec<&str> = req
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(|t| {
+            t.iter()
+                .filter_map(|x| x.pointer("/function/name").and_then(Value::as_str))
+                .collect()
+        })
+        .unwrap_or_default();
+    let execute = tools.iter().find(|t| t.ends_with("execute"));
+    let Some(step) = text
+        .split("[agent:")
+        .nth(1)
+        .and_then(|r| r.split(']').next())
+    else {
+        // An eval task plays its own script; any other untagged request
+        // from the runtime gets an answer, never a loop of tool calls.
+        if task_state(req).is_some() {
+            return None;
+        }
+        return execute.map(|_| say("stub reply"));
+    };
+    let result = messages[at + 1..]
+        .iter()
+        .rev()
+        .find(|m| m["role"] == "tool")
+        .map(|m| match &m["content"] {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        });
+    if let Some(r) = result {
+        let label = match step {
+            "weather" => "Forecast",
+            "search" => "Found",
+            "mail" => "Mail",
+            "feeds" => "Feeds",
+            "send" => "Send",
+            "terminal" => "Terminal",
+            _ => "Result",
+        };
+        let r: String = r.chars().take(1500).collect();
+        return Some(say(&format!("{label}: {r}")));
+    }
+    let code = match step {
+        "weather" => FORECAST,
+        "search" => WEB,
+        "mail" => READ_ONLY,
+        "feeds" => FEED_LATEST,
+        "send" => SEND,
+        "terminal" => {
+            return Some(
+                json!({"role": "assistant", "content": null, "tool_calls": [{
+                "id": "call_stub_1", "type": "function",
+                "function": {"name": "terminal", "arguments": json!({"command": "id"}).to_string()}}]}),
+            );
+        }
+        _ => return Some(say("unknown step")),
+    };
+    let name = execute.copied().unwrap_or("execute");
+    Some(
+        json!({"role": "assistant", "content": null, "tool_calls": [{
+        "id": "call_stub_1", "type": "function",
+        "function": {"name": name, "arguments": json!({"code": code}).to_string()}}]}),
+    )
+}
+
+/// What `GET /stub/requests` reports for one chat request: never content.
+fn request_summary(req: &Value) -> Value {
+    let tools: Vec<&str> = req
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(|t| {
+            t.iter()
+                .filter_map(|x| x.pointer("/function/name").and_then(Value::as_str))
+                .collect()
+        })
+        .unwrap_or_default();
+    json!({"model": req.get("model"), "tools": tools})
+}
+
 fn message(req: &Value, tools_enabled: bool, script: Option<&str>) -> (Value, &'static str) {
-    if let Some(m) = script.and_then(|s| scripted(req, s)) {
+    let scripted_msg = match script {
+        Some("agent") => agent_scripted(req).or_else(|| scripted(req, "pass")),
+        Some(s) => scripted(req, s),
+        None => None,
+    };
+    if let Some(m) = scripted_msg {
         let finish = if m.get("tool_calls").is_some() {
             "tool_calls"
         } else {
@@ -355,7 +451,7 @@ fn main() {
         .unwrap_or(true);
     let script = std::env::var("STUB_SCRIPT")
         .ok()
-        .filter(|s| s == "pass" || s == "fail");
+        .filter(|s| s == "pass" || s == "fail" || s == "agent");
     let script = script.as_deref();
     let server = tiny_http::Server::http(format!("0.0.0.0:{port}")).expect("bind stub port");
     eprintln!("sesh-stub-llm listening on {port} (tools {tools_enabled}, script {script:?})");
@@ -363,6 +459,7 @@ fn main() {
     let mut paperless = fake_paperless::Fake::default();
     let mut feeds = fake_feeds::Fake;
     let mut miniflux = fake_miniflux::Fake::default();
+    let mut recent: std::collections::VecDeque<Value> = Default::default();
     for mut request in server.incoming_requests() {
         let path = request.url().split('?').next().unwrap_or("").to_string();
         let method = request.method().as_str().to_string();
@@ -434,6 +531,10 @@ fn main() {
         }
         let response = match (method.as_str(), path.as_str()) {
             ("GET", "/health") => tiny_http::Response::from_string("ok"),
+            ("GET", "/stub/requests") => {
+                tiny_http::Response::from_string(Value::from(Vec::from(recent.clone())).to_string())
+                    .with_header(json_ct)
+            }
             ("GET", "/v1/models") => {
                 tiny_http::Response::from_string(models().to_string()).with_header(json_ct)
             }
@@ -441,6 +542,10 @@ fn main() {
                 let mut body = String::new();
                 let _ = request.as_reader().read_to_string(&mut body);
                 let req: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+                recent.push_back(request_summary(&req));
+                if recent.len() > 50 {
+                    recent.pop_front();
+                }
                 if req.get("stream").and_then(Value::as_bool) == Some(true) {
                     tiny_http::Response::from_string(stream(&req, tools_enabled, script))
                         .with_header(header("Content-Type", "text/event-stream"))
@@ -716,5 +821,58 @@ mod tests {
         let want = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
         assert!(testcred_ok("abc", want));
         assert!(!testcred_ok("abd", want) && !testcred_ok("", want) && !testcred_ok("abc", ""));
+    }
+
+    fn hermes_request(msgs: Value) -> Value {
+        json!({"model": "agent-main", "messages": msgs, "tools": [
+            {"type": "function", "function": {"name": "mcp__sesh__execute"}},
+            {"type": "function", "function": {"name": "mcp__sesh__search"}}]})
+    }
+
+    #[test]
+    fn the_agent_script_calls_the_offered_execute_tool_then_quotes_the_result() {
+        let r = hermes_request(json!([
+            {"role": "system", "content": "you are hermes"},
+            {"role": "user", "content": "[agent:search] hi"},
+            {"role": "assistant", "content": "Found: old"},
+            {"role": "user", "content": "[agent:weather] tomorrow?"}]));
+        let (m, finish) = message(&r, true, Some("agent"));
+        assert_eq!(finish, "tool_calls");
+        let call = &m["tool_calls"][0]["function"];
+        assert_eq!(call["name"], "mcp__sesh__execute");
+        assert!(call["arguments"].as_str().unwrap().contains("geo.forecast"));
+        let mut msgs = r["messages"].as_array().unwrap().clone();
+        msgs.push(m);
+        msgs.push(
+            json!({"role": "tool", "tool_call_id": "call_stub_1", "content": "fake forecast 21"}),
+        );
+        let (m, finish) = message(&hermes_request(Value::from(msgs)), true, Some("agent"));
+        assert_eq!(finish, "stop");
+        assert_eq!(m["content"], "Forecast: fake forecast 21");
+    }
+
+    #[test]
+    fn the_agent_script_asks_for_a_tool_the_runtime_doesnt_offer() {
+        let r = hermes_request(json!([{"role": "user", "content": "[agent:terminal]"}]));
+        let (m, _) = message(&r, true, Some("agent"));
+        assert_eq!(m["tool_calls"][0]["function"]["name"], "terminal");
+    }
+
+    #[test]
+    fn untagged_runtime_requests_never_loop_and_eval_tags_still_play() {
+        let r = hermes_request(json!([{"role": "user", "content": "hello"}]));
+        assert_eq!(message(&r, true, Some("agent")).0["content"], "stub reply");
+        let eval = json!({"messages": [{"role": "user", "content": "[task:forecast] go"}],
+            "tools": [{"type": "function", "function": {"name": "execute"}}]});
+        assert!(
+            message(&eval, true, Some("agent")).0["tool_calls"][0]["function"]["arguments"]
+                .as_str()
+                .unwrap()
+                .contains("geo.forecast")
+        );
+        assert_eq!(
+            request_summary(&r),
+            json!({"model": "agent-main", "tools": ["mcp__sesh__execute", "mcp__sesh__search"]})
+        );
     }
 }

@@ -48,7 +48,7 @@ Written first: it's the safety guarantee, and its tests define the wiring the ot
 
 ## Phase 4: User Story 1 - Chat in Open WebUI (Priority: P1) 🎯 MVP
 
-- [ ] T011 [US1] Unit tests, then `crates/sesh-stub-llm/src/main.rs`: `STUB_SCRIPT=agent` per contracts/stub-script.md and `GET /stub/requests`.
+- [x] T011 [US1] Unit tests, then `crates/sesh-stub-llm/src/main.rs`: `STUB_SCRIPT=agent` per contracts/stub-script.md and `GET /stub/requests`.
 - [x] T012 [US1] Unit tests, then `up.rs`: Open WebUI's `OPENAI_API_BASE_URLS`/`OPENAI_API_KEYS` (router first, then each runtime, keys interpolated from `secrets.env`) in the overlay; `deploy/compose.yaml` moves Open WebUI to the list form. The router key per runtime agent is created/updated like Open WebUI's, and deleted for a removed agent. `sesh up` writes the config and the env file (only when changed), and starts the runtime after the gateway and LiteLLM and before Open WebUI.
 - [ ] T013 [US1] `agent_stack` part 2: sign in to Open WebUI as the admin, list models (`household-agent` present), chat `[agent:weather]` and `[agent:search]` with streaming; the answers quote the fake forecast and search result; the audit log has a `geo.forecast` and a `search.web` call by `household-agent` (SC-001).
 
@@ -62,7 +62,7 @@ Written first: it's the safety guarantee, and its tests define the wiring the ot
 
 ## Phase 6: User Story 4 - One command to add or remove (Priority: P2)
 
-- [ ] T015 [US4] Unit tests, then `doctor.rs` `agent-runtimes` (contracts/cli.md): health, `/v1/toolsets` (only `mcp-sesh` enabled, with `search` and `execute`), config matches. `network-layout` includes the agent networks.
+- [x] T015 [US4] Unit tests, then `doctor.rs` `agent-runtimes` (contracts/cli.md): health, `/v1/toolsets` (only `mcp-sesh` enabled, with `search` and `execute`), config matches. `network-layout` includes the agent networks.
 - [ ] T016 [US4] `agent_stack` part 4: doctor passes; `sesh agent remove household-agent` and `sesh up`: the container and its networks are gone, Open WebUI no longer lists it, its gateway token is refused and its router key is deleted; doctor passes (SC-005).
 
 ---

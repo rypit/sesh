@@ -22,7 +22,8 @@ pub struct FakeCompose {
     /// `exec_sql` answers by query: the first (needle, output) whose needle
     /// the SQL contains wins; otherwise `sql_output`.
     pub sql_by_query: RefCell<Vec<(String, String)>>,
-    /// `exec` answers: (service, output); a service without one fails.
+    /// `exec` answers: the first (needle, output) whose needle the call
+    /// (`<service> <args…>`) contains; no match fails.
     pub exec_output: RefCell<Vec<(String, String)>>,
 }
 
@@ -117,13 +118,12 @@ impl Compose for FakeCompose {
         Ok(self.networks.borrow().keys().cloned().collect())
     }
     fn exec(&self, service: &str, args: &[&str]) -> Result<String> {
-        self.calls
-            .borrow_mut()
-            .push(format!("exec {service} {}", args.join(" ")));
+        let call = format!("{service} {}", args.join(" "));
+        self.calls.borrow_mut().push(format!("exec {call}"));
         self.exec_output
             .borrow()
             .iter()
-            .find(|(s, _)| s == service)
+            .find(|(n, _)| call.contains(n.as_str()))
             .map(|(_, o)| o.clone())
             .ok_or_else(|| anyhow::anyhow!("{service} isn't running"))
     }

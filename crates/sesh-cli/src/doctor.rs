@@ -74,10 +74,25 @@ const SERVICES: [&str; 12] = [
 /// Refusals per agent per hour that `audit-refusals` warns about.
 pub const REFUSAL_WARN: u64 = 10;
 
+#[cfg(test)]
 pub fn run(
     config: &Config,
     secrets: &Secrets,
     agents: &[String],
+    compose: &dyn Compose,
+    http: &dyn Http,
+    tailscale: &dyn Tailscale,
+) -> Vec<Check> {
+    run_with(config, secrets, agents, &[], compose, http, tailscale)
+}
+
+/// [`run`] for a stack with agent runtimes (`runtimes`: their agents'
+/// names; specs/009).
+pub fn run_with(
+    config: &Config,
+    secrets: &Secrets,
+    agents: &[String],
+    runtimes: &[String],
     compose: &dyn Compose,
     http: &dyn Http,
     tailscale: &dyn Tailscale,
@@ -91,7 +106,10 @@ pub fn run(
     checks.push(feeds_check(secrets, http));
     checks.push(audit_check(compose));
     checks.push(isolation_check(compose));
-    checks.push(network_check(config, compose));
+    checks.push(network_check_with(config, compose, runtimes));
+    if !runtimes.is_empty() {
+        checks.push(runtime_check(runtimes, compose));
+    }
     checks.push(match tailscale.serves_port(config.ports.webui) {
         Ok(Some(true)) => Check::pass("tailscale-serve", "Open WebUI is served on the tailnet"),
         Ok(Some(false)) => Check::warn(
@@ -558,11 +576,91 @@ fn prefix_len(netmask: &str) -> Option<u32> {
     }
 }
 
+/// specs/009 contracts/cli.md: each agent runtime is running and healthy,
+/// has no built-in toolset enabled, and runs the configuration sesh wrote.
+fn runtime_check(runtimes: &[String], compose: &dyn Compose) -> Check {
+    const ID: &str = "agent-runtimes";
+    let states = compose.ps().unwrap_or_default();
+    let mut problems = vec![];
+    for a in runtimes {
+        let svc = crate::hermes::service(a);
+        match states.iter().find(|s| s.service == svc) {
+            Some(s) if s.state == "running" && s.health == "healthy" => {}
+            Some(s) => {
+                problems.push(format!("{a} is {} {}", s.state, s.health));
+                continue;
+            }
+            None => {
+                problems.push(format!("{a} isn't running"));
+                continue;
+            }
+        }
+        // The key stays inside the container: it's expanded there.
+        let toolsets = compose.exec(
+            &svc,
+            &[
+                "sh",
+                "-c",
+                "curl -fsS -H \"Authorization: Bearer $API_SERVER_KEY\" http://127.0.0.1:8642/v1/toolsets",
+            ],
+        );
+        match toolsets
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        {
+            Some(v) => {
+                let on: Vec<String> = v["data"]
+                    .as_array()
+                    .map(|d| {
+                        d.iter()
+                            .filter(|t| t["enabled"] == true)
+                            .filter_map(|t| t["name"].as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !on.is_empty() {
+                    problems.push(format!(
+                        "{a} has built-in toolsets enabled: {}",
+                        on.join(", ")
+                    ));
+                }
+            }
+            None => problems.push(format!("can't read {a}'s toolsets")),
+        }
+        match compose.exec(&svc, &["cat", "/opt/data/config.yaml"]) {
+            Ok(c) if c == crate::hermes::config_text(a) => {}
+            Ok(_) => problems.push(format!("{a}'s config.yaml isn't the one sesh writes")),
+            Err(_) => problems.push(format!("can't read {a}'s config.yaml")),
+        }
+    }
+    if problems.is_empty() {
+        Check::pass(
+            ID,
+            format!(
+                "{} agent runtime(s) healthy, tools: the gateway's only",
+                runtimes.len()
+            ),
+        )
+    } else {
+        Check::fail(
+            ID,
+            problems.join("; "),
+            "run `sesh up`; if it persists, see `docker compose logs` for the runtime",
+        )
+    }
+}
+
 /// specs/008 contracts/cli.md: each running service is on exactly its
 /// networks, the old shared network is gone, and Postgres's active login
 /// rules bind each login to its own network's current ranges.
+#[cfg(test)]
 fn network_check(config: &Config, compose: &dyn Compose) -> Check {
+    network_check_with(config, compose, &[])
+}
+
+fn network_check_with(config: &Config, compose: &dyn Compose, runtimes: &[String]) -> Check {
     let stub = crate::init::is_stub(config);
+    let runtimes: Vec<&str> = runtimes.iter().map(String::as_str).collect();
     let mut problems = vec![];
     match compose.service_networks() {
         Ok(running) => {
@@ -570,13 +668,16 @@ fn network_check(config: &Config, compose: &dyn Compose) -> Check {
                 if svc.starts_with("executor-") || svc == "kiwix" {
                     continue;
                 }
-                let want = crate::layout::networks_of(&svc, stub);
+                let want = crate::layout::networks_of_with(&svc, stub, &runtimes);
                 if want.is_empty() {
+                    if svc.starts_with("hermes-") {
+                        problems.push(format!("{svc} runs but its agent has no runtime"));
+                    }
                     continue;
                 }
                 for n in &nets {
                     let exec = svc == "gateway" && n.starts_with("exec-");
-                    if !exec && !want.contains(&n.as_str()) {
+                    if !exec && !want.contains(n) {
                         problems.push(format!("{svc} is on {n} (expected {})", want.join(", ")));
                     }
                 }
@@ -1122,5 +1223,52 @@ mod tests {
             assert!(SERVICES.contains(&r), "{r}");
         }
         assert!(!SERVICES.contains(&"redis"));
+    }
+
+    fn runtime_stack(toolsets: &str, config: &str) -> FakeCompose {
+        let f = FakeCompose::healthy(&[("hermes-house", None)]);
+        *f.exec_output.borrow_mut() = vec![
+            ("hermes-house sh -c curl".into(), toolsets.into()),
+            (
+                "hermes-house cat /opt/data/config.yaml".into(),
+                config.into(),
+            ),
+        ];
+        f
+    }
+
+    #[test]
+    fn runtime_check_wants_no_builtin_toolset_and_the_written_config() {
+        let off =
+            r#"{"data":[{"name":"terminal","enabled":false},{"name":"web","enabled":false}]}"#;
+        let on = r#"{"data":[{"name":"terminal","enabled":true},{"name":"web","enabled":false}]}"#;
+        let good = crate::hermes::config_text("house");
+        let r = runtime_check(&["house".into()], &runtime_stack(off, &good));
+        assert_eq!(r.status, Status::Pass, "{}", r.detail);
+        let f = runtime_stack(on, &good);
+        let r = runtime_check(&["house".into()], &f);
+        assert_eq!(r.status, Status::Fail);
+        assert!(
+            r.detail
+                .contains("house has built-in toolsets enabled: terminal"),
+            "{}",
+            r.detail
+        );
+        // The key is expanded inside the container, never on the host's command line.
+        assert!(
+            f.calls
+                .borrow()
+                .iter()
+                .any(|c| c.contains("$API_SERVER_KEY"))
+        );
+        let r = runtime_check(&["house".into()], &runtime_stack(off, "{}"));
+        assert!(
+            r.detail
+                .contains("house's config.yaml isn't the one sesh writes"),
+            "{}",
+            r.detail
+        );
+        let r = runtime_check(&["gone".into()], &runtime_stack(off, &good));
+        assert!(r.detail.contains("gone isn't running"), "{}", r.detail);
     }
 }

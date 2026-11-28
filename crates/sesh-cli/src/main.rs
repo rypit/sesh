@@ -378,15 +378,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let config = config::Config::load(&dir)?;
             let secrets = secrets::Secrets::load(&dir)?;
             let http = UreqHttp::new(Duration::from_secs(config.inference.timeout_secs.min(60)));
-            let agents: Vec<String> = agent::load(&dir)?
-                .agents
-                .into_iter()
-                .map(|a| a.name)
+            let all = agent::load(&dir)?.agents;
+            let runtimes: Vec<String> = all
+                .iter()
+                .filter(|a| a.runtime.is_some())
+                .map(|a| a.name.clone())
                 .collect();
-            let checks = doctor::run(
+            let agents: Vec<String> = all.into_iter().map(|a| a.name).collect();
+            let checks = doctor::run_with(
                 &config,
                 &secrets,
                 &agents,
+                &runtimes,
                 &compose_for(&dir)?,
                 &http,
                 &TailscaleCli,

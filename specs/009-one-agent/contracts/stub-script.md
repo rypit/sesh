@@ -12,9 +12,9 @@ follows it. The tool it calls is the offered tool whose name ends in
 |---|---|---|
 | `weather` | `execute` with `geo.forecast({})` | "Forecast: " + the tool text |
 | `search` | `execute` with `search.web({query:"varden beacon"})` | "Found: " + the tool text |
-| `mail` | `execute` with `mail.search({query:"electricity"})` | "Mail: " + the tool text |
-| `feeds` | `execute` with `feeds.entries({})` | "Feeds: " + the tool text |
-| `send` | `execute` with `mail.send({to:"kari@example.org",subject:"Saturday",body:"Reminder"})` | "Send: " + the tool text |
+| `mail` | `execute` with `mail.search({query:"power bill"})` then `mail.read` of the first | "Mail: " + the tool text |
+| `feeds` | `execute` with `feeds.latest({feed:"harbour",limit:3})` | "Feeds: " + the tool text |
+| `send` | `execute` with the eval's `mail.send` (to `bills@example.org`) | "Send: " + the tool text |
 | `terminal` | a call to `terminal` with `{"command":"id"}` | "Terminal: " + the tool text |
 
 `GET /stub/requests` returns the last 50 chat requests' `model` and
