@@ -258,8 +258,10 @@ pub async fn call(
                     let a2 = Attachment {
                         agent: agent.into(),
                         owner: scope.owner.clone(),
-                        message_id: id.into(),
-                        attachment_id: a["body"]["attachmentId"].as_str().unwrap_or("").into(),
+                        source: crate::refs::Source::Gmail {
+                            message_id: id.into(),
+                            attachment_id: a["body"]["attachmentId"].as_str().unwrap_or("").into(),
+                        },
                         filename: a["filename"].as_str().unwrap_or("").into(),
                         mime: a["mimeType"].as_str().unwrap_or("").into(),
                         size: a["body"]["size"].as_u64().unwrap_or(0),
@@ -406,13 +408,16 @@ pub async fn call(
 }
 
 /// An attachment's bytes, for `docs.upload`; only inside the gateway.
-pub async fn attachment_bytes(gw: &Gateway, a: &Attachment) -> Result<Vec<u8>, String> {
+pub async fn attachment_bytes(
+    gw: &Gateway,
+    a: &Attachment,
+    message_id: &str,
+    attachment_id: &str,
+) -> Result<Vec<u8>, String> {
     let up = &gw.settings.upstreams;
     let url = format!(
-        "{}/gmail/v1/users/me/messages/{}/attachments/{}",
+        "{}/gmail/v1/users/me/messages/{message_id}/attachments/{attachment_id}",
         up.gmail.trim_end_matches('/'),
-        a.message_id,
-        a.attachment_id
     );
     let v = gw
         .google

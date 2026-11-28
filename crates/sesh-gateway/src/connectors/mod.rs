@@ -14,6 +14,21 @@ use std::time::Duration;
 
 const ARTICLE_CAP: usize = 20_000;
 
+/// A referenced file's bytes, from wherever it lives (specs/010 R9).
+pub async fn file_bytes(
+    gw: &crate::Gateway,
+    a: &crate::refs::Attachment,
+) -> Result<Vec<u8>, String> {
+    match &a.source {
+        crate::refs::Source::Gmail {
+            message_id,
+            attachment_id,
+        } => google::attachment_bytes(gw, a, message_id, attachment_id).await,
+        crate::refs::Source::Document { id } => docs::document_bytes(gw, &a.owner, *id).await,
+        crate::refs::Source::Download { bytes } => Ok(bytes.as_ref().clone()),
+    }
+}
+
 pub(crate) fn method(
     description: &str,
     input: Value,
@@ -120,6 +135,7 @@ pub fn all(test_connectors: bool) -> Vec<ConnectorDescriptor> {
     out.extend(google::descriptors());
     out.push(docs::descriptor());
     out.push(feeds::descriptor());
+    out.push(crate::browser::descriptor());
     if test_connectors {
         out.push(connector(
             "testgate",

@@ -3456,7 +3456,11 @@ impl Stack {
     fn assert_runtime_reachability(&self, sources: &[&str]) {
         let agents = [RT_AGENT];
         let executor = format!("executor-{RT_AGENT}");
-        let mut all: Vec<String> = layout::services_with(true, &agents);
+        let install = layout::Install {
+            runtimes: &agents,
+            browsers: &[],
+        };
+        let mut all: Vec<String> = layout::services_with(true, &install);
         all.push(executor.clone());
         let addrs: std::collections::BTreeMap<String, Vec<String>> = all
             .iter()
@@ -3466,14 +3470,14 @@ impl Stack {
         for from in sources {
             let mut targets = vec![("1.1.1.1".to_string(), 443)];
             let mut expect = vec![("internet".to_string(), 443, false)];
-            for (to, port) in layout::listens_with(&agents) {
+            for (to, port) in layout::listens_with(&install) {
                 if to == *from || !addrs.contains_key(&to) {
                     continue;
                 }
                 let want = if *from == executor {
                     to == "gateway" && port == 7001
                 } else {
-                    layout::reachable_with(from, &to, port, true, &agents)
+                    layout::reachable_with(from, &to, port, true, &install)
                 };
                 for a in &addrs[&to] {
                     targets.push((a.clone(), port));
@@ -3684,10 +3688,17 @@ fn agent_stack() {
     // US3 (scenario 3, SC-003): the runtime reaches the gateway's agent
     // listener and the router, nothing else; nothing else reaches the
     // agent listener; the executor still reaches only :7001.
-    let mut want: Vec<String> = layout::networks_of_with(&rt, true, &[RT_AGENT])
-        .iter()
-        .map(|n| format!("sesh_{n}"))
-        .collect();
+    let mut want: Vec<String> = layout::networks_of_with(
+        &rt,
+        true,
+        &layout::Install {
+            runtimes: &[RT_AGENT],
+            browsers: &[],
+        },
+    )
+    .iter()
+    .map(|n| format!("sesh_{n}"))
+    .collect();
     want.sort();
     let mut got: Vec<String> = stack
         .networks_of(&rt)
@@ -3763,5 +3774,425 @@ fn every_stack_test_has_a_ci_job() {
     }
     for j in &jobs {
         assert!(tests.contains(j), "CI runs {j}, which isn't a stack test");
+    }
+}
+
+// ---- Feature 010: the browser (specs/010-browser/tasks.md) ----
+
+const BR_AGENT: &str = "house";
+const NEWS: &str = "http://fake-news.test:8000";
+const BANK: &str = "http://fake-bank.test:8000";
+const SHOP: &str = "http://fake-shop.test:8000";
+
+impl Stack {
+    /// What the stub's fake sites received (logins, orders, uploads).
+    fn sites_seen(&self) -> Vec<Value> {
+        let (ok, out) = self.bash_in(
+            "gateway",
+            "exec 3<>/dev/tcp/stub-llm/8000 && printf 'GET /fake/sites/seen HTTP/1.1\\r\\nHost: stub\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3",
+        );
+        assert!(ok, "{out}");
+        let body = out.split("\r\n\r\n").nth(1).unwrap_or("[]");
+        serde_json::from_str::<Value>(body)
+            .unwrap_or_else(|_| panic!("seen: {out}"))
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Fills `sesh browser login` the way the person would.
+    fn store_site_login(&self, owner: &str, site: &str, user: &str, password: &str) {
+        let printed = self.sesh_ok(&["browser", "login", owner, site]);
+        let link = printed
+            .lines()
+            .find(|l| l.contains("/form/"))
+            .unwrap()
+            .trim()
+            .to_string();
+        let (form, secret) = link.split_once('#').unwrap();
+        let v = json!({"username": user, "password": password, "totp": ""}).to_string();
+        let (s, b) = call(
+            "POST",
+            form,
+            None,
+            Some(json!({"secret": secret, "value": v})),
+        );
+        assert_eq!(s, 200, "{b}");
+    }
+
+    /// Approves the newest approval request.
+    fn approve_newest(&self) {
+        let (page, secret) = self.newest_link();
+        assert_eq!(decide(&page, &secret, "approve"), 200);
+    }
+}
+
+/// The element number with this kind and label in a browser reply.
+fn element(reply: &str, kind: &str, label: &str) -> u64 {
+    let start = reply.find('{').unwrap_or(0);
+    let v: Value = serde_json::from_str(&reply[start..]).unwrap_or(Value::Null);
+    let snap = if v["result"].is_object() {
+        &v["result"]
+    } else {
+        &v
+    };
+    snap["elements"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|e| e["kind"] == kind && e["label"].as_str().unwrap_or("").contains(label))
+        .and_then(|e| e["n"].as_u64())
+        .unwrap_or_else(|| panic!("no {kind} {label:?} in {reply}"))
+}
+
+fn webui_jwt(secret: &str, sub: &str) -> String {
+    use base64::Engine;
+    use hmac::{Hmac, KeyInit, Mac};
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let h = b64.encode(json!({"alg": "HS256", "typ": "JWT"}).to_string());
+    let p = b64.encode(json!({"sub": sub, "exp": now + 300}).to_string());
+    let mut mac = <Hmac<sha2::Sha256> as KeyInit>::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(format!("{h}.{p}").as_bytes());
+    format!("{h}.{p}.{}", b64.encode(mac.finalize().into_bytes()))
+}
+
+#[test]
+#[ignore = "needs Docker and the dev images; run with `make stack-test`"]
+fn browser_stack() {
+    let dir = std::env::temp_dir().join(format!("sesh-browser-stack-{}", std::process::id()));
+    let stack = Stack { dir };
+    stack.sesh_ok(&["init", "--stub", "--admin-email", "admin@sesh.test"]);
+    stack.sesh_ok(&[
+        "agent",
+        "add",
+        BR_AGENT,
+        "--connectors",
+        "search,docs,browser",
+        "--runtime",
+        "hermes",
+    ]);
+    stack.sesh_ok(&["agent", "add", "other", "--connectors", "browser"]);
+    let up = stack.sesh_env(&[("STUB_SCRIPT", "agent")], &["up"]);
+    assert!(
+        up.status.success(),
+        "sesh up: {}{}",
+        String::from_utf8_lossy(&up.stdout),
+        String::from_utf8_lossy(&up.stderr)
+    );
+    let mut house = Mcp::connect(&stack.token(BR_AGENT)).expect("house connects");
+    let mut other = Mcp::connect(&stack.token("other")).expect("other connects");
+
+    // US1 (FR-002, SC-002): read returns the article's text as Markdown.
+    let out = house.execute(&format!(
+        "async () => await browser.read({{ url: \"{NEWS}/article\" }})"
+    ));
+    assert!(
+        out.contains("The Varden beacon") && out.contains("1873") && !out.contains("Menu: home"),
+        "US1: {out}"
+    );
+    // US1 (FR-003): home-network addresses, directly or by redirect.
+    for url in [
+        "http://10.0.0.1/",
+        "http://192.168.1.1/",
+        "http://100.100.100.100/",
+        "http://127.0.0.1:7002/",
+        "http://169.254.169.254/latest/meta-data/",
+    ] {
+        let out = house.execute(&format!(
+            "async () => await browser.read({{ url: \"{url}\" }})"
+        ));
+        assert!(out.contains("home network"), "FR-003: {url}: {out}");
+    }
+    let out = house.execute(&format!(
+        "async () => await browser.read({{ url: \"{NEWS}/redirect\" }})"
+    ));
+    assert!(out.contains("home network"), "FR-003 redirect: {out}");
+    let out = house.execute(&format!(
+        "async () => await browser.open({{ url: \"{NEWS}/sub\" }})"
+    ));
+    assert!(
+        out.contains("blocked") && out.contains("A page with a picture"),
+        "FR-003 subresource: {out}"
+    );
+    for url in [
+        "file:///etc/passwd",
+        "chrome://settings",
+        "javascript:alert(1)",
+    ] {
+        let out = house.execute(&format!(
+            "async () => await browser.open({{ url: \"{url}\" }})"
+        ));
+        assert!(out.contains("only http and https"), "FR-005: {url}: {out}");
+    }
+
+    // US3 (FR-006): log in without seeing the password; first login asks.
+    stack.store_site_login(
+        "household",
+        "fake-bank.test",
+        "ana@example.org",
+        "hunter2-x",
+    );
+    house.execute(&format!(
+        "async () => await browser.open({{ url: \"{BANK}/login\" }})"
+    ));
+    let login = "async () => await browser.login({ site: \"fake-bank.test\" })";
+    let out = house.execute(login);
+    assert!(
+        out.contains("\"approval_pending\""),
+        "US3 first login asks: {out}"
+    );
+    assert!(
+        stack.sites_seen().is_empty(),
+        "nothing filled before approval"
+    );
+    stack.approve_newest();
+    let out = house.execute(login);
+    assert!(out.contains("\"ok\":true"), "US3: {out}");
+    let seen = stack.sites_seen();
+    assert!(
+        seen.iter()
+            .any(|s| s["kind"] == "login" && s["password_matched"] == true),
+        "the bank got the right login: {seen:?}"
+    );
+    // A different site: refused, nothing filled.
+    house.execute(&format!(
+        "async () => await browser.open({{ url: \"{SHOP}/order\" }})"
+    ));
+    let out = house.execute(login);
+    assert!(
+        out.contains("isn't on fake-bank.test"),
+        "US3 other site: {out}"
+    );
+    assert_eq!(
+        stack
+            .sites_seen()
+            .iter()
+            .filter(|s| s["kind"] == "login")
+            .count(),
+        1
+    );
+
+    // US5 (FR-017, FR-018): a download becomes a reference, never bytes.
+    let acct = house.execute(&format!(
+        "async () => await browser.open({{ url: \"{BANK}/account\" }})"
+    ));
+    assert!(acct.contains("Balance: 412"), "signed in by cookie: {acct}");
+    let n = element(&acct, "link", "Statement");
+    let out = house.execute(&format!("async () => await browser.click({{ n: {n} }})"));
+    assert!(
+        out.contains("statement-november.pdf") && !out.contains("%PDF"),
+        "FR-017: {out}"
+    );
+    let r = out.split("\"ref\":\"").nth(1).unwrap()[..32].to_string();
+    let n = element(&out, "link", "Setup");
+    let out = house.execute(&format!("async () => await browser.click({{ n: {n} }})"));
+    assert!(out.contains("isn't allowed"), "FR-017 type: {out}");
+    let n = element(&out, "link", "Archive");
+    let out = house.execute(&format!("async () => await browser.click({{ n: {n} }})"));
+    assert!(out.contains("too large"), "FR-017 size: {out}");
+    let out = house.execute(&format!(
+        "async () => await docs.upload({{ ref: \"{r}\", title: \"Bank statement November\" }})"
+    ));
+    assert!(out.contains("Bank statement November"), "FR-018: {out}");
+
+    // US5 (FR-019): an upload waits for approval, then the site gets the file.
+    let page = house.execute(&format!(
+        "async () => await browser.open({{ url: \"{SHOP}/upload\" }})"
+    ));
+    let f = element(&page, "file field", "Your document");
+    let up = format!("async () => await browser.upload({{ n: {f}, ref: \"{r}\" }})");
+    let out = house.execute(&up);
+    assert!(out.contains("\"approval_pending\""), "FR-019: {out}");
+    let note = stack.notifications().last().cloned().unwrap();
+    assert!(
+        note.to_string().contains("statement-november.pdf")
+            && note.to_string().contains("fake-shop.test"),
+        "the approval names the file and the site: {note}"
+    );
+    stack.approve_newest();
+    let out = house.execute(&up);
+    assert!(out.contains("\"filled\":true"), "FR-019: {out}");
+    let send = element(&out, "submit button", "Send");
+    let click = format!("async () => await browser.click({{ n: {send} }})");
+    assert!(
+        house.execute(&click).contains("\"approval_pending\""),
+        "FR-007 submit"
+    );
+    assert!(!stack.sites_seen().iter().any(|s| s["kind"] == "upload"));
+    stack.approve_newest();
+    house.execute(&click);
+    let seen = stack.sites_seen();
+    assert!(
+        seen.iter()
+            .any(|s| s["kind"] == "upload" && s["filename"] == "statement-november.pdf"),
+        "SC-007: {seen:?}"
+    );
+    // Another agent can't use house's reference.
+    other.execute(&format!(
+        "async () => await browser.open({{ url: \"{SHOP}/upload\" }})"
+    ));
+    let out = other.execute(&format!(
+        "async () => await browser.upload({{ n: {f}, ref: \"{r}\" }})"
+    ));
+    assert!(out.contains("isn't yours"), "{out}");
+
+    // US4 (FR-007, FR-012): a form submit asks; typed values never shown.
+    let page = house.execute(&format!(
+        "async () => await browser.open({{ url: \"{SHOP}/order\" }})"
+    ));
+    let name = element(&page, "text field", "Name");
+    let out = house.execute(&format!(
+        "async () => await browser.type({{ n: {name}, text: \"secret-order-name\" }})"
+    ));
+    assert!(
+        out.contains("\"filled\":true") && !out.contains("secret-order-name"),
+        "FR-012: {out}"
+    );
+    let out = house.execute(&format!(
+        "async () => await browser.type({{ n: {name}, text: \"a\\nb\" }})"
+    ));
+    assert!(out.contains("line break"), "{out}");
+    let place = element(&page, "submit button", "Place order");
+    assert!(
+        house
+            .execute(&format!(
+                "async () => await browser.click({{ n: {place} }})"
+            ))
+            .contains("\"approval_pending\"")
+    );
+    assert!(
+        !stack.sites_seen().iter().any(|s| s["kind"] == "order"),
+        "FR-007"
+    );
+
+    // US2 (FR-008, ADR 0014): the chat listener adds the live window.
+    let jwt_secret = stack.secret("WEBUI_JWT_SECRET");
+    let api_key = stack.secret("AGENT_HOUSE_API_KEY");
+    let req = json!({"model": BR_AGENT, "stream": true,
+        "messages": [{"role": "user", "content": "[agent:browse] open the article"}]})
+    .to_string();
+    let (ok, out) = stack.bash_in(
+        "open-webui",
+        &format!(
+            "curl -sS -N --max-time 120 -H 'Authorization: Bearer {api_key}' -H 'X-OpenWebUI-User-Jwt: {}' -H 'Content-Type: application/json' -d '{req}' http://gateway-chat:7003/agent/{BR_AGENT}/v1/chat/completions",
+            webui_jwt(&jwt_secret, "webui-user-1")
+        ),
+    );
+    assert!(
+        ok && (out.contains("\"type\": \"embeds\"") || out.contains("\"type\":\"embeds\"")),
+        "FR-008: {out}"
+    );
+    let embed = out
+        .split("\"embeds\":[\"")
+        .nth(1)
+        .or_else(|| out.split("\"embeds\": [\"").nth(1))
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .to_string();
+    assert!(embed.contains("/live/") && embed.contains('#'), "{embed}");
+    // Without a valid user header there's no window.
+    let (_, out2) = stack.bash_in(
+        "open-webui",
+        &format!(
+            "curl -sS -N --max-time 120 -H 'Authorization: Bearer {api_key}' -H 'X-OpenWebUI-User-Jwt: {}' -H 'Content-Type: application/json' -d '{req}' http://gateway-chat:7003/agent/{BR_AGENT}/v1/chat/completions",
+            webui_jwt("wrong-secret", "webui-user-1")
+        ),
+    );
+    assert!(!out2.contains("embeds"), "FR-011: {out2}");
+
+    // US2 (FR-009, FR-010, SC-004): watch, take over, hand back.
+    let (path, secret) = embed.split_once('#').unwrap();
+    let path = path.split("/live/").nth(1).unwrap();
+    let ws_url = format!("ws://127.0.0.1:7002/live/{path}/ws");
+    let (mut view, _) = tungstenite::connect(&ws_url).expect("view socket");
+    view.send(tungstenite::Message::Text(
+        json!({"secret": secret}).to_string().into(),
+    ))
+    .unwrap();
+    let mut got_frame = false;
+    for _ in 0..20 {
+        if let Ok(tungstenite::Message::Binary(b)) = view.read()
+            && b.starts_with(&[0xff, 0xd8])
+        {
+            got_frame = true;
+            break;
+        }
+    }
+    assert!(got_frame, "SC-001: a JPEG frame");
+    let (mut bad, _) = tungstenite::connect(&ws_url).expect("socket");
+    bad.send(tungstenite::Message::Text(
+        json!({"secret": "wrong"}).to_string().into(),
+    ))
+    .unwrap();
+    let m = bad.read().unwrap().to_string();
+    assert!(m.contains("expired"), "SC-005: {m}");
+    let (mut ctl, _) = tungstenite::connect(&ws_url).expect("control socket");
+    ctl.send(tungstenite::Message::Text(
+        json!({"secret": secret, "control": true})
+            .to_string()
+            .into(),
+    ))
+    .unwrap();
+    ctl.send(tungstenite::Message::Text(
+        json!({"type": "take"}).to_string().into(),
+    ))
+    .unwrap();
+    std::thread::sleep(Duration::from_secs(1));
+    let out = house.execute("async () => await browser.snapshot({})");
+    assert!(out.contains("the person is in control"), "FR-010: {out}");
+    ctl.send(tungstenite::Message::Text(
+        json!({"type": "text", "text": "typed-by-person-77"})
+            .to_string()
+            .into(),
+    ))
+    .unwrap();
+    ctl.close(None).ok();
+    std::thread::sleep(Duration::from_secs(2));
+    let out = house.execute("async () => await browser.snapshot({})");
+    assert!(
+        out.contains("elements") && !out.contains("typed-by-person-77"),
+        "FR-010/012: {out}"
+    );
+
+    // FR-014: the browser reaches the gateway's egress proxy and nothing else.
+    let br = layout::browser_service(BR_AGENT);
+    let targets: Vec<(String, u16)> = vec![
+        ("gateway-browser-house".into(), 7004),
+        ("1.1.1.1".into(), 443),
+        ("stub-llm".into(), 8000),
+        ("open-webui".into(), 8080),
+        ("hermes-house".into(), 8642),
+        ("postgres".into(), 5432),
+    ];
+    let got = stack.probe_many(&br, &targets);
+    assert_eq!(
+        got,
+        vec![true, false, false, false, false, false],
+        "FR-014: {targets:?}"
+    );
+    let (_, checks) = stack.doctor();
+    assert_eq!(status_of(&checks, "network-layout"), "pass", "{checks}");
+
+    // SC-003: no credential anywhere the agent or the logs can see.
+    let log = stack.sql(
+        "SELECT string_agg(coalesce(args_summary::text,'') || coalesce(reason,''), ' ') FROM audit",
+    );
+    assert!(!log.contains("hunter2-x"), "SC-003: audit");
+    let logs = stack.compose(&[], &[], &["logs", "--no-color"]);
+    assert!(
+        !String::from_utf8_lossy(&logs.stdout).contains("hunter2-x"),
+        "SC-003: logs"
+    );
+    for m in [&house, &other] {
+        assert!(
+            m.seen.iter().all(|t| !t.contains("hunter2-x")),
+            "SC-003: replies"
+        );
     }
 }

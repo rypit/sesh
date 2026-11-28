@@ -77,6 +77,7 @@ async fn main() -> anyhow::Result<()> {
     };
     settings.validate()?;
     let agent_listen = settings.agent_listen.clone();
+    let browser_settings = settings.browser.clone();
     let agents = Agents::from_file(
         env("SESH_AGENTS_FILE")
             .unwrap_or_else(|| "/etc/sesh/agents.toml".into())
@@ -138,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
         pending: Default::default(),
         google: Default::default(),
         refs: Default::default(),
+        browser: Default::default(),
         miniflux: connectors::feeds::Miniflux::new(
             &env("SESH_MINIFLUX_USER").unwrap_or_default(),
             &env("SESH_MINIFLUX_PASSWORD").unwrap_or_default(),
@@ -212,6 +214,27 @@ async fn main() -> anyhow::Result<()> {
     for addr in &approval_addrs {
         approval_listeners.push(tokio::net::TcpListener::bind(addr).await?);
     }
+    // The chat listener (specs/010 R2) on the `chat` network only, and one
+    // egress proxy per agent browser on that browser's network only.
+    let mut chat_listeners = Vec::new();
+    if !browser_settings.chat_alias.is_empty() {
+        let r = listen::resolve_aliases(std::slice::from_ref(&browser_settings.chat_alias))
+            .await
+            .map_err(anyhow::Error::msg)?;
+        for a in listen::with_port(&r, listen::CHAT_PORT).map_err(anyhow::Error::msg)? {
+            chat_listeners.push(tokio::net::TcpListener::bind(a).await?);
+        }
+    }
+    let mut egress_listeners = Vec::new();
+    for agent in &browser_settings.agents {
+        let alias = browser_settings.gateway_alias.replace("{agent}", agent);
+        let r = listen::resolve_aliases(std::slice::from_ref(&alias))
+            .await
+            .map_err(anyhow::Error::msg)?;
+        for a in listen::with_port(&r, listen::EGRESS_PORT).map_err(anyhow::Error::msg)? {
+            egress_listeners.push((agent.clone(), tokio::net::TcpListener::bind(a).await?));
+        }
+    }
     let exec_listener = tokio::net::TcpListener::bind(
         env("SESH_EXECUTOR_LISTEN").unwrap_or_else(|| "0.0.0.0:7001".into()),
     )
@@ -230,6 +253,21 @@ async fn main() -> anyhow::Result<()> {
     for l in approval_listeners {
         let app = approvals_app.clone();
         servers.spawn(async move { axum::serve(l, app).await });
+    }
+    for l in chat_listeners {
+        let app = sesh_gateway::relay::router().with_state(gw.clone());
+        servers.spawn(async move { axum::serve(l, app).await });
+    }
+    for (agent, l) in egress_listeners {
+        let p = sesh_gateway::browser::egress::Proxy {
+            agent,
+            allow_hosts: browser_settings.egress_allow.clone(),
+            refusals: gw.browser.refusals.clone(),
+        };
+        servers.spawn(async move {
+            p.serve(l).await;
+            Ok(())
+        });
     }
     servers.spawn(async move {
         axum::serve(

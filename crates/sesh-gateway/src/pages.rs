@@ -22,6 +22,7 @@ pub fn router(gw: Arc<Gateway>) -> Router {
         .route("/approve/{id}", get(approve_page).post(approve))
         .route("/form/{id}", get(form_page).post(form_submit))
         .route("/admin/forms", post(admin_form))
+        .route("/admin/browser/login-form", post(admin_site_login_form))
         .route("/admin/credentials", get(admin_credentials))
         .route("/admin/google/consent", post(google_consent))
         .route("/admin/google/disconnect", post(google_disconnect))
@@ -36,6 +37,7 @@ pub fn router(gw: Arc<Gateway>) -> Router {
         )
         .route("/google/callback", get(google_callback))
         .route("/health", get(|| async { "ok" }))
+        .merge(crate::browser::live::router())
         .layer(axum::middleware::from_fn_with_state(
             gw.clone(),
             refuse_agent_tokens,
@@ -239,6 +241,29 @@ async fn approve(
 async fn form_page(State(gw): State<Arc<Gateway>>, Path(id): Path<String>) -> Response {
     match gw.approvals.get_form(&id).await {
         Ok(Some(f)) if f.used_at.is_some() => (StatusCode::GONE, "This link was already used.").into_response(),
+        Ok(Some(f)) if f.connector == "browser" => {
+            let label = gw.browser.site_forms.lock().expect("lock").get(&f.name).cloned();
+            let Some((owner, site)) = label else {
+                return (StatusCode::GONE, "This link expired; ask for a new one.").into_response();
+            };
+            let field = |id: &str, label: &str, kind: &str, auto: &str| {
+                format!("<p><label>{label}<br><input id={id} type={kind} autocomplete={auto} style='width:100%;font-size:16px;padding:8px'></label></p>")
+            };
+            page(
+                &format!("Login for {}", escape(&site)),
+                &format!(
+                    "<p>Your login for <b>{}</b> ({}). It goes straight to sesh's secret store; the agent can use it only on {} and never sees it.</p>{}{}{}\
+<p><button onclick='send({{value: JSON.stringify({{username: document.getElementById(\"u\").value, password: document.getElementById(\"p\").value, totp: document.getElementById(\"t\").value}})}})'>Save</button></p>",
+                    escape(&site),
+                    escape(&owner),
+                    escape(&site),
+                    field("u", "User name or email", "text", "off"),
+                    field("p", "Password", "password", "off"),
+                    field("t", "Authenticator key (optional, the code shown when setting up two-factor sign-in)", "password", "off"),
+                ),
+            )
+            .into_response()
+        }
         Ok(Some(f)) => page(
             &format!("Credential for {}", f.connector),
             &format!(
@@ -299,6 +324,24 @@ async fn form_submit(
             "The value must be 1 to 8192 characters.",
         );
     }
+    if f.connector == "browser" {
+        let v: Value = serde_json::from_str(value).unwrap_or(Value::Null);
+        let filled = |k: &str| v[k].as_str().is_some_and(|s| !s.is_empty());
+        if !filled("username") || !filled("password") {
+            return msg(
+                StatusCode::BAD_REQUEST,
+                "Fill in the user name and the password.",
+            );
+        }
+        if v["totp"].as_str().is_some_and(|t| !t.trim().is_empty())
+            && crate::browser::totp::base32(v["totp"].as_str().unwrap_or("")).is_none()
+        {
+            return msg(
+                StatusCode::BAD_REQUEST,
+                "That authenticator key isn't valid (letters A-Z and digits 2-7).",
+            );
+        }
+    }
     match gw.approvals.use_form(&id, approvals::now()).await {
         Ok(true) => {}
         _ => return msg(StatusCode::CONFLICT, "This link was already used."),
@@ -353,6 +396,65 @@ fn admin_ok(gw: &Gateway, h: &HeaderMap) -> bool {
         (Some(want), Some(got)) => approvals::ct_eq(want, got),
         _ => false,
     }
+}
+
+/// `sesh browser login <owner> <site>` (specs/010 R7): a one-time form for
+/// an owner's login to one site.
+async fn admin_site_login_form(
+    State(gw): State<Arc<Gateway>>,
+    headers: HeaderMap,
+    Json(b): Json<Value>,
+) -> Response {
+    if !admin_ok(&gw, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let owner = b["owner"].as_str().unwrap_or("");
+    let site = b["site"].as_str().unwrap_or("");
+    if !crate::browser::sites::valid_site(site) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "give the site as a plain domain name, like example.org"})),
+        )
+            .into_response();
+    }
+    if owner != sesh_core::HOUSEHOLD && gw.users.get(owner).is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "no such user"})),
+        )
+            .into_response();
+    }
+    let name = crate::browser::sites::credential_name(owner, site);
+    gw.browser
+        .site_forms
+        .lock()
+        .expect("lock")
+        .insert(name.clone(), (owner.into(), site.into()));
+    let secret = approvals::new_secret();
+    let at = approvals::now();
+    let f = Form {
+        id: approvals::new_id(),
+        connector: "browser".into(),
+        name,
+        secret_sha256: approvals::sha256_hex(&secret),
+        created_at: at,
+        expires_at: at + gw.settings.form_ttl_secs,
+        used_at: None,
+    };
+    if gw.approvals.insert_form(&f).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    audit(
+        &gw,
+        "operator",
+        Some("browser"),
+        None,
+        "allowed",
+        format!("browser.login_form {owner} {site}"),
+    )
+    .await;
+    let base = gw.settings.approvals_base_url.trim_end_matches('/');
+    Json(json!({"url": format!("{base}/form/{}#{secret}", f.id), "expires_in_secs": gw.settings.form_ttl_secs})).into_response()
 }
 
 async fn admin_form(
@@ -816,6 +918,88 @@ mod tests {
         let list: Value = r.json().await.unwrap();
         assert_eq!(list[0]["name"], "TOKEN");
         assert_eq!(list[0]["state"], "missing");
+    }
+
+    #[tokio::test]
+    async fn a_site_login_form_stores_one_owners_login_for_one_site() {
+        let gw = Arc::new(gateway(Audit::memory(), GatewaySettings::default()));
+        let url = serve(gw.clone()).await;
+        let http = reqwest::Client::new();
+        let ask = |b: Value| {
+            http.post(format!("{url}/admin/browser/login-form"))
+                .bearer_auth("admin-token")
+                .json(&b)
+                .send()
+        };
+        assert_eq!(
+            ask(json!({"owner": "household", "site": "https://x.org"}))
+                .await
+                .unwrap()
+                .status(),
+            400
+        );
+        assert_eq!(
+            ask(json!({"owner": "zed", "site": "x.org"}))
+                .await
+                .unwrap()
+                .status(),
+            404
+        );
+        let r: Value = ask(json!({"owner": "household", "site": "fake-bank.test"}))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let (path, secret) = r["url"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("http://127.0.0.1:7002")
+            .split_once('#')
+            .unwrap();
+        let page = http
+            .get(format!("{url}{path}"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(
+            page.contains("fake-bank.test") && page.contains("Password"),
+            "{page}"
+        );
+        let post = |v: Value| {
+            http.post(format!("{url}{path}"))
+                .json(&json!({"secret": secret, "value": v.to_string()}))
+                .send()
+        };
+        assert_eq!(
+            post(json!({"username": "ana"})).await.unwrap().status(),
+            400,
+            "a password is needed"
+        );
+        assert_eq!(
+            post(json!({"username": "ana", "password": "pw", "totp": "not base32!"}))
+                .await
+                .unwrap()
+                .status(),
+            400
+        );
+        assert_eq!(
+            post(json!({"username": "ana", "password": "hunter2-x", "totp": ""}))
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+        let key = sesh_core::credential_key(
+            "browser",
+            &crate::browser::sites::credential_name("household", "fake-bank.test"),
+        );
+        let v: Value = serde_json::from_str(&gw.secrets.get(&key).await.unwrap().unwrap()).unwrap();
+        assert_eq!(v["password"], "hunter2-x");
+        assert!(!format!("{:?}", gw.audit.entries()).contains("hunter2-x"));
     }
 
     #[tokio::test]

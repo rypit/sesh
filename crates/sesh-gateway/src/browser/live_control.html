@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent's browser</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f7f8; --fg:#1c1e21; --muted:#5f6670; --edge:#d4d7dc; --accent:#1a73e8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1d1f22; --fg:#e8eaed; --muted:#9aa0a6; --edge:#3a3d41; --accent:#8ab4f8; } }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px system-ui,sans-serif; }
+  body { display:flex; flex-direction:column; }
+  header { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px 16px; border-bottom:1px solid var(--edge); }
+  header .state { flex:1; min-width:160px; }
+  button { font:inherit; padding:6px 14px; border-radius:8px; border:1px solid var(--edge); background:transparent; color:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button[hidden] { display:none; }
+  main { flex:1; display:flex; align-items:center; justify-content:center; padding:8px; min-height:0; }
+  img { max-width:100%; max-height:100%; object-fit:contain; background:#000; border-radius:6px; outline:none; }
+  img.driving { cursor:crosshair; box-shadow:0 0 0 3px var(--accent); }
+  .hint { color:var(--muted); font-size:12px; padding:0 16px 8px; }
+</style></head>
+<body>
+<header>
+  <span class="state" id="state">Connecting…</span>
+  <button class="primary" id="take">Take over</button>
+  <button id="give" hidden>Hand back to the agent</button>
+  <button id="close">Close</button>
+</header>
+<main><img id="frame" tabindex="0" alt="The agent's browser, live"></main>
+<div class="hint" id="hint">While you're in control, the agent waits. Closing this window hands control back.</div>
+<script>
+(() => {
+  const secret = location.hash.slice(1);
+  const img = document.getElementById('frame'), state = document.getElementById('state');
+  const take = document.getElementById('take'), give = document.getElementById('give');
+  const labels = { agent: 'The agent is browsing', person: 'Someone else has taken over', you: 'You are in control', closed: 'The browser is closed' };
+  if (!secret) { state.textContent = 'This live view has expired'; return; }
+  const ws = new WebSocket(location.href.replace(/^http/, 'ws').replace(/#.*$/, '').replace(/\/control\/?$/, '/ws'));
+  ws.binaryType = 'blob';
+  let mine = false, last = null;
+  const send = (m) => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); };
+  ws.onopen = () => send({ secret, control: true });
+  ws.onmessage = (e) => {
+    if (typeof e.data === 'string') {
+      const m = JSON.parse(e.data);
+      if (m.type === 'error') { state.textContent = m.error; return; }
+      if (m.type !== 'status') return;
+      state.textContent = labels[m.state] || m.state;
+      mine = m.state === 'you';
+      take.hidden = mine; give.hidden = !mine;
+      img.classList.toggle('driving', mine);
+      if (mine) img.focus();
+      return;
+    }
+    const u = URL.createObjectURL(e.data);
+    img.onload = () => { if (last) URL.revokeObjectURL(last); last = u; };
+    img.src = u;
+  };
+  ws.onclose = () => { state.textContent = 'Live view ended'; take.hidden = true; give.hidden = true; };
+  take.onclick = () => send({ type: 'take' });
+  give.onclick = () => send({ type: 'give' });
+  document.getElementById('close').onclick = () => { send({ type: 'give' }); ws.close(); window.close(); };
+  window.addEventListener('pagehide', () => { send({ type: 'give' }); ws.close(); });
+  function at(e) {
+    const r = img.getBoundingClientRect();
+    return { fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height };
+  }
+  img.addEventListener('click', (e) => { if (mine) send(Object.assign({ type: 'click' }, at(e))); });
+  img.addEventListener('wheel', (e) => { if (mine) { e.preventDefault(); send(Object.assign({ type: 'scroll', dy: e.deltaY }, at(e))); } }, { passive: false });
+  img.addEventListener('keydown', (e) => {
+    if (!mine) return;
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) { send({ type: 'text', text: e.key }); e.preventDefault(); }
+    else if (!e.ctrlKey && !e.metaKey) { send({ type: 'key', key: e.key }); e.preventDefault(); }
+  });
+  img.addEventListener('paste', (e) => {
+    if (!mine) return;
+    const t = (e.clipboardData && e.clipboardData.getData('text')) || '';
+    if (t) send({ type: 'text', text: t });
+    e.preventDefault();
+  });
+})();
+</script>
+</body></html>

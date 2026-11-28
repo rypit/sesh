@@ -72,8 +72,7 @@ implementation choice conflicts with one, the rule wins.
 **Constraints**
 
 - Bare metal is for the inference server only, when it needs the GPU
-  (for example oMLX on Metal). Everything else runs in containers or sbx
-  microVMs.
+  (for example oMLX on Metal). Everything else runs in containers.
 - The always-on server targets 64GB of unified memory. Peak use is
   planned at about 45–50GB.
 
@@ -109,7 +108,7 @@ sesh has 20 components across six zones. Three are custom builds (marked
 | Weather + maps | Resources | Forecasts, geocoding, places | Open-Meteo, OpenStreetMap | Gateway connector | No keys; home location fixed in the gateway |
 | Miniflux | Resources | Feeds (RSS, Atom) the household follows | Miniflux (ADR 0009) | Container | User per owner, managed by the gateway; reachable from the gateway only (`feeds` network); its own egress network to publishers and its own database network to Postgres (see Network layout); agent adds need approval; web UI not published |
 | Paperless-ngx | Resources | Household documents: OCR, search | Paperless-ngx (+ Paperless-AI if needed) | Container | User per agent scope; search, read and upload via the gateway; a mail rule imports a Gmail "To file" label; embeddings on CPU |
-| Browser | Resources | Logged-in browsing, live view, `read(url)` | Chromium (Playwright build), headful | sbx microVM per session | Profile per agent; fresh context per read; private addresses blocked (**build**: `login(site)`, `read(url)`) |
+| Browser | Resources | Logged-in browsing, `read(url)`, downloads and uploads, live view and takeover in the chat | Chromium (Debian), driven by the gateway over CDP (ADR 0013) | Hardened container per agent, one network to the gateway | Profile per agent; fresh context per read; online only through the gateway's egress proxy, which refuses home-network addresses; logins filled by the gateway; downloads kept by the gateway as file references |
 | Mem0 | Resources | Long-term memory per user + household | Mem0 OSS, pgvector, BM25 | Container | `infer=False` at first; CPU embeddings; `user_id` set by the gateway |
 | Postgres + Redis | Resources | Storage for the adopted services and the audit log | Postgres 16 + pgvector; Redis, one instance per service | Container | One Postgres server; each service logs in as its own role, owning only its database, never the superuser; a Redis per service (Open WebUI, Infisical, Paperless), each reachable only from it (ADR 0010). Backs Mem0, Open WebUI, LiteLLM, Paperless, Miniflux, Infisical and the audit log |
 | Inference server | Inference | Serves models behind aliases (OpenAI-compatible API) | Any OpenAI-compatible server (for example oMLX, Ollama, llama.cpp, vLLM) | Bare metal | Alias `agent-main` |
@@ -306,14 +305,14 @@ Each store has one job:
 ## Deployment and runtime
 
 Only the inference server runs on bare metal, when it needs the GPU.
-Long-lived services run in Docker from one Compose file, and agent work
-that touches untrusted content runs in sbx microVMs.
+Long-lived services run in Docker from one Compose file. Agent work
+that touches untrusted content runs in hardened containers with no
+route out except through the gateway (the code executor, the browser).
 
 | Placement | Components | Why |
 | --- | --- | --- |
 | Bare metal (macOS) | Inference server, when it needs the GPU (for example oMLX) | Needs the Metal GPU |
 | Docker (Compose) | Open WebUI, Hermes (container per agent with a runtime, no route out), gateway, workerd executor per agent (only its own network to the gateway), Infisical, ntfy, Mem0, Paperless, Miniflux, SearXNG, Kiwix, LiteLLM, Postgres, Redis (one per service) | Long-lived services; one Compose file moves to the Mac mini unchanged; no shared network (see Network layout) |
-| sbx microVM | Browser sessions | VM boundary for code execution and untrusted web content |
 
 **Memory budget on a 64GB Mac mini (estimates)**
 
@@ -324,7 +323,7 @@ that touches untrusted content runs in sbx microVMs.
 | KV cache, a few concurrent chats | 4–8 GB |
 | Inference server overhead | ~1 GB |
 | Docker Desktop VM (capped) | 10 GB |
-| Browser sessions in sbx, when active | 1–2 GB each |
+| Browser containers, when active | 0.5–1.5 GB each |
 | **Idle total** | **~38–45 GB** |
 | **Peak, two agents browsing** | **~45–50 GB** |
 
@@ -372,11 +371,15 @@ files' unit test, `sesh doctor` and the `network_stack` stack test
   one non-internal network, so its only way out is unambiguous.
 - In stub mode only, an internal `stub` network joins the stub model
   server with LiteLLM and the gateway.
-- Each agent runtime (`hermes-<agent>`, ADR 0012) is on three internal
-  pair networks and nothing else: `agent-<agent>` (with the gateway),
-  `agent-<agent>-model` (with LiteLLM) and `agent-<agent>-chat` (with
-  Open WebUI). It has no edge network, so no route out and no published
-  port.
+- Each agent runtime (`hermes-<agent>`, ADR 0012) is on two internal
+  pair networks and nothing else: `agent-<agent>` (with the gateway) and
+  `agent-<agent>-model` (with LiteLLM). It has no edge network, so no
+  route out and no published port. Open WebUI reaches it only through
+  the gateway's chat listener, on the `chat` pair network (ADR 0014).
+- Each agent's browser (`browser-<agent>`, ADR 0013) is on one internal
+  network, `browser-<agent>`, shared only with the gateway: the gateway
+  drives it over CDP, and it reaches the web only through the gateway's
+  egress proxy there.
 
 **The reachability rule**
 
@@ -390,7 +393,9 @@ files' unit test, `sesh doctor` and the `network_stack` stack test
   other container reaches them, except that `:7000` also binds the
   gateway's address on each `agent-<agent>` network, found by resolving
   its alias there (`gateway-agent-<agent>`, ADR 0012). So each agent
-  runtime, and nothing else, reaches the agent endpoint. Its executor listener (`:7001`) accepts
+  runtime, and nothing else, reaches the agent endpoint. In the same
+  way the chat listener (`:7003`) binds only on `chat`, and the egress
+  proxy (`:7004`) only on each `browser-<agent>` network. Its executor listener (`:7001`) accepts
   connections on its other networks but refuses every call that isn't
   from the calling agent's own executor (ADR 0009).
 - Every other pair is refused, probed by every address the destination
@@ -497,20 +502,23 @@ small browser controller. Everything else is configuration.
 - It gives automatic recall and mirrored writes, while keeping the
   gateway as the only path.
 
-**3. `sesh-browser` (TypeScript, Playwright, inside the sbx VM)**
+**3. The browser driver, inside the gateway (ADR 0013)**
 
-- A controller inside the sbx browser VM:
-  - a persistent context per agent, and a fresh context per `read(url)`;
-  - CDP fill for `login(site)`;
-  - a live view and takeover streamed through the gateway into the
-    Open WebUI chat (phase 10);
-  - Readability extraction to Markdown.
-- Evaluate adopting Auto Browser, easi.run or Nod's browser before
-  building.
+- The gateway drives one Chromium per agent over CDP
+  (`crates/sesh-gateway/src/browser/`), so the domain check and the
+  login fill stay in the trusted plane:
+  - a persistent profile per agent, and a fresh context per `read(url)`;
+  - the gateway's own page script in an isolated world: snapshots
+    without field values, Markdown extraction, field lookup for logins;
+  - downloads captured over CDP and kept by the gateway, uploads set
+    from file references after approval;
+  - the egress proxy every browser request goes through;
+  - the live view and takeover (screencast and input), served into the
+    Open WebUI message through the chat relay (ADR 0014).
 
 **Adopted as-is (configure only):** Open WebUI, Hermes, an
 OpenAI-compatible inference server, LiteLLM, Infisical, ntfy, Mem0,
-Paperless-ngx, SearXNG, Kiwix, Postgres, Redis, sbx.
+Paperless-ngx, SearXNG, Kiwix, Postgres, Redis, Chromium.
 
 **4. `sesh` admin CLI + Claude Code operator skills**
 
@@ -625,7 +633,9 @@ is a feature under `specs/`.
    - Accept: chatting in Open WebUI, the agent answers a weather and a
      search question, and uses mail, documents and feeds via the
      gateway; attempts to use terminal or file tools fail.
-10. **Browser:** the sbx browser VM, a persistent profile per agent,
+10. **Browser** (done in specs/010): a hardened Chromium container per agent, driven by the
+   gateway (ADR 0013), a persistent profile per agent, downloads and
+   uploads by file reference,
    `read(url)` and `login(site)`, and a live view **in the Open WebUI
    chat**, not a one-time link:
    - when an agent uses the browser, a small live window appears in its
@@ -708,7 +718,8 @@ before or during its phase.
 | A service release that needs a superuser-only database extension | Constraint | The migration creates it as the superuser; none needed so far (`vector` will be, for memory) | 7, 11 |
 | Prompt injection via email, pages, documents or other agents | Risk | Untrusted labels, approvals, domain-pinned login, egress guard, audit alerts | 4–13 |
 | Mem0 add-only accumulates stale facts | Risk | Scheduled cleanup; per-user memory editing page | 11 |
-| sbx requires a Docker sign-in (cloud dependency) | Risk | Review login and telemetry terms; fall back to containers if unacceptable | 10 |
+| sbx requires a Docker sign-in (cloud dependency) | Resolved | Not used: the browser runs in a hardened container (ADR 0013) | 10 |
+| The live window needs the approvals listener over HTTPS when Open WebUI is | Constraint | Serve both through `tailscale serve` (HTTPS); a mixed-content iframe is blocked by the browser | 10 |
 | Telegram content passes Telegram servers | Risk | Convenience only; sensitive work in Open WebUI | 12 |
 | Google OAuth app in production shows an unverified warning | Accepted | One-time click-through per user | 5 |
 | Operator can read other users' chats, sessions and logs | Policy | Turn off Open WebUI admin chat access; agree a household policy | 1 |
@@ -730,5 +741,4 @@ before or during its phase.
 - [ntfy](https://github.com/binwiederhier/ntfy) · [ntfy docs](https://docs.ntfy.sh)
 - [Paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) · [Paperless-AI](https://github.com/clusterzx/paperless-ai)
 - [Kiwix](https://kiwix.org) · [kiwix-tools](https://github.com/kiwix/kiwix-tools)
-- [Docker Sandboxes (sbx)](https://docs.docker.com/ai/sandboxes/get-started/)
 - [Google: transition from less secure apps to OAuth](https://knowledge.workspace.google.com/admin/sync/transition-from-less-secure-apps-to-oauth)

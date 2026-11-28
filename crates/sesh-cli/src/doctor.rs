@@ -83,9 +83,10 @@ pub fn run(
     http: &dyn Http,
     tailscale: &dyn Tailscale,
 ) -> Vec<Check> {
-    run_with(config, secrets, agents, &[], compose, http, tailscale)
+    run_with(config, secrets, agents, &[], &[], compose, http, tailscale)
 }
 
+#[allow(clippy::too_many_arguments)]
 /// [`run`] for a stack with agent runtimes (`runtimes`: their agents'
 /// names; specs/009).
 pub fn run_with(
@@ -93,6 +94,7 @@ pub fn run_with(
     secrets: &Secrets,
     agents: &[String],
     runtimes: &[String],
+    browsers: &[String],
     compose: &dyn Compose,
     http: &dyn Http,
     tailscale: &dyn Tailscale,
@@ -106,9 +108,12 @@ pub fn run_with(
     checks.push(feeds_check(secrets, http));
     checks.push(audit_check(compose));
     checks.push(isolation_check(compose));
-    checks.push(network_check_with(config, compose, runtimes));
+    checks.push(network_check_with(config, compose, runtimes, browsers));
     if !runtimes.is_empty() {
         checks.push(runtime_check(runtimes, compose));
+    }
+    if !browsers.is_empty() {
+        checks.push(browser_check(browsers, compose));
     }
     checks.push(match tailscale.serves_port(config.ports.webui) {
         Ok(Some(true)) => Check::pass("tailscale-serve", "Open WebUI is served on the tailnet"),
@@ -576,6 +581,40 @@ fn prefix_len(netmask: &str) -> Option<u32> {
     }
 }
 
+/// specs/010: each agent's browser is running. Chromium exits at once
+/// when it can't build its sandbox, so a browser that keeps restarting
+/// almost always means the host forbids unprivileged user namespaces.
+fn browser_check(browsers: &[String], compose: &dyn Compose) -> Check {
+    const ID: &str = "browsers";
+    let states = compose.ps().unwrap_or_default();
+    let bad: Vec<String> = browsers
+        .iter()
+        .filter_map(|a| {
+            let svc = format!("browser-{a}");
+            match states.iter().find(|s| s.service == svc) {
+                Some(s) if s.state == "running" => None,
+                Some(s) => Some(format!("{svc} is {}", s.state)),
+                None => Some(format!("{svc} isn't running")),
+            }
+        })
+        .collect();
+    if bad.is_empty() {
+        Check::pass(
+            ID,
+            format!(
+                "{} browser(s) running, Chromium's sandbox on",
+                browsers.len()
+            ),
+        )
+    } else {
+        Check::fail(
+            ID,
+            bad.join("; "),
+            "if its log says \"No usable sandbox\", the host forbids unprivileged user namespaces: on Linux run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (and set it in /etc/sysctl.d), then `sesh up`",
+        )
+    }
+}
+
 /// specs/009 contracts/cli.md: each agent runtime is running and healthy,
 /// has no built-in toolset enabled, and runs the configuration sesh wrote.
 fn runtime_check(runtimes: &[String], compose: &dyn Compose) -> Check {
@@ -655,12 +694,22 @@ fn runtime_check(runtimes: &[String], compose: &dyn Compose) -> Check {
 /// rules bind each login to its own network's current ranges.
 #[cfg(test)]
 fn network_check(config: &Config, compose: &dyn Compose) -> Check {
-    network_check_with(config, compose, &[])
+    network_check_with(config, compose, &[], &[])
 }
 
-fn network_check_with(config: &Config, compose: &dyn Compose, runtimes: &[String]) -> Check {
+fn network_check_with(
+    config: &Config,
+    compose: &dyn Compose,
+    runtimes: &[String],
+    browsers: &[String],
+) -> Check {
     let stub = crate::init::is_stub(config);
     let runtimes: Vec<&str> = runtimes.iter().map(String::as_str).collect();
+    let browsers: Vec<&str> = browsers.iter().map(String::as_str).collect();
+    let install = crate::layout::Install {
+        runtimes: &runtimes,
+        browsers: &browsers,
+    };
     let mut problems = vec![];
     match compose.service_networks() {
         Ok(running) => {
@@ -668,10 +717,13 @@ fn network_check_with(config: &Config, compose: &dyn Compose, runtimes: &[String
                 if svc.starts_with("executor-") || svc == "kiwix" {
                     continue;
                 }
-                let want = crate::layout::networks_of_with(&svc, stub, &runtimes);
+                let want = crate::layout::networks_of_with(&svc, stub, &install);
                 if want.is_empty() {
                     if svc.starts_with("hermes-") {
                         problems.push(format!("{svc} runs but its agent has no runtime"));
+                    }
+                    if svc.starts_with("browser-") {
+                        problems.push(format!("{svc} runs but its agent has no browser"));
                     }
                     continue;
                 }
@@ -1270,5 +1322,29 @@ mod tests {
         );
         let r = runtime_check(&["gone".into()], &runtime_stack(off, &good));
         assert!(r.detail.contains("gone isn't running"), "{}", r.detail);
+    }
+
+    #[test]
+    fn a_browser_that_keeps_restarting_points_at_user_namespaces() {
+        let mut f = FakeCompose::healthy(&[("browser-house", None)]);
+        assert_eq!(browser_check(&["house".into()], &f).status, Status::Pass);
+        f.services.get_mut()[0].state = "restarting".into();
+        let c = browser_check(&["house".into()], &f);
+        assert_eq!(c.status, Status::Fail);
+        assert!(
+            c.detail.contains("browser-house is restarting"),
+            "{}",
+            c.detail
+        );
+        assert!(
+            c.fix
+                .unwrap()
+                .contains("apparmor_restrict_unprivileged_userns")
+        );
+        assert!(
+            browser_check(&["gone".into()], &f)
+                .detail
+                .contains("isn't running")
+        );
     }
 }

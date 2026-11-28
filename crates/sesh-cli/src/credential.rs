@@ -47,6 +47,40 @@ pub fn request(dir: &Path, http: &dyn Http, connector: &str, name: &str) -> Resu
     ])
 }
 
+/// `sesh browser login <owner> <site>` (specs/010 R7): a one-time form for
+/// an owner's login to one site; the agent can use it only on that site.
+pub fn site_login(dir: &Path, http: &dyn Http, owner: &str, site: &str) -> Result<Vec<String>> {
+    let token = admin_token(dir)?;
+    let r = http
+        .post(
+            &format!("{}/browser/login-form", admin_url()),
+            Some(&token),
+            &json!({"owner": owner, "site": site}),
+        )
+        .context("can't reach the gateway; run `sesh up`")?;
+    match r.status {
+        200 => {}
+        400 => bail!("give the site as a plain domain name, like example.org"),
+        404 => {
+            bail!("no user named {owner}; add them with `sesh user add {owner}` (or use household)")
+        }
+        s => bail!("the gateway answered {s}"),
+    }
+    let url = r.body["url"]
+        .as_str()
+        .context("no link in the gateway's reply")?;
+    let mins = r.body["expires_in_secs"].as_u64().unwrap_or(1800) / 60;
+    Ok(vec![
+        format!(
+            "Open this link once, in a browser you trust, and enter {owner}'s login for {site}:"
+        ),
+        url.to_string(),
+        format!(
+            "It works once and expires in {mins} minutes. The agent can use the login only on {site}, and never sees it."
+        ),
+    ])
+}
+
 pub fn list(dir: &Path, http: &dyn Http) -> Result<Vec<String>> {
     let token = admin_token(dir)?;
     let r = http

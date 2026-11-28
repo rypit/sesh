@@ -8,6 +8,7 @@
 pub mod approvals;
 pub mod audit;
 pub mod auth;
+pub mod browser;
 pub mod calls;
 pub mod capability;
 pub mod connectors;
@@ -20,6 +21,7 @@ pub mod owners;
 pub mod pages;
 pub mod redact;
 pub mod refs;
+pub mod relay;
 pub mod schema;
 pub mod secrets;
 
@@ -143,7 +145,9 @@ pub struct Gateway {
     /// The operator's token for `/admin/*` on the approvals listener.
     pub admin_token: Option<String>,
     pub google: google::Google,
-    pub refs: refs::Refs,
+    pub refs: std::sync::Arc<refs::Refs>,
+    /// The browser (specs/010): sessions, egress refusals, live grants.
+    pub browser: browser::Hub,
     pub paperless: connectors::docs::Paperless,
     /// The feed service (specs/006): one Miniflux user per owner.
     pub miniflux: connectors::feeds::Miniflux,

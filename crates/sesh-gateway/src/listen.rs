@@ -26,6 +26,21 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 
 pub const AGENT_PORT: u16 = 7000;
+/// The chat listener (specs/010 R2), on the `chat` network only.
+pub const CHAT_PORT: u16 = 7003;
+/// The browsers' egress proxy (specs/010 R4), on each `browser-<agent>`
+/// network only.
+pub const EGRESS_PORT: u16 = 7004;
+
+/// The resolved aliases' usable addresses on `port` (the same rule as the
+/// agent networks: never a wildcard or loopback; an alias without an
+/// address stops the gateway).
+pub fn with_port(resolved: &[(String, Vec<IpAddr>)], port: u16) -> Result<Vec<SocketAddr>, String> {
+    Ok(with_agent_networks(vec![], resolved)?
+        .into_iter()
+        .map(|a| SocketAddr::new(a.ip(), port))
+        .collect())
+}
 
 /// The local address the kernel would use to reach the outside, if any.
 /// Connecting a UDP socket sends nothing; it only selects a route.

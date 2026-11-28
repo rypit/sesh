@@ -166,15 +166,24 @@ pub async fn handle_from(
             }
         }
         // Approval-gated methods: the gateway decides, whatever the executor
-        // claims (ADR 0007).
+        // claims (ADR 0007). The browser decides per call: a click that
+        // submits a form, a first login, an upload (specs/010 FR-006/7/19).
+        let dynamic = if connector == "browser" {
+            match crate::browser::gate_reason(gw, &scope, &grant.agent, &method, &args).await {
+                Ok(d) => d,
+                Err(why) => break 'checks Err(refused(&mut entry, 400, &why)),
+            }
+        } else {
+            None
+        };
         let mut approved = None;
-        if desc.requires_approval {
+        if desc.requires_approval || dynamic.is_some() {
             let ask = Ask {
                 agent: &grant.agent,
                 topic: &scope.topic,
                 connector: &connector,
                 method: &method,
-                description: &desc.description,
+                description: dynamic.as_deref().unwrap_or(&desc.description),
                 args: &args,
             };
             match approvals::gate(
@@ -217,6 +226,7 @@ pub async fn handle_from(
             "feeds" => {
                 crate::connectors::feeds::call(gw, &scope, &grant.agent, &method, &args).await
             }
+            "browser" => crate::browser::call(gw, &scope, &grant.agent, &method, &args).await,
             _ => gw.upstream.call(&connector, &method, &args, &creds).await,
         };
         match result {
@@ -295,6 +305,7 @@ pub mod tests {
             admin_token: Some("admin-token".into()),
             google: Default::default(),
             refs: Default::default(),
+            browser: Default::default(),
             paperless: crate::connectors::docs::Paperless::new("", ""),
             miniflux: crate::connectors::feeds::Miniflux::new("", ""),
             pending: Default::default(),

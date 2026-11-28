@@ -438,6 +438,58 @@ pub struct GatewaySettings {
     /// research.md R5): its agent listener also binds there.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_listen: Vec<String>,
+    /// The browser (specs/010 data-model.md, Gateway settings).
+    #[serde(default)]
+    pub browser: BrowserSettings,
+}
+
+/// The browser's settings (specs/010).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct BrowserSettings {
+    /// Agents with a browser: each gets an egress proxy listener on the
+    /// gateway's alias on its `browser-<agent>` network.
+    pub agents: Vec<String>,
+    /// The browser's host (`{agent}` is replaced) and CDP port.
+    pub host: String,
+    pub cdp_port: u16,
+    /// The gateway's alias on an agent's browser network.
+    pub gateway_alias: String,
+    pub read_max_bytes: usize,
+    pub read_timeout_secs: u64,
+    /// How long the agent's calls wait while a person is in control.
+    pub wait_secs: u64,
+    pub takeover_max_secs: u64,
+    pub live_ttl_secs: u64,
+    /// Stub mode only: hosts whose (private) addresses the egress proxy
+    /// allows, and whether logins may be filled over plain http.
+    pub egress_allow: Vec<String>,
+    pub allow_http_login: bool,
+    /// Each agent runtime's chat upstream (`{agent}` is replaced).
+    pub chat_upstream: String,
+    /// The gateway's alias on the `chat` network, where the chat listener
+    /// (`:7003`) binds; empty: no chat listener.
+    pub chat_alias: String,
+}
+
+impl Default for BrowserSettings {
+    fn default() -> Self {
+        BrowserSettings {
+            agents: vec![],
+            host: "browser-{agent}".into(),
+            cdp_port: 9222,
+            gateway_alias: "gateway-browser-{agent}".into(),
+            read_max_bytes: 51_200,
+            read_timeout_secs: 20,
+            wait_secs: 60,
+            takeover_max_secs: 900,
+            live_ttl_secs: 1800,
+            egress_allow: vec![],
+            allow_http_login: false,
+            chat_upstream: "http://hermes-{agent}:8642".into(),
+            chat_alias: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -596,6 +648,7 @@ impl Default for GatewaySettings {
             ref_ttl_secs: d_ref_ttl(),
             feeds_max_per_owner: d_feeds_per_owner(),
             agent_listen: vec![],
+            browser: BrowserSettings::default(),
         }
     }
 }
