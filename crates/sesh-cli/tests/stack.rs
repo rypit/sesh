@@ -106,6 +106,28 @@ impl Stack {
 
 impl Drop for Stack {
     fn drop(&mut self) {
+        // Each container's memory at the end of the test, for the household's
+        // sizing (CI sets SESH_STACK_STATS to a file it adds to the summary).
+        if let Ok(path) = std::env::var("SESH_STACK_STATS")
+            && let Ok(out) = Command::new("docker")
+                .args([
+                    "stats",
+                    "--no-stream",
+                    "--format",
+                    "| {{.Name}} | {{.MemUsage}} | {{.CPUPerc}} |",
+                ])
+                .output()
+        {
+            let rows = String::from_utf8_lossy(&out.stdout);
+            let mut rows: Vec<&str> = rows.lines().filter(|l| l.contains("sesh")).collect();
+            rows.sort();
+            let table = format!(
+                "| Container | Memory (used / limit) | CPU |\n|---|---|---|\n{}\n",
+                rows.join("\n")
+            );
+            eprintln!("---- container memory ----\n{table}");
+            let _ = std::fs::write(path, table);
+        }
         // The stack is gone once this returns, so show its logs on failure.
         if std::thread::panicking() {
             let out = self.compose(&[], &[], &["logs", "--no-color", "--tail", "100"]);

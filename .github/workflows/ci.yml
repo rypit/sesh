@@ -218,7 +218,16 @@ jobs:
       - name: Stack test
         env:
           SESH_TEST_NO_INTERNET: "1"
+          SESH_STACK_STATS: /tmp/stack-stats.md
         run: make stack-test STACK_TESTS="${{ matrix.tests }}"
+      # Each container's memory at the end of the test (docker stats).
+      - name: Container memory
+        if: always()
+        run: |
+          if [ -s /tmp/stack-stats.md ]; then
+            { echo "### Container memory: ${{ matrix.tests }}"; cat /tmp/stack-stats.md; } >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/stack-stats.md
+          fi
       - name: Disk usage
         if: failure()
         run: df -h / && docker system df || true
