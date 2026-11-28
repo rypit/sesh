@@ -107,35 +107,43 @@ jobs:
           path: /tmp/sesh-*.tar
           retention-days: 1
 
-  # Stack tests in parallel groups, balanced by duration; the tests in a
-  # group run one after another, each starting and removing its own stack.
-  # Fewer jobs pay the setup (disk, toolchain, cache, images) fewer times.
-  # A new stack test goes in the lightest group; `agent_stack` has its own,
-  # since only it pulls the agent runtime's image (specs/009 research.md R11).
+  # Stack tests in parallel groups, balanced by duration (minutes per test
+  # on the hosted runner, November 2026: isolation 8.0, agent 7.1, eval 6.8,
+  # network 5.8, feeds 5.1, foundation 4.3, gateway 3.0, google_docs 2.2,
+  # secrets 2.2). Each group stays near 8 minutes; the tests in a group run
+  # one after another, each starting and removing its own stack. A new
+  # stack test goes in the lightest group, or its own if it takes more
+  # than about 5 minutes.
   stack:
     needs: images
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         tests:
-          - isolation_stack secrets_stack
-          - eval_stack gateway_stack network_stack
-          - foundation_stack google_docs_stack feeds_stack
+          - isolation_stack
           - agent_stack
+          - eval_stack
+          - network_stack secrets_stack
+          - feeds_stack google_docs_stack
+          - foundation_stack gateway_stack
     name: stack (${{ matrix.tests }})
     steps:
       - uses: actions/checkout@v4
-      # The stack's images (Open WebUI, LiteLLM, Infisical, the three built
-      # here) and the debug build don't fit in the runner's free disk; drop
-      # preinstalled toolchains the stack never uses.
-      - name: Free disk space
+      # The stack's images and the debug build need roughly 30 GB. Hosted
+      # runners now have far more free, so clean up only when they don't:
+      # the cleanup used to take 2-5 minutes per job for under 1 GB.
+      - name: Free disk space (only if short)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
-          docker image prune -af
-          df -h /
+          avail=$(df --output=avail -BG / | tail -1 | tr -dc 0-9)
+          echo "free: ${avail} GB"
+          if [ "$avail" -lt 40 ]; then
+            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+              /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+            docker image prune -af
+            df -h /
+          fi
       - name: Rust toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
