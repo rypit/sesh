@@ -456,6 +456,10 @@ pub struct MemorySettings {
     pub max_chars: usize,
     /// Cosine similarity at which a new fact replaces an existing one.
     pub dedup_similarity: f64,
+    /// The least cosine similarity at which recall counts a fact as close
+    /// in meaning; below it only shared words find it. E5 scores unrelated
+    /// text around 0.7–0.8 (specs/011 research.md R2).
+    pub min_similarity: f64,
 }
 
 impl Default for MemorySettings {
@@ -465,6 +469,7 @@ impl Default for MemorySettings {
             max_facts: 2000,
             max_chars: 500,
             dedup_similarity: 0.92,
+            min_similarity: 0.8,
         }
     }
 }

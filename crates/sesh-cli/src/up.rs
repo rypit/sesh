@@ -216,6 +216,8 @@ pub fn effective_gateway(config: &Config) -> GatewaySettings {
         // (specs/011 research.md R4).
         if !real_embed() {
             g.memory.embed_url = STUB_UPSTREAM.into();
+            // Hashed words score unrelated text near 0, not 0.7.
+            g.memory.min_similarity = 0.2;
         }
         g.home.get_or_insert(Home {
             latitude: 59.91,

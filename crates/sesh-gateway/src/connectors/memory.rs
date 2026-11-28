@@ -282,6 +282,7 @@ impl Store {
         query: &str,
         embedding: Option<&[f32]>,
         limit: usize,
+        min_similarity: f64,
     ) -> Result<Vec<Fact>, String> {
         let (by_meaning, by_words, rows): (Vec<String>, Vec<String>, Vec<Fact>) = match self {
             Store::Memory { facts } => {
@@ -298,6 +299,7 @@ impl Store {
                         .filter_map(|f| {
                             Some((embed::cosine(q, f.embedding.as_deref()?), f.id.clone()))
                         })
+                        .filter(|(c, _)| f64::from(*c) >= min_similarity)
                         .collect(),
                     None => vec![],
                 };
@@ -326,8 +328,8 @@ impl Store {
                     if let Some(l) = &lit {
                         for r in c
                             .query(
-                                "SELECT id::text FROM memories WHERE owner = ANY($1) AND embedding IS NOT NULL ORDER BY embedding <=> $2::text::vector LIMIT 20",
-                                &[&owners, l],
+                                "SELECT id::text FROM memories WHERE owner = ANY($1) AND embedding IS NOT NULL AND 1 - (embedding <=> $2::text::vector) >= $3 ORDER BY embedding <=> $2::text::vector LIMIT 20",
+                                &[&owners, l, &min_similarity],
                             )
                             .await?
                         {
@@ -613,7 +615,7 @@ pub async fn call(
             let v = embedder.embed(Kind::Query, query).await.ok();
             let found = gw
                 .memory
-                .search(&owners, query, v.as_deref(), limit)
+                .search(&owners, query, v.as_deref(), limit, s.min_similarity)
                 .await?;
             Ok(json!(
                 found
@@ -745,22 +747,32 @@ mod tests {
         .unwrap();
         let ana = vec!["ana".to_string()];
         let r = s
-            .search(&ana, "birthday", Some(&vec_for(1)), 5)
+            .search(&ana, "birthday", Some(&vec_for(1)), 5, 0.8)
             .await
             .unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].id, a);
         let r = s
-            .search(&ana, "marigold code word", Some(&vec_for(2)), 5)
+            .search(&ana, "marigold code word", Some(&vec_for(2)), 5, 0.8)
             .await
             .unwrap();
         assert!(r.iter().all(|f| f.owner == "ana"), "never ben's: {r:?}");
         let both = vec!["ana".to_string(), "household".into()];
-        let r = s.search(&both, "bins tuesdays", None, 5).await.unwrap();
+        let r = s
+            .search(&both, "bins tuesdays", None, 5, 0.8)
+            .await
+            .unwrap();
         assert_eq!(
             r[0].fact, "The bins go out on Tuesdays",
             "words alone, no embedding"
         );
+        // Nothing close in meaning and no shared word: nothing, rather
+        // than the nearest unrelated fact (every turn's recall).
+        let r = s
+            .search(&both, "quantum", Some(&vec_for(9)), 5, 0.8)
+            .await
+            .unwrap();
+        assert!(r.is_empty(), "unrelated facts recalled: {r:?}");
         // A restatement is found as a duplicate (text or close vector).
         assert_eq!(
             s.duplicate_of("ana", "kari's birthday is 3 May.", None, 0.92)
@@ -784,7 +796,7 @@ mod tests {
         assert!(!s.forget(&["ben".to_string()], &a).await.unwrap());
         assert!(s.forget(&ana, &a).await.unwrap());
         assert!(
-            s.search(&ana, "birthday", Some(&vec_for(1)), 5)
+            s.search(&ana, "birthday", Some(&vec_for(1)), 5, 0.8)
                 .await
                 .unwrap()
                 .is_empty()

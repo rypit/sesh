@@ -29,7 +29,7 @@ All read on 2026-11-28.
 ## R2. Search: reciprocal rank fusion of meaning and words
 
 **Decision**: `recall(query)` runs two queries over the owner's readable memories:
-- the 20 nearest by cosine distance;
+- the 20 nearest by cosine distance, among those with similarity at least `min_similarity` (0.80: E5 scores unrelated text around 0.7–0.8, so without a floor every turn would recall the nearest unrelated facts; found by `memory_stack` in CI);
 - the 20 best by `ts_rank` on a generated `tsvector`.
 
 It fuses them with reciprocal rank fusion (`score = Σ 1/(60 + rank)`) and returns the top `limit` (default 5, at most 20). Without an embedding for the query (the service is down), only the word query runs. Indexes: HNSW on the embedding, GIN on the `tsvector`, and a btree on the owner.
