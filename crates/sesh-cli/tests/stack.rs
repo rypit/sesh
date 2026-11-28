@@ -3739,3 +3739,29 @@ fn agent_stack() {
     assert_eq!(status_of(&checks, "network-layout"), "pass", "{checks}");
     assert!(ok, "doctor after removal: {checks}");
 }
+
+/// CI runs one job per stack test (`.github/workflows/ci.yml`, the `stack`
+/// matrix); a stack test missing from it would never run.
+#[test]
+fn every_stack_test_has_a_ci_job() {
+    let here = include_str!("stack.rs");
+    let ci = include_str!("../../../.github/workflows/ci.yml");
+    let jobs: Vec<&str> = ci
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("- "))
+        .filter(|t| t.ends_with("_stack"))
+        .collect();
+    let tests: Vec<&str> = here
+        .lines()
+        .filter_map(|l| l.strip_prefix("fn "))
+        .filter_map(|l| l.strip_suffix("() {"))
+        .filter(|n| n.ends_with("_stack"))
+        .collect();
+    assert!(tests.len() >= 9, "{tests:?}");
+    for t in &tests {
+        assert!(jobs.contains(t), "{t} has no CI job in the stack matrix");
+    }
+    for j in &jobs {
+        assert!(tests.contains(j), "CI runs {j}, which isn't a stack test");
+    }
+}

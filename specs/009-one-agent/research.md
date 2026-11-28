@@ -258,7 +258,7 @@ and a fake model, using the configuration `hermes.rs` writes:
 ## R13. CI results (T019)
 
 - PR #16's final run (`a29434b`) passed every job: `check`, `images` and
-  all four stack groups, including `agent_stack` on the real Hermes
+  every stack group, including `agent_stack` on the real Hermes
   image with containers' internet blocked.
 - Two test fixes were needed on the way, both in the test, not the
   runtime: the stub also serves the doctor's `ping` probe, and the real
