@@ -15,6 +15,7 @@ mod hermes;
 mod host;
 mod infisical;
 mod init;
+mod memory;
 // The reachability half of the table is read only by tests and the
 // `network_stack` stack test (which includes this file by path).
 #[allow(dead_code)]
@@ -110,6 +111,11 @@ enum Command {
         #[command(subcommand)]
         command: FeedCommand,
     },
+    /// See or forget what agents remember for a user, or household.
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommand,
+    },
     /// Manage household users (each has their own approval topic).
     User {
         #[command(subcommand)]
@@ -154,6 +160,24 @@ enum FeedCommand {
     Remove { owner: String, name: String },
     /// List feeds, with who added each and its last fetch.
     List { owner: Option<String> },
+}
+
+#[derive(Subcommand)]
+enum MemoryCommand {
+    /// List an owner's memories, newest first.
+    List {
+        owner: String,
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
+    /// Forget one memory by id, or all of an owner's with --all.
+    Forget {
+        owner: String,
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        id: Option<String>,
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -360,6 +384,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     vec![feed::remove(&dir, &http, &owner, &name)?]
                 }
                 FeedCommand::List { owner } => feed::list(&dir, &http, owner.as_deref())?,
+            };
+            for line in lines {
+                println!("{line}");
+            }
+        }
+        Command::Memory { command } => {
+            let http = UreqHttp::new(Duration::from_secs(15));
+            let lines = match command {
+                MemoryCommand::List { owner, limit } => memory::list(&dir, &http, &owner, limit)?,
+                MemoryCommand::Forget { owner, id, .. } => {
+                    vec![memory::forget(&dir, &http, &owner, id.as_deref())?]
+                }
             };
             for line in lines {
                 println!("{line}");

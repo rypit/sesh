@@ -186,7 +186,7 @@ services:
     # Its database, Infisical (`secrets`), ntfy (`notify`), the resource
     # networks, and its edge for its ports and Google, weather and maps.
     # Executor networks come from the generated overlay (specs/008).
-    networks: [gateway-db, secrets, notify, chat, search, docs, feeds, gateway-edge]
+    networks: [gateway-db, secrets, notify, chat, embed, search, docs, feeds, gateway-edge]
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -323,6 +323,24 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Embeddings for memory (specs/011, ADR 0015): a small multilingual
+  # model baked into the image, served on the internal `embed` network to
+  # the gateway only. No outbound access, no secrets, nothing stored.
+  # Not started in stub mode unless SESH_REAL_EMBED=1.
+  embed:
+    image: ${SESH_EMBED_IMAGE:-sesh-embed:dev}
+    networks: [embed]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/80'"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    restart: unless-stopped
+
   # Web search. Reachable only from the gateway (the `search` network is
   # internal); its own `searxng-egress` network lets it reach search engines.
   searxng:
@@ -373,6 +391,9 @@ networks:
   # Open WebUI to the gateway's chat listener, which forwards to the agent
   # runtimes and adds the live browser window (specs/010, ADR 0014).
   chat:
+    internal: true
+  # The gateway to the embedding service (specs/011).
+  embed:
     internal: true
   # One member each: its published loopback port and its outbound access.
   webui-edge: {}

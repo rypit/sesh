@@ -8,13 +8,14 @@
 use crate::Gateway;
 use crate::approvals::{self, Decided, Form};
 use crate::audit::Entry;
-use axum::extract::{Path, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 pub fn router(gw: Arc<Gateway>) -> Router {
@@ -31,6 +32,9 @@ pub fn router(gw: Arc<Gateway>) -> Router {
         .route("/admin/feeds", get(feeds_list))
         .route("/admin/feeds/add", post(feeds_add))
         .route("/admin/feeds/remove", post(feeds_remove))
+        .route("/admin/memory", get(memory_list))
+        .route("/admin/memory/forget", post(memory_forget))
+        .route("/admin/memory/status", get(memory_status))
         .route(
             "/google/start/{id}",
             get(google_start_page).post(google_start),
@@ -870,6 +874,95 @@ async fn feeds_list(State(gw): State<Arc<Gateway>>, headers: HeaderMap) -> Respo
     }
 }
 
+/// `sesh memory list` (specs/011 contracts): one owner's facts, newest
+/// first. The operator's view; nothing here reaches an agent.
+async fn memory_list(
+    State(gw): State<Arc<Gateway>>,
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    if !admin_ok(&gw, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let owner = q.get("owner").map(String::as_str).unwrap_or("");
+    if !owners(&gw).iter().any(|o| o == owner) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let limit = q
+        .get("limit")
+        .and_then(|l| l.parse::<i64>().ok())
+        .unwrap_or(50)
+        .clamp(1, 2000);
+    match gw.memory.list(owner, limit).await {
+        Ok(facts) => {
+            let facts: Vec<Value> = facts
+                .iter()
+                .map(
+                    |f| json!({"id": f.id, "updated": f.updated, "agent": f.agent, "fact": f.fact}),
+                )
+                .collect();
+            Json(json!({"owner": owner, "facts": facts})).into_response()
+        }
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+/// `sesh memory forget <owner> <id>|--all`; audited without the text.
+async fn memory_forget(
+    State(gw): State<Arc<Gateway>>,
+    headers: HeaderMap,
+    Json(b): Json<Value>,
+) -> Response {
+    if !admin_ok(&gw, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let owner = b["owner"].as_str().unwrap_or("").to_string();
+    if !owners(&gw).contains(&owner) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let n = if b["all"] == true {
+        gw.memory.forget_all(&owner).await
+    } else {
+        let id = b["id"].as_str().unwrap_or("");
+        gw.memory
+            .forget(std::slice::from_ref(&owner), id)
+            .await
+            .map(u64::from)
+    };
+    match n {
+        Ok(n) => {
+            audit(
+                &gw,
+                "operator",
+                Some("memory"),
+                None,
+                "allowed",
+                format!("memory.forgotten {owner} {n}"),
+            )
+            .await;
+            Json(json!({"owner": owner, "forgotten": n})).into_response()
+        }
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+/// For `sesh doctor`: whether the embedding service answers, and how many
+/// facts still wait for their embedding.
+async fn memory_status(State(gw): State<Arc<Gateway>>, headers: HeaderMap) -> Response {
+    if !admin_ok(&gw, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let embed = crate::embed::Embedder::new(&gw.settings.memory.embed_url)
+        .healthy()
+        .await;
+    match gw.memory.missing_embeddings(10_000).await {
+        Ok(m) => Json(json!({"state": "ok", "embed": embed, "missing": m.len()})).into_response(),
+        Err(e) => {
+            Json(json!({"state": "unavailable", "embed": embed, "message": e})).into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -883,6 +976,93 @@ mod tests {
         let app = router(gw);
         tokio::spawn(async move { axum::serve(l, app).await });
         url
+    }
+
+    #[tokio::test]
+    async fn the_operator_lists_and_forgets_one_owners_memories() {
+        let gw = Arc::new(gateway(Audit::memory(), GatewaySettings::default()));
+        let keep = gw
+            .memory
+            .insert("household", "house", "the bins go out on Tuesday", None)
+            .await
+            .unwrap();
+        let gone = gw
+            .memory
+            .insert("household", "house", "the gate code changed", None)
+            .await
+            .unwrap();
+        let url = serve(gw.clone()).await;
+        let http = reqwest::Client::new();
+        let r = http
+            .get(format!("{url}/admin/memory?owner=household"))
+            .bearer_auth("tok-alice")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 403, "agents never reach the operator's view");
+        let l: Value = http
+            .get(format!("{url}/admin/memory?owner=household"))
+            .bearer_auth("admin-token")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(l["facts"].as_array().unwrap().len(), 2);
+        assert_eq!(l["facts"][0]["id"], gone.as_str(), "newest first");
+        let none = http
+            .get(format!("{url}/admin/memory?owner=zed"))
+            .bearer_auth("admin-token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(none.status(), 404);
+        let f: Value = http
+            .post(format!("{url}/admin/memory/forget"))
+            .bearer_auth("admin-token")
+            .json(&json!({"owner": "household", "id": gone}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(f["forgotten"], 1);
+        let l = gw.memory.list("household", 10).await.unwrap();
+        assert_eq!(
+            l.iter().map(|f| f.id.clone()).collect::<Vec<_>>(),
+            vec![keep]
+        );
+        let e = format!("{:?}", gw.audit.entries());
+        assert!(
+            e.contains("memory.forgotten household 1") && !e.contains("gate code"),
+            "no fact text in the audit log: {e}"
+        );
+        let st: Value = http
+            .get(format!("{url}/admin/memory/status"))
+            .bearer_auth("admin-token")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            (st["missing"].as_u64(), st["embed"].as_bool()),
+            (Some(1), Some(false))
+        );
+        let all: Value = http
+            .post(format!("{url}/admin/memory/forget"))
+            .bearer_auth("admin-token")
+            .json(&json!({"owner": "household", "all": true}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(all["forgotten"], 1);
     }
 
     #[tokio::test]
