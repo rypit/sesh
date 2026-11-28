@@ -7,7 +7,7 @@
 use axum::Router;
 use axum::extract::State;
 use axum::http::header;
-use axum::response::{Html, IntoResponse, Redirect};
+use axum::response::{Html, Redirect};
 use axum::routing::{get, post};
 use serde_json::json;
 use sesh_gateway::browser::egress::{Proxy, Refusals};
