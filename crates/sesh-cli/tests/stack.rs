@@ -3,8 +3,9 @@
 //! (specs/003-model-evals/tasks.md T009–T024), 004
 //! (specs/004-secrets-approvals/tasks.md T007–T017), 005
 //! (specs/005-google-paperless/tasks.md), 006 (specs/006-rss-feeds/tasks.md)
-//! 007 (specs/007-service-isolation/tasks.md) and 008
-//! (specs/008-network-isolation/tasks.md).
+//! 007 (specs/007-service-isolation/tasks.md), 008
+//! (specs/008-network-isolation/tasks.md) and 009
+//! (specs/009-one-agent/tasks.md).
 //!
 //! They start the real stack with the stub model server, so they need
 //! Docker and the `sesh-stub-llm:dev`, `sesh-gateway:dev` and
@@ -3372,4 +3373,343 @@ fn network_stack() {
         );
     }
     stack.assert_network_layout("after a second run");
+}
+
+// ---- Feature 009: one agent end to end (specs/009-one-agent/tasks.md) ----
+
+const RT_AGENT: &str = "household-agent";
+
+/// One chat turn through Open WebUI; returns the assistant's text.
+fn webui_chat(token: &str, model: &str, text: &str) -> String {
+    let (s, body) = call(
+        "POST",
+        &format!("{WEBUI}/api/chat/completions"),
+        Some(token),
+        Some(json!({"model": model, "stream": false,
+            "messages": [{"role": "user", "content": text}]})),
+    );
+    assert_eq!(s, 200, "chat via Open WebUI failed: {body}");
+    body.pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("no answer: {body}"))
+        .to_string()
+}
+
+impl Stack {
+    /// The stub's record of the chat requests it got (model and offered
+    /// tool names), read from inside the gateway: the stub has no host port.
+    fn stub_requests(&self) -> Vec<Value> {
+        let (ok, out) = self.bash_in(
+            "gateway",
+            "exec 3<>/dev/tcp/stub-llm/8000 && printf 'GET /stub/requests HTTP/1.1\\r\\nHost: stub\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3",
+        );
+        assert!(ok, "{out}");
+        let body = out.split("\r\n\r\n").nth(1).unwrap_or("");
+        serde_json::from_str(body).unwrap_or_else(|_| panic!("stub requests: {out}"))
+    }
+
+    /// The names of a container's environment variables.
+    fn env_names(&self, service: &str) -> Vec<String> {
+        let out = Command::new("docker")
+            .args([
+                "inspect",
+                "-f",
+                "{{range .Config.Env}}{{println .}}{{end}}",
+                &self.container(service),
+            ])
+            .output()
+            .expect("docker inspect");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| l.split_once('=').map(|(k, _)| k.to_string()))
+            .collect()
+    }
+
+    /// specs/009 FR-005, FR-007, SC-003: from each source, every address
+    /// of every destination is open exactly when the layout says so.
+    fn assert_runtime_reachability(&self, sources: &[&str]) {
+        let agents = [RT_AGENT];
+        let executor = format!("executor-{RT_AGENT}");
+        let mut all: Vec<String> = layout::services_with(true, &agents);
+        all.push(executor.clone());
+        let addrs: std::collections::BTreeMap<String, Vec<String>> = all
+            .iter()
+            .map(|s| (s.clone(), self.addresses_of(s)))
+            .collect();
+        let mut wrong = vec![];
+        for from in sources {
+            let mut targets = vec![("1.1.1.1".to_string(), 443)];
+            let mut expect = vec![("internet".to_string(), 443, false)];
+            for (to, port) in layout::listens_with(&agents) {
+                if to == *from || !addrs.contains_key(&to) {
+                    continue;
+                }
+                let want = if *from == executor {
+                    to == "gateway" && port == 7001
+                } else {
+                    layout::reachable_with(from, &to, port, true, &agents)
+                };
+                for a in &addrs[&to] {
+                    targets.push((a.clone(), port));
+                    expect.push((to.clone(), port, want));
+                }
+            }
+            let got = self.probe_many(from, &targets);
+            let mut seen: std::collections::BTreeMap<(String, u16), (bool, bool)> =
+                Default::default();
+            for ((to, port, want), ok) in expect.into_iter().zip(got) {
+                let e = seen.entry((to, port)).or_insert((want, false));
+                e.1 |= ok;
+            }
+            for ((to, port), (want, ok)) in seen {
+                if want != ok {
+                    wrong.push(format!("{from} -> {to}:{port}: expected {want}, got {ok}"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "reachability: {wrong:#?}");
+    }
+}
+
+#[test]
+#[ignore = "needs Docker and the dev images; run with `make stack-test`"]
+fn agent_stack() {
+    let dir = std::env::temp_dir().join(format!("sesh-agent-stack-{}", std::process::id()));
+    let stack = Stack { dir };
+    stack.sesh_ok(&["init", "--stub", "--admin-email", "admin@sesh.test"]);
+    let added = stack.sesh_ok(&[
+        "agent",
+        "add",
+        RT_AGENT,
+        "--connectors",
+        "search,geo,mail,docs,feeds",
+        "--runtime",
+        "hermes",
+    ]);
+    assert!(
+        added.contains("hermes agent after the next `sesh up`"),
+        "{added}"
+    );
+    let up = stack.sesh_env(&[("STUB_SCRIPT", "agent")], &["up"]);
+    let up_out = String::from_utf8_lossy(&up.stdout).into_owned();
+    assert!(
+        up.status.success(),
+        "sesh up: {up_out}{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    assert!(
+        up_out.contains(&format!(
+            "agent {RT_AGENT} is up (hermes, tools: the gateway's only)"
+        )),
+        "US4: {up_out}"
+    );
+    let rt = layout::runtime_service(RT_AGENT);
+
+    // US4 (FR-008, FR-009): doctor reports the runtime and the layout.
+    let (ok, checks) = stack.doctor();
+    assert_eq!(status_of(&checks, "agent-runtimes"), "pass", "{checks}");
+    assert_eq!(status_of(&checks, "network-layout"), "pass", "{checks}");
+    assert!(ok, "doctor: {checks}");
+
+    // US1 (FR-006): Open WebUI lists the agent.
+    let admin = signin("admin@sesh.test", &stack.secret("WEBUI_ADMIN_PASSWORD"));
+    let models = model_ids(&admin);
+    assert!(models.contains(&RT_AGENT.to_string()), "US1: {models:?}");
+
+    // US1 (SC-001): weather and search answers come from the gateway.
+    let before = stack.audit_count(&format!("agent = '{RT_AGENT}'"));
+    let a = webui_chat(
+        &admin,
+        RT_AGENT,
+        "[agent:weather] what's the weather tomorrow?",
+    );
+    assert!(a.starts_with("Forecast: ") && a.len() > 20, "US1: {a}");
+    assert_eq!(
+        stack.audit_count(&format!(
+            "agent = '{RT_AGENT}' AND connector = 'geo' AND method = 'forecast' AND outcome = 'allowed'"
+        )),
+        1,
+        "US1: one geo.forecast call"
+    );
+    let a = webui_chat(&admin, RT_AGENT, "[agent:search] the varden beacon?");
+    assert!(a.contains("Varden beacon"), "US1: {a}");
+    assert_eq!(
+        stack.audit_count(&format!(
+            "agent = '{RT_AGENT}' AND connector = 'search' AND method = 'web'"
+        )),
+        1
+    );
+    // Streaming (US1 scenario 4).
+    let mut r = agent()
+        .post(&format!("{WEBUI}/api/chat/completions"))
+        .header("Authorization", &format!("Bearer {admin}"))
+        .send_json(json!({"model": RT_AGENT, "stream": true,
+            "messages": [{"role": "user", "content": "[agent:weather] stream it"}]}))
+        .unwrap();
+    let text = r.body_mut().read_to_string().unwrap();
+    assert!(
+        text.matches("data:").count() >= 2 && text.contains("Forecast: "),
+        "US1: a streamed answer: {text}"
+    );
+
+    // US3 (FR-002, SC-002): the model is offered the gateway's tools only.
+    // Other clients (the doctor's tool-calling check) also use the stub,
+    // so the runtime's requests are the ones offering the gateway's tools;
+    // no request at all may offer a runtime built-in.
+    let offered: Vec<Vec<String>> = stack
+        .stub_requests()
+        .iter()
+        .filter_map(|r| r["tools"].as_array())
+        .map(|t| t.iter().map(|x| x.as_str().unwrap().to_string()).collect())
+        .collect();
+    let builtins = [
+        "terminal",
+        "read_file",
+        "write_file",
+        "web_search",
+        "web_extract",
+        "execute_code",
+        "browser_cdp",
+        "memory",
+        "skill_view",
+        "delegate_task",
+        "tool_search",
+        "tool_call",
+        "image_generate",
+        "vision_analyze",
+        "todo_list",
+    ];
+    for tools in &offered {
+        assert!(
+            !tools.iter().any(|t| builtins.contains(&t.as_str())),
+            "SC-002: a built-in was offered: {tools:?}"
+        );
+    }
+    let runtime: Vec<&Vec<String>> = offered
+        .iter()
+        .filter(|t| t.iter().any(|x| x.contains("sesh")))
+        .collect();
+    assert!(
+        !runtime.is_empty(),
+        "the runtime offered the gateway's tools: {offered:?}"
+    );
+    // The gateway's own tool list, as the agent's token sees it.
+    let mut gw = Mcp::connect(&stack.token(RT_AGENT)).expect("the agent's token connects");
+    let (_, listed) = gw.post(json!({"jsonrpc": "2.0", "id": 99, "method": "tools/list"}));
+    let mut want: Vec<String> = listed.expect("tools/list")["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| format!("mcp__sesh__{}", t["name"].as_str().unwrap()))
+        .collect();
+    want.sort();
+    assert!(want.len() >= 2, "{want:?}");
+    for tools in &runtime {
+        let mut got = (*tools).clone();
+        got.sort();
+        assert_eq!(got, want, "SC-002: exactly the gateway's tools");
+    }
+
+    // US3 (scenario 2): a built-in tool call is refused; nothing runs.
+    let before_terminal = stack.audit_count(&format!("agent = '{RT_AGENT}'"));
+    let a = webui_chat(&admin, RT_AGENT, "[agent:terminal] run id");
+    assert!(
+        a.contains("Terminal: ") && a.contains("does not exist"),
+        "US3: {a}"
+    );
+    assert_eq!(
+        stack.audit_count(&format!("agent = '{RT_AGENT}'")),
+        before_terminal,
+        "US3: the refused call reached nothing"
+    );
+    assert!(before_terminal > before);
+
+    // US2 (SC-004): the household's mail and feeds, and a gated send.
+    stack.fill_credential("google", "CLIENT_ID", "fake-client-id");
+    stack.fill_credential("google", "CLIENT_SECRET", "fake-client-secret");
+    assert_eq!(stack.connect_google("household", "household"), 200);
+    let a = webui_chat(&admin, RT_AGENT, "[agent:mail] the power bill?");
+    assert!(a.contains("412 kroner"), "US2: {a}");
+    stack.sesh_ok(&[
+        "feed",
+        "add",
+        "household",
+        &format!("{FAKE_FEEDS}/harbour.xml"),
+        "--name",
+        "harbour",
+    ]);
+    assert!(
+        retry(|| webui_chat(&admin, RT_AGENT, "[agent:feeds] what's new?").contains("Marrow Quay")),
+        "US2: the feed item"
+    );
+    let notes = stack.notifications().len();
+    let a = webui_chat(&admin, RT_AGENT, "[agent:send] tell the utility");
+    assert!(a.contains("approval_pending"), "US2: {a}");
+    assert_eq!(
+        stack.notifications().len(),
+        notes + 1,
+        "SC-004: one approval request"
+    );
+    assert!(
+        stack.fake_google()["sent"].get("household").is_none(),
+        "SC-004: nothing sent before approval"
+    );
+
+    // US3 (scenario 3, SC-003): the runtime reaches the gateway's agent
+    // listener and the router, nothing else; nothing else reaches the
+    // agent listener; the executor still reaches only :7001.
+    let mut want: Vec<String> = layout::networks_of_with(&rt, true, &[RT_AGENT])
+        .iter()
+        .map(|n| format!("sesh_{n}"))
+        .collect();
+    want.sort();
+    let mut got: Vec<String> = stack
+        .networks_of(&rt)
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    got.sort();
+    assert_eq!(got, want, "FR-005: the runtime's networks");
+    let executor = format!("executor-{RT_AGENT}");
+    stack.assert_runtime_reachability(&[&rt, "open-webui", "litellm", "miniflux", &executor]);
+
+    // US3 (scenario 4): the runtime holds its own token and keys only.
+    let names = stack.env_names(&rt);
+    let secretish: Vec<&String> = names
+        .iter()
+        .filter(|n| {
+            n.contains("KEY")
+                || n.contains("TOKEN")
+                || n.contains("PASSWORD")
+                || n.contains("SECRET")
+        })
+        .collect();
+    let mut s: Vec<&str> = secretish.iter().map(|n| n.as_str()).collect();
+    s.sort();
+    assert_eq!(
+        s,
+        vec!["API_SERVER_KEY", "SESH_GATEWAY_TOKEN", "SESH_ROUTER_KEY"],
+        "{names:?}"
+    );
+
+    // US4 (FR-008, SC-005): removing the agent removes all of it.
+    let token = stack.token(RT_AGENT);
+    stack.sesh_ok(&["agent", "remove", RT_AGENT]);
+    let out = stack.sesh_ok(&["up"]);
+    assert!(
+        out.contains(&format!("removed {RT_AGENT}'s router key")),
+        "{out}"
+    );
+    assert!(stack.container(&rt).is_empty(), "the runtime is gone");
+    for n in layout::agent_nets(RT_AGENT) {
+        assert!(!stack.network_exists(&n.name), "{} is gone", n.name);
+    }
+    let admin = signin("admin@sesh.test", &stack.secret("WEBUI_ADMIN_PASSWORD"));
+    assert!(!model_ids(&admin).contains(&RT_AGENT.to_string()));
+    assert!(Mcp::connect(&token).is_err(), "its token no longer works");
+    let (ok, checks) = stack.doctor();
+    assert_eq!(status_of(&checks, "network-layout"), "pass", "{checks}");
+    assert!(ok, "doctor after removal: {checks}");
 }

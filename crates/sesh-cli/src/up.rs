@@ -57,13 +57,55 @@ pub fn generated_overlay(agents: &AgentsFile, kiwix: bool) -> String {
     let mut services = String::new();
     let mut networks = String::new();
     let mut gateway_nets = Vec::new();
+    let mut volumes = String::new();
+    let mut litellm_nets = vec![];
+    let mut webui_nets = vec![];
+    let mut urls = vec!["http://litellm:4000/v1".to_string()];
+    let mut keys = vec![format!("${{{}:-pending}}", secrets::WEBUI_ROUTER_KEY)];
+    // Agent runtimes (specs/009 research.md R4-R6).
+    for a in agents.agents.iter().filter(|a| a.runtime.is_some()) {
+        let n = &a.name;
+        services.push_str(&crate::hermes::compose_service(n));
+        let [own, model, chat] = crate::hermes::networks(n);
+        for net in [&own, &model, &chat] {
+            networks.push_str(&format!("  {net}:\n    internal: true\n"));
+        }
+        gateway_nets.push(format!(
+            "      {own}:\n        aliases: [{}]\n",
+            crate::hermes::gateway_alias(n)
+        ));
+        litellm_nets.push(model);
+        webui_nets.push(chat);
+        volumes.push_str(&format!("  {}-data: {{}}\n", crate::hermes::service(n)));
+        urls.push(format!(
+            "http://{}:{}/v1",
+            crate::hermes::service(n),
+            crate::hermes::PORT
+        ));
+        keys.push(format!(
+            "${{{}:-pending}}",
+            secrets::agent_key(n, secrets::API_KEY)
+        ));
+    }
+    if !litellm_nets.is_empty() {
+        services.push_str(&format!(
+            "  litellm:\n    networks: [{}]\n",
+            litellm_nets.join(", ")
+        ));
+        services.push_str(&format!(
+            "  open-webui:\n    networks: [{}]\n    environment:\n      OPENAI_API_BASE_URLS: \"{}\"\n      OPENAI_API_KEYS: \"{}\"\n",
+            webui_nets.join(", "),
+            urls.join(";"),
+            keys.join(";")
+        ));
+    }
     for a in &agents.agents {
         let n = &a.name;
         services.push_str(&format!(
             "  executor-{n}:\n    image: ${{SESH_EXECUTOR_IMAGE:-sesh-executor:dev}}\n    environment:\n      SESH_GATEWAY_ADDRESS: gateway:7001\n    networks: [exec-{n}]\n    read_only: true\n    tmpfs: [/var/lib/sesh-executor]\n    cap_drop: [ALL]\n    security_opt: [\"no-new-privileges:true\"]\n    mem_limit: 512m\n    pids_limit: 256\n    healthcheck:\n      test: [\"CMD\", \"/usr/local/bin/sesh-executor-supervisor\", \"health\"]\n      interval: 5s\n      timeout: 5s\n      retries: 30\n    restart: unless-stopped\n"
         ));
         networks.push_str(&format!("  exec-{n}:\n    internal: true\n"));
-        gateway_nets.push(format!("exec-{n}"));
+        gateway_nets.push(format!("      exec-{n}: {{}}\n"));
     }
     if kiwix {
         services.push_str(&format!(
@@ -77,8 +119,8 @@ pub fn generated_overlay(agents: &AgentsFile, kiwix: bool) -> String {
         // Compose merges a service's `networks` across files, so this adds
         // the executor networks to the gateway's own (specs/008).
         out.push_str(&format!(
-            "  gateway:\n    networks: [{}]\n",
-            gateway_nets.join(", ")
+            "  gateway:\n    networks:\n{}",
+            gateway_nets.concat()
         ));
     }
     out.push_str(&services);
@@ -89,7 +131,21 @@ pub fn generated_overlay(agents: &AgentsFile, kiwix: bool) -> String {
         out.push_str("networks:\n");
         out.push_str(&networks);
     }
+    if !volumes.is_empty() {
+        out.push_str("volumes:\n");
+        out.push_str(&volumes);
+    }
     out
+}
+
+/// The gateway's alias on each agent runtime's network, for `gateway.toml`.
+pub fn agent_listen(agents: &AgentsFile) -> Vec<String> {
+    agents
+        .agents
+        .iter()
+        .filter(|a| a.runtime.is_some())
+        .map(|a| crate::hermes::gateway_alias(&a.name))
+        .collect()
 }
 
 /// The gateway's settings as it should run them: in stub mode every
@@ -163,10 +219,10 @@ pub fn write_compose_files(dir: &Path, config: &Config) -> Result<Vec<PathBuf>> 
     if !gdir.join(sesh_core::AGENTS_FILE).exists() {
         agents.save(&gdir)?;
     }
-    std::fs::write(
-        gdir.join("gateway.toml"),
-        toml::to_string_pretty(&effective_gateway(config))?,
-    )?;
+    write_runtime_files(dir, &agents)?;
+    let mut gw = effective_gateway(config);
+    gw.agent_listen = agent_listen(&agents);
+    std::fs::write(gdir.join("gateway.toml"), toml::to_string_pretty(&gw)?)?;
     let mut files = vec![cdir.join("compose.yaml")];
     if is_stub(config) {
         std::fs::write(cdir.join("compose.stub.yaml"), COMPOSE_STUB_YAML)?;
@@ -180,6 +236,44 @@ pub fn write_compose_files(dir: &Path, config: &Config) -> Result<Vec<PathBuf>> 
     Ok(files)
 }
 
+/// Each agent runtime's `config.yaml` and credentials file (specs/009
+/// research.md R7, R8), written only when they change. The router key is
+/// `pending` until `sesh up` has created it; the runtime is recreated
+/// when its credentials change. Returns the runtimes whose files changed.
+pub fn write_runtime_files(dir: &Path, agents: &AgentsFile) -> Result<Vec<String>> {
+    let secrets = Secrets::load(dir)?;
+    let mut changed = vec![];
+    for a in agents.agents.iter().filter(|a| a.runtime.is_some()) {
+        let n = &a.name;
+        let cfg = crate::hermes::write_if_changed(
+            &crate::hermes::config_path(dir, n),
+            &crate::hermes::config_text(n),
+            false,
+        )?;
+        let token = std::fs::read_to_string(agent::token_path(dir, n))
+            .with_context(|| format!("agent {n} has no token; remove and add it again"))?;
+        let get = |what: &str| {
+            secrets
+                .get(&secrets::agent_key(n, what))
+                .unwrap_or("pending")
+                .to_string()
+        };
+        let env = crate::hermes::write_if_changed(
+            &crate::hermes::env_path(dir, n),
+            &crate::hermes::env_text(
+                token.trim(),
+                &get(secrets::ROUTER_KEY),
+                &get(secrets::API_KEY),
+            ),
+            true,
+        )?;
+        if cfg || env {
+            changed.push(crate::hermes::service(n));
+        }
+    }
+    Ok(changed)
+}
+
 pub fn router_url(config: &Config) -> String {
     format!("http://127.0.0.1:{}", config.ports.router)
 }
@@ -191,14 +285,15 @@ fn apply_if_changed(
     content: &str,
     service: &str,
     report: &mut Vec<String>,
-) -> Result<()> {
+) -> Result<bool> {
     let previous = std::fs::read_to_string(stamp).ok();
-    if previous.is_some() && previous.as_deref() != Some(content) {
+    let restarted = previous.is_some() && previous.as_deref() != Some(content);
+    if restarted {
         compose.restart(service)?;
         report.push(format!("{service} config changed: restarted {service}"));
     }
     std::fs::write(stamp, content)?;
-    Ok(())
+    Ok(restarted)
 }
 
 /// The migration with its passwords as psql variables, for stdin only:
@@ -335,9 +430,11 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
     let cdir = dir.join("compose");
     // The secret store: bootstrap once, then the gateway restarts with its
     // own credentials (specs/004 research.md R5).
+    let mut gateway_restarted = false;
     if crate::infisical::ensure(http, &mut secrets)? {
         secrets.save(dir)?;
         compose.restart("gateway")?;
+        gateway_restarted = true;
         report.push("set up the secret store; only the gateway can read it".into());
     }
     if ntfy_changed && cdir.join("gateway.applied").exists() {
@@ -351,7 +448,7 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
         "litellm",
         &mut report,
     )?;
-    apply_if_changed(
+    gateway_restarted |= apply_if_changed(
         compose,
         &cdir.join("gateway.applied"),
         &gateway_toml,
@@ -382,7 +479,83 @@ pub fn run(dir: &Path, compose: &dyn Compose, http: &dyn Http) -> Result<Vec<Str
         }
     }
 
+    // Agent runtimes (specs/009): each its own router key, then its
+    // files, then the container, before Open WebUI lists it.
+    let runtimes: Vec<&sesh_core::Agent> = agents
+        .agents
+        .iter()
+        .filter(|a| a.runtime.is_some())
+        .collect();
+    for a in &runtimes {
+        let name = secrets::agent_key(&a.name, secrets::ROUTER_KEY);
+        match secrets.get(&name) {
+            None => {
+                let key =
+                    create_client_key(http, &url, &master, &format!("agent-{}", a.name), &aliases)?;
+                secrets.set(&name, &key);
+                secrets.save(dir)?;
+                report.push(format!(
+                    "created {}'s router key (limited to the aliases)",
+                    a.name
+                ));
+            }
+            Some(key) => update_client_key(http, &url, &master, key, &aliases)?,
+        }
+    }
+    // A removed agent's router key (its API key went with `sesh agent remove`).
+    let keep: Vec<String> = runtimes
+        .iter()
+        .map(|a| secrets::agent_key(&a.name, secrets::ROUTER_KEY))
+        .collect();
+    for (k, v) in secrets.agent_router_keys() {
+        if !keep.contains(&k) {
+            delete_client_key(http, &url, &master, &v)?;
+            secrets.remove(&k);
+            secrets.save(dir)?;
+            report.push(format!(
+                "removed {}'s router key",
+                k.trim_start_matches("AGENT_")
+                    .trim_end_matches("_ROUTER_KEY")
+                    .to_ascii_lowercase()
+                    .replace('_', "-")
+            ));
+        }
+    }
+    write_runtime_files(dir, &agents)?;
+    if !runtimes.is_empty() {
+        let svcs: Vec<String> = runtimes
+            .iter()
+            .map(|a| crate::hermes::service(&a.name))
+            .collect();
+        compose.up(&svcs.iter().map(String::as_str).collect::<Vec<_>>())?;
+        // Hermes parks its MCP connection if the gateway goes away
+        // (research.md R12), so a restarted gateway restarts the runtimes.
+        if gateway_restarted {
+            for s in &svcs {
+                compose.restart(s)?;
+            }
+        }
+        for a in &runtimes {
+            report.push(format!(
+                "agent {} is up ({}, tools: the gateway's only)",
+                a.name,
+                a.runtime.as_deref().unwrap_or_default()
+            ));
+        }
+    }
+
     compose.up(&["open-webui"])?;
+    // A removed agent's networks: Compose doesn't remove a network it no
+    // longer declares.
+    let mut wanted: Vec<String> = vec![];
+    for a in &runtimes {
+        wanted.extend(crate::hermes::networks(&a.name));
+    }
+    for n in compose.project_networks()? {
+        if n.starts_with("agent-") && !wanted.contains(&n) {
+            compose.remove_network_if_unused(&n)?;
+        }
+    }
     // The pre-008 shared network: Compose doesn't remove a network it no
     // longer declares (specs/008 research.md R4).
     match compose.remove_network_if_unused("default")? {
@@ -426,6 +599,19 @@ fn create_client_key(
         .and_then(Value::as_str)
         .map(str::to_string)
         .context("router's key response had no key")
+}
+
+fn delete_client_key(http: &dyn Http, url: &str, master: &str, key: &str) -> Result<()> {
+    let r = http.post(
+        &format!("{url}/key/delete"),
+        Some(master),
+        &json!({"keys": [key]}),
+    )?;
+    // Already gone is fine: the key no longer works either way.
+    if r.status != 200 && r.status != 404 {
+        bail!("router refused to delete a key ({}): {}", r.status, r.body);
+    }
+    Ok(())
 }
 
 fn update_client_key(
@@ -996,7 +1182,7 @@ mod tests {
     #[test]
     fn first_up_migrates_then_starts_services_and_webui_last() {
         let dir = ready("first");
-        crate::agent::add(&dir, "alice", &["search".into()], "household").unwrap();
+        crate::agent::add(&dir, "alice", &["search".into()], "household", None).unwrap();
         let compose = fake();
         run(&dir, &compose, &router()).unwrap();
         assert_eq!(
@@ -1024,6 +1210,120 @@ mod tests {
             g.contains("http://stub-llm:8000"),
             "stub mode points upstreams at the fakes"
         );
+    }
+
+    #[test]
+    fn a_runtime_agent_is_started_after_its_keys_and_removed_cleanly() {
+        let dir = ready("runtime");
+        crate::agent::add(
+            &dir,
+            "house",
+            &["search".into()],
+            "household",
+            Some("hermes"),
+        )
+        .unwrap();
+        let compose = fake();
+        let http = router();
+        let report = run(&dir, &compose, &http).unwrap();
+        let calls = compose.calls.borrow().clone();
+        let at = |c: &str| {
+            calls
+                .iter()
+                .position(|x| x == c)
+                .unwrap_or_else(|| panic!("{c}: {calls:?}"))
+        };
+        assert!(at("up hermes-house") < at("up open-webui"), "{calls:?}");
+        assert!(
+            report
+                .iter()
+                .any(|l| l == "created house's router key (limited to the aliases)"),
+            "{report:?}"
+        );
+        assert!(
+            report
+                .iter()
+                .any(|l| l == "agent house is up (hermes, tools: the gateway's only)")
+        );
+        let s = Secrets::load(&dir).unwrap();
+        assert_eq!(s.get("AGENT_HOUSE_ROUTER_KEY"), Some("sk-client"));
+        let env = std::fs::read_to_string(crate::hermes::env_path(&dir, "house")).unwrap();
+        assert!(
+            env.contains("SESH_ROUTER_KEY=sk-client\n"),
+            "the env file has the new key"
+        );
+        let token = std::fs::read_to_string(crate::agent::token_path(&dir, "house")).unwrap();
+        assert!(env.contains(&format!("SESH_GATEWAY_TOKEN={}\n", token.trim())));
+        assert!(env.contains(&format!(
+            "API_SERVER_KEY={}\n",
+            s.get("AGENT_HOUSE_API_KEY").unwrap()
+        )));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let m = std::fs::metadata(crate::hermes::env_path(&dir, "house"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(m & 0o777, 0o600);
+        }
+        let cfg = std::fs::read_to_string(crate::hermes::config_path(&dir, "house")).unwrap();
+        for v in [
+            token.trim(),
+            "sk-client",
+            s.get("AGENT_HOUSE_API_KEY").unwrap(),
+        ] {
+            assert!(!cfg.contains(v), "no secret value in config.yaml");
+            assert!(!report.iter().any(|l| l.contains(v)), "never printed");
+        }
+        let g = std::fs::read_to_string(dir.join("gateway/gateway.toml")).unwrap();
+        assert!(
+            g.contains("agent_listen = [\"gateway-agent-house\"]"),
+            "{g}"
+        );
+        let overlay = std::fs::read_to_string(dir.join("compose/generated.yaml")).unwrap();
+        assert!(!overlay.contains(token.trim()) && !overlay.contains("sk-client"));
+
+        // Remove: the key is deleted in the router, the networks go.
+        crate::agent::remove(&dir, "house").unwrap();
+        let compose = fake();
+        for n in crate::hermes::networks("house") {
+            compose.networks.borrow_mut().insert(n, vec![]);
+        }
+        let http = router();
+        let report = run(&dir, &compose, &http).unwrap();
+        assert!(
+            report.iter().any(|l| l == "removed house's router key"),
+            "{report:?}"
+        );
+        assert!(
+            http.calls
+                .borrow()
+                .iter()
+                .any(|c| c.ends_with("/key/delete")),
+            "{:?}",
+            http.calls.borrow()
+        );
+        assert!(
+            Secrets::load(&dir)
+                .unwrap()
+                .get("AGENT_HOUSE_ROUTER_KEY")
+                .is_none()
+        );
+        for n in crate::hermes::networks("house") {
+            assert!(
+                compose.calls.borrow().contains(&format!("rm network {n}")),
+                "{n}"
+            );
+        }
+        assert!(
+            !compose
+                .calls
+                .borrow()
+                .iter()
+                .any(|c| c.contains("hermes-house"))
+        );
+        assert!(!crate::hermes::env_path(&dir, "house").exists());
     }
 
     #[test]
@@ -1098,11 +1398,16 @@ mod tests {
                 name: n.into(),
                 token_sha256: "0".repeat(64),
                 connectors: vec!["search".into()],
+                runtime: None,
             });
         }
         let y = generated_overlay(&f, false);
         assert!(y.contains("executor-alice:") && y.contains("networks: [exec-alice]"));
-        assert!(y.contains("networks: [exec-alice, exec-bob]"));
+        let gw = block(&y, "gateway");
+        assert!(
+            gw.contains("      exec-alice: {}\n      exec-bob: {}\n"),
+            "{gw}"
+        );
         // The healthcheck asks workerd itself, not just the supervisor's port.
         assert!(y.contains("/usr/local/bin/sesh-executor-supervisor\", \"health\""));
         assert!(!y.contains("/dev/tcp"));
@@ -1110,5 +1415,75 @@ mod tests {
         assert!(!y.contains("kiwix"));
         assert!(generated_overlay(&f, true).contains("kiwix-serve:3.8.2@sha256:"));
         assert!(generated_overlay(&AgentsFile::default(), false).contains("services: {}"));
+    }
+
+    fn runtime_agents() -> AgentsFile {
+        let mut f = AgentsFile::default();
+        for (n, rt) in [("house", Some("hermes")), ("bob", None)] {
+            f.agents.push(sesh_core::Agent {
+                owner: sesh_core::HOUSEHOLD.into(),
+                name: n.into(),
+                token_sha256: "0".repeat(64),
+                connectors: vec!["search".into()],
+                runtime: rt.map(String::from),
+            });
+        }
+        f
+    }
+
+    #[test]
+    fn a_runtime_agent_gets_its_container_and_three_pair_networks() {
+        let y = generated_overlay(&runtime_agents(), false);
+        let h = block(&y, "hermes-house");
+        assert!(
+            h.contains("networks: [agent-house, agent-house-model, agent-house-chat]"),
+            "{h}"
+        );
+        assert!(
+            !y.contains("hermes-bob"),
+            "an identity-only agent gets no runtime"
+        );
+        // The gateway is on the agent's own network with its alias there.
+        let gw = block(&y, "gateway");
+        assert!(
+            gw.contains("      agent-house:\n        aliases: [gateway-agent-house]\n"),
+            "{gw}"
+        );
+        assert!(!gw.contains("agent-house-model") && !gw.contains("agent-house-chat"));
+        assert!(block(&y, "litellm").contains("networks: [agent-house-model]"));
+        let ow = block(&y, "open-webui");
+        assert!(ow.contains("networks: [agent-house-chat]"), "{ow}");
+        assert!(
+            ow.contains(
+                "OPENAI_API_BASE_URLS: \"http://litellm:4000/v1;http://hermes-house:8642/v1\""
+            ),
+            "{ow}"
+        );
+        assert!(
+            ow.contains(
+                "OPENAI_API_KEYS: \"${WEBUI_ROUTER_KEY:-pending};${AGENT_HOUSE_API_KEY:-pending}\""
+            ),
+            "{ow}"
+        );
+        for n in ["agent-house", "agent-house-model", "agent-house-chat"] {
+            assert!(
+                y.contains(&format!("\n  {n}:\n    internal: true\n")),
+                "{n}"
+            );
+        }
+        assert!(y.contains("\nvolumes:\n  hermes-house-data: {}\n"));
+        // Without runtimes, Open WebUI and LiteLLM aren't touched.
+        let mut f = runtime_agents();
+        f.agents[0].runtime = None;
+        let y = generated_overlay(&f, false);
+        assert!(!y.contains("open-webui:") && !y.contains("litellm:") && !y.contains("volumes:"));
+    }
+
+    #[test]
+    fn the_gateway_listens_on_each_runtimes_alias_only() {
+        assert_eq!(
+            agent_listen(&runtime_agents()),
+            vec!["gateway-agent-house".to_string()]
+        );
     }
 }

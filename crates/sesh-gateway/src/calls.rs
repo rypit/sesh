@@ -272,6 +272,7 @@ pub mod tests {
             name: n.into(),
             token_sha256: token_hash(&format!("tok-{n}")),
             connectors: c.iter().map(|s| s.to_string()).collect(),
+            runtime: None,
         };
         Gateway {
             agents: Agents::fixed(AgentsFile {

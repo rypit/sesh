@@ -49,6 +49,12 @@ pub trait Compose {
     /// Each running service's networks, by Compose network name (without
     /// the project prefix), for the doctor's layout check.
     fn service_networks(&self) -> Result<Vec<(String, Vec<String>)>>;
+    /// The project's networks, without the project prefix (to remove a
+    /// removed agent's networks: specs/009).
+    fn project_networks(&self) -> Result<Vec<String>>;
+    /// Runs a command in a running service's container and returns its
+    /// standard output (the doctor's runtime check: specs/009).
+    fn exec(&self, service: &str, args: &[&str]) -> Result<String>;
 }
 
 /// Runs `docker compose -p <project> --env-file <secrets> -f <files…>`.
@@ -231,6 +237,25 @@ impl Compose for DockerCompose {
         }
         out.sort();
         Ok(out)
+    }
+
+    fn project_networks(&self) -> Result<Vec<String>> {
+        let prefix = format!("{}_", self.project);
+        let label = format!("label=com.docker.compose.project={}", self.project);
+        let out = self.docker(&["network", "ls", "--filter", &label, "--format", "{{.Name}}"])?;
+        if !out.status.success() {
+            bail!("can't list the project's networks");
+        }
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .map(|n| n.strip_prefix(&prefix).unwrap_or(n).to_string())
+            .collect())
+    }
+
+    fn exec(&self, service: &str, args: &[&str]) -> Result<String> {
+        let mut a = vec!["exec", "-T", service];
+        a.extend_from_slice(args);
+        self.run(&a)
     }
 }
 

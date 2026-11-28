@@ -10,6 +10,8 @@ mod doctor;
 mod eval;
 mod feed;
 mod google;
+#[allow(dead_code)]
+mod hermes;
 mod host;
 mod infisical;
 mod init;
@@ -194,6 +196,9 @@ enum AgentCommand {
         /// Whose agent this is: a user (`sesh user add`), or household.
         #[arg(long, default_value = "household")]
         owner: String,
+        /// Also run an agent runtime for it (hermes), chatting in Open WebUI.
+        #[arg(long)]
+        runtime: Option<String>,
     },
     /// Remove an agent; its token stops working at once.
     Remove { name: String },
@@ -356,7 +361,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 name,
                 connectors,
                 owner,
-            } => println!("{}", agent::add(&dir, &name, &connectors, &owner)?),
+                runtime,
+            } => println!(
+                "{}",
+                agent::add(&dir, &name, &connectors, &owner, runtime.as_deref())?
+            ),
             AgentCommand::Remove { name } => println!("{}", agent::remove(&dir, &name)?),
             AgentCommand::List => {
                 for line in agent::list(&dir)? {
@@ -369,15 +378,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let config = config::Config::load(&dir)?;
             let secrets = secrets::Secrets::load(&dir)?;
             let http = UreqHttp::new(Duration::from_secs(config.inference.timeout_secs.min(60)));
-            let agents: Vec<String> = agent::load(&dir)?
-                .agents
-                .into_iter()
-                .map(|a| a.name)
+            let all = agent::load(&dir)?.agents;
+            let runtimes: Vec<String> = all
+                .iter()
+                .filter(|a| a.runtime.is_some())
+                .map(|a| a.name.clone())
                 .collect();
-            let checks = doctor::run(
+            let agents: Vec<String> = all.into_iter().map(|a| a.name).collect();
+            let checks = doctor::run_with(
                 &config,
                 &secrets,
                 &agents,
+                &runtimes,
                 &compose_for(&dir)?,
                 &http,
                 &TailscaleCli,

@@ -120,10 +120,10 @@ mod tests {
     #[test]
     fn agents_need_a_known_owner() {
         let d = tempdir("owner");
-        assert!(crate::agent::add(&d, "a1", &["search".into()], "ana").is_err());
+        assert!(crate::agent::add(&d, "a1", &["search".into()], "ana", None).is_err());
         add(&d, "ana").unwrap();
         assert!(
-            crate::agent::add(&d, "a1", &["search".into()], "ana")
+            crate::agent::add(&d, "a1", &["search".into()], "ana", None)
                 .unwrap()
                 .contains("for ana")
         );

@@ -156,6 +156,7 @@ pub fn prepare(dir: &Path, config: &Config, token: &str) -> Result<Prepared> {
             name: EVAL_AGENT.into(),
             token_sha256: token_hash(token),
             connectors: EVAL_CONNECTORS.iter().map(|c| c.to_string()).collect(),
+            runtime: None,
         }],
     }
     .save(&gdir)?;

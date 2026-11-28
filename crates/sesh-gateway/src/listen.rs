@@ -15,6 +15,14 @@
 //! networks are all internal, so neither listener ever binds on them
 //! (ADR 0011).
 
+//!
+//! Since specs/009 the agent listener also binds on each agent runtime's
+//! own network (`agent-<name>`, ADR 0012). `gateway.toml` names the
+//! gateway's alias there (`agent_listen`); Docker's DNS answers it with
+//! the gateway's address on that network only. An alias that doesn't
+//! resolve to a usable address stops the gateway: it never widens the
+//! binding to make up for it.
+
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 
 pub const AGENT_PORT: u16 = 7000;
@@ -57,6 +65,51 @@ pub fn addrs_on(
         addrs.push(SocketAddr::new(ip, port));
     }
     Ok(addrs)
+}
+
+/// Adds the agent networks' addresses (each alias with what it resolved
+/// to) to the agent listener's addresses.
+pub fn with_agent_networks(
+    mut addrs: Vec<SocketAddr>,
+    resolved: &[(String, Vec<IpAddr>)],
+) -> Result<Vec<SocketAddr>, String> {
+    for (alias, ips) in resolved {
+        let usable: Vec<&IpAddr> = ips
+            .iter()
+            .filter(|ip| ip.is_ipv4() && !ip.is_unspecified() && !ip.is_loopback())
+            .collect();
+        if usable.is_empty() {
+            return Err(format!(
+                "the agent network alias {alias} has no address on this container; not starting"
+            ));
+        }
+        for ip in usable {
+            let a = SocketAddr::new(*ip, AGENT_PORT);
+            if !addrs.contains(&a) {
+                addrs.push(a);
+            }
+        }
+    }
+    Ok(addrs)
+}
+
+/// Resolves each alias, retrying while Docker attaches the networks.
+pub async fn resolve_aliases(aliases: &[String]) -> Result<Vec<(String, Vec<IpAddr>)>, String> {
+    let mut out = vec![];
+    for alias in aliases {
+        let mut ips = vec![];
+        for _ in 0..30 {
+            if let Ok(found) = tokio::net::lookup_host((alias.as_str(), AGENT_PORT)).await {
+                ips = found.map(|a| a.ip()).collect();
+                if !ips.is_empty() {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        out.push((alias.clone(), ips));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -115,6 +168,42 @@ mod tests {
                 ]
             );
             assert!(addrs.iter().all(|a| !a.ip().is_unspecified()));
+        }
+    }
+
+    #[test]
+    fn agent_networks_add_exact_addresses_never_a_wildcard() {
+        let base = addrs_on(AGENT_PORT, None, Some("172.23.0.2".parse().unwrap())).unwrap();
+        let resolved = vec![
+            (
+                "gateway-agent-a".to_string(),
+                vec!["172.40.0.3".parse().unwrap()],
+            ),
+            (
+                "gateway-agent-b".to_string(),
+                vec!["172.41.0.2".parse().unwrap(), "::1".parse().unwrap()],
+            ),
+        ];
+        let addrs = with_agent_networks(base.clone(), &resolved).unwrap();
+        assert_eq!(addrs.len(), base.len() + 2);
+        assert!(addrs.contains(&"172.40.0.3:7000".parse().unwrap()));
+        assert!(addrs.contains(&"172.41.0.2:7000".parse().unwrap()));
+        assert!(addrs.iter().all(|a| !a.ip().is_unspecified()));
+        assert_eq!(with_agent_networks(base.clone(), &[]).unwrap(), base);
+    }
+
+    #[test]
+    fn an_alias_without_an_address_stops_the_gateway() {
+        for bad in [
+            vec![],
+            vec!["0.0.0.0".parse().unwrap()],
+            vec!["127.0.0.1".parse().unwrap()],
+        ] {
+            let e = with_agent_networks(vec![], &[("gateway-agent-a".into(), bad)]).unwrap_err();
+            assert!(
+                e.contains("gateway-agent-a") && e.contains("not starting"),
+                "{e}"
+            );
         }
     }
 }
