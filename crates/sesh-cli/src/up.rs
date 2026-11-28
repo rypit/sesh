@@ -342,6 +342,7 @@ pub fn write_runtime_files(dir: &Path, agents: &AgentsFile) -> Result<Vec<String
                 token.trim(),
                 &get(secrets::ROUTER_KEY),
                 &get(secrets::API_KEY),
+                a.connectors.iter().any(|c| c == "memory"),
             ),
             true,
         )?;

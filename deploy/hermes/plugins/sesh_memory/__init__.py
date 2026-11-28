@@ -111,10 +111,11 @@ class SeshMemoryProvider(MemoryProvider):
         return "sesh_memory"
 
     def is_available(self) -> bool:
-        return bool(os.environ.get("SESH_GATEWAY_TOKEN"))
+        # Only agents given the `memory` connector recall (`sesh up` sets it).
+        return bool(os.environ.get("SESH_GATEWAY_TOKEN")) and os.environ.get("SESH_MEMORY") == "1"
 
     def unavailable_reason(self) -> str:
-        return "SESH_GATEWAY_TOKEN isn't set"
+        return "this agent has no memory connector"
 
     def initialize(self, session_id: str, **kwargs) -> None:
         self._token = os.environ.get("SESH_GATEWAY_TOKEN", "")

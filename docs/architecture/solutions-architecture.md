@@ -109,10 +109,10 @@ sesh has 20 components across six zones. Three are custom builds (marked
 | Miniflux | Resources | Feeds (RSS, Atom) the household follows | Miniflux (ADR 0009) | Container | User per owner, managed by the gateway; reachable from the gateway only (`feeds` network); its own egress network to publishers and its own database network to Postgres (see Network layout); agent adds need approval; web UI not published |
 | Paperless-ngx | Resources | Household documents: OCR, search | Paperless-ngx (+ Paperless-AI if needed) | Container | User per agent scope; search, read and upload via the gateway; a mail rule imports a Gmail "To file" label; embeddings on CPU |
 | Browser | Resources | Logged-in browsing, `read(url)`, downloads and uploads, live view and takeover in the chat | Chromium (Debian), driven by the gateway over CDP (ADR 0013) | Hardened container per agent, one network to the gateway | Profile per agent; fresh context per read; online only through the gateway's egress proxy, which refuses home-network addresses; logins filled by the gateway; downloads kept by the gateway as file references |
-| Mem0 | Resources | Long-term memory per user + household | Mem0 OSS, pgvector, BM25 | Container | `infer=False` at first; CPU embeddings; `user_id` set by the gateway |
-| Postgres + Redis | Resources | Storage for the adopted services and the audit log | Postgres 16 + pgvector; Redis, one instance per service | Container | One Postgres server; each service logs in as its own role, owning only its database, never the superuser; a Redis per service (Open WebUI, Infisical, Paperless), each reachable only from it (ADR 0010). Backs Mem0, Open WebUI, LiteLLM, Paperless, Miniflux, Infisical and the audit log |
+| Memory | Resources | Long-term facts per user + household | The gateway's `memory` connector over a `memories` table (pgvector + full-text) in its own database (ADR 0015) | Gateway connector | Owner set by the gateway from the token; hybrid search by reciprocal rank fusion; near-duplicates update; a personal agent's Household write needs approval |
+| Postgres + Redis | Resources | Storage for the adopted services and the audit log | Postgres 16 + pgvector; Redis, one instance per service | Container | One Postgres server; each service logs in as its own role, owning only its database, never the superuser; a Redis per service (Open WebUI, Infisical, Paperless), each reachable only from it (ADR 0010). Backs memory, Open WebUI, LiteLLM, Paperless, Miniflux, Infisical and the audit log |
 | Inference server | Inference | Serves models behind aliases (OpenAI-compatible API) | Any OpenAI-compatible server (for example oMLX, Ollama, llama.cpp, vLLM) | Bare metal | Alias `agent-main` |
-| embed | Inference | Embeddings for Mem0 and Paperless | Small embedding model | In-container CPU | Same model for both; never swapped without re-embedding |
+| embed | Inference | Embeddings for memory | text-embeddings-inference (CPU) with `intfloat/multilingual-e5-small`, baked into the image | Container | On the internal `embed` network with the gateway only; no outbound access; never swapped without re-embedding; stub mode uses the stub's embeddings |
 | LiteLLM | Inference | The alias router every client calls (ADR 0005) | LiteLLM | Container | Always present; clients get alias-only keys; later: failover, a second engine |
 
 The third custom build is the Hermes memory provider plugin, which
@@ -131,7 +131,7 @@ and the audit log.
   injected into its container or sandbox at start.
 - The gateway maps each token to an allowlist of connectors and to that
   user's identities: Infisical project, Google tokens, Paperless user,
-  Mem0 `user_id`.
+  memory owner.
 - The model never passes a user or scope. The gateway derives it from
   the token.
 
@@ -231,7 +231,7 @@ and the audit log.
 
 Each user gets one personal agent, and the household gets one shared
 agent. Adding a user means adding one profile, one Infisical project, one
-Mem0 scope and one Paperless user, all created by one operator command
+memory owner and one Paperless user, all created by one operator command
 (see Build vs adopt, item 4).
 
 | Agent | Who uses it | Accounts it can use | Memory scope | Channels |
@@ -262,32 +262,39 @@ Mem0 scope and one Paperless user, all created by one operator command
 ## Memory, knowledge and skills
 
 Each store has one job:
-- Mem0 is the single source of truth for facts about people.
+- The gateway's memory store is the single source of truth for facts about people.
 - Paperless holds original documents.
 - Kiwix holds reference knowledge.
 - Hermes keeps only skills and the agent's working notes.
 
 | Store | Holds | Scoping | Reached by |
 | --- | --- | --- | --- |
-| Mem0 | Facts and preferences about users and the household | `user_id` per user + `household`, set by the gateway | Gateway `recall` / `remember`; Hermes memory provider plugin → gateway |
+| Memory (gateway) | Facts and preferences about users and the household | Owner per user + `household`, set by the gateway from the token | Gateway `memory.remember` / `recall` / `forget`; Hermes memory provider plugin → gateway (recall before each turn) |
 | Paperless-ngx | Original documents, OCR text, semantic index | Paperless user per agent scope | Gateway (search, read, upload) |
 | Kiwix | Offline Wikipedia | None (public) | Gateway |
 | Hermes `USER.md` | Basics per user (name, time zone, reply style) | Per profile | Hermes only; maintained by people, read-only to the agent |
-| Hermes `MEMORY.md` | Agent working notes, no facts about people | Per profile | Hermes only; mirrored to Mem0 by the plugin |
+| Hermes `MEMORY.md` | Agent working notes, no facts about people | Per profile | Hermes only; off (Hermes's built-in memory is disabled) |
 | Hermes skills | Self-learned procedures | Per profile; household skills read-only to all | Hermes only |
 
-**Mem0 configuration**
+**Memory store** (ADR 0015 replaced Mem0)
 
-- Open-source Mem0 2.x, with `mem0ai[nlp]` for hybrid semantic + BM25 +
-  entity retrieval.
-- `infer=False` at launch: agents write clean facts through `remember`.
-  Turn on extraction later, with `agent-main`, if recall gaps appear.
-- Mem0 is add-only, so superseded facts remain. Schedule a cleanup job,
-  and give each user a page to view and edit their own memories.
+- A `memories` table in the gateway's database: the fact (at most 500
+  characters), its owner, the agent that wrote it, and a 384-dimension
+  embedding; at most 2000 facts per owner.
+- Hybrid search: cosine similarity (pgvector) and full-text (`simple`
+  configuration, for Norwegian and English), fused by reciprocal rank.
+- Agents write clean facts through `remember`; there is no extraction
+  by a model. A near-duplicate (same text, or cosine ≥ 0.92) updates
+  the old fact instead of adding one.
+- If the embedding service is down, facts are saved without an
+  embedding, recall matches words only, and the gateway fills the
+  embeddings in once it returns.
+- `sesh memory list|forget` shows and removes an owner's facts;
+  recalled facts reach the model inside a block marked as untrusted.
 
 **Recall across stores**
 
-- One Code Mode script searches the user's Mem0 scope, the user's
+- One Code Mode script searches the user's memory, the user's
   Paperless documents and Kiwix, then merges the results with source
   labels.
 - No combined search service is built.
@@ -312,7 +319,7 @@ route out except through the gateway (the code executor, the browser).
 | Placement | Components | Why |
 | --- | --- | --- |
 | Bare metal (macOS) | Inference server, when it needs the GPU (for example oMLX) | Needs the Metal GPU |
-| Docker (Compose) | Open WebUI, Hermes (container per agent with a runtime, no route out), gateway, workerd executor per agent (only its own network to the gateway), Infisical, ntfy, Mem0, Paperless, Miniflux, SearXNG, Kiwix, LiteLLM, Postgres, Redis (one per service) | Long-lived services; one Compose file moves to the Mac mini unchanged; no shared network (see Network layout) |
+| Docker (Compose) | Open WebUI, Hermes (container per agent with a runtime, no route out), gateway, workerd executor per agent (only its own network to the gateway), Infisical, ntfy, embed, Paperless, Miniflux, SearXNG, Kiwix, LiteLLM, Postgres, Redis (one per service) | Long-lived services; one Compose file moves to the Mac mini unchanged; no shared network (see Network layout) |
 
 **Memory budget on a 64GB Mac mini (estimates)**
 
@@ -376,6 +383,8 @@ files' unit test, `sesh doctor` and the `network_stack` stack test
   `agent-<agent>-model` (with LiteLLM). It has no edge network, so no
   route out and no published port. Open WebUI reaches it only through
   the gateway's chat listener, on the `chat` pair network (ADR 0014).
+- The embedding service (`embed`, ADR 0015) is on one internal pair
+  network, `embed`, with the gateway, and nothing else: no route out.
 - Each agent's browser (`browser-<agent>`, ADR 0013) is on one internal
   network, `browser-<agent>`, shared only with the gateway: the gateway
   drives it over CDP, and it reaches the web only through the gateway's
@@ -517,7 +526,7 @@ small browser controller. Everything else is configuration.
     Open WebUI message through the chat relay (ADR 0014).
 
 **Adopted as-is (configure only):** Open WebUI, Hermes, an
-OpenAI-compatible inference server, LiteLLM, Infisical, ntfy, Mem0,
+OpenAI-compatible inference server, LiteLLM, Infisical, ntfy, text-embeddings-inference,
 Paperless-ngx, SearXNG, Kiwix, Postgres, Redis, Chromium.
 
 **4. `sesh` admin CLI + Claude Code operator skills**
@@ -529,7 +538,7 @@ Paperless-ngx, SearXNG, Kiwix, Postgres, Redis, Chromium.
   - a Hermes profile container, from a template;
   - a gateway token and agent record;
   - an Infisical project and machine identity;
-  - a Mem0 scope and a Paperless user;
+  - a memory owner and a Paperless user;
   - an ntfy user and topic;
   - a Telegram bot binding;
   - a skills repository.
@@ -653,11 +662,11 @@ is a feature under `specs/`.
      filled password field; the live window shows the session, takeover
      pauses the agent and closing returns control; another user can't
      open the view.
-11. **Memory:** the agent's memory provider plugin, backed by the
-   gateway; Mem0 (CPU embeddings, `infer=False`) behind the gateway's
-   `memory` connector, scoped per user; cross-store recall with
-   documents. Mem0 gets its own login; the migration creates the
-   `vector` extension, which needs the superuser.
+11. **Memory (done, specs/011):** the agent's memory provider plugin,
+   backed by the gateway; the gateway's `memory` connector over its own
+   database (pgvector, full-text), scoped per owner; CPU embeddings from
+   the `embed` service; cross-store recall with documents. The
+   migration creates the `vector` extension, which needs the superuser.
    - Accept: a fact saved in one session is recalled in a later one;
      user A's agent can't recall user B's facts or documents (negative
      tests).
@@ -717,7 +726,7 @@ before or during its phase.
 | A compromised adopted service reads or changes other services' data or the audit log | Risk | A Postgres login per service owning only its database; a Redis per service; doctor's `db-isolation` (ADR 0010) | 7 |
 | A service release that needs a superuser-only database extension | Constraint | The migration creates it as the superuser; none needed so far (`vector` will be, for memory) | 7, 11 |
 | Prompt injection via email, pages, documents or other agents | Risk | Untrusted labels, approvals, domain-pinned login, egress guard, audit alerts | 4–13 |
-| Mem0 add-only accumulates stale facts | Risk | Scheduled cleanup; per-user memory editing page | 11 |
+| Stale facts accumulate | Risk | Near-duplicates update; `sesh memory forget`; a per-user editing page later | 11 |
 | sbx requires a Docker sign-in (cloud dependency) | Resolved | Not used: the browser runs in a hardened container (ADR 0013) | 10 |
 | The live window needs the approvals listener over HTTPS when Open WebUI is | Constraint | Serve both through `tailscale serve` (HTTPS); a mixed-content iframe is blocked by the browser | 10 |
 | Telegram content passes Telegram servers | Risk | Convenience only; sensitive work in Open WebUI | 12 |

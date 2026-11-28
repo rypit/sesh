@@ -311,7 +311,7 @@ impl Store {
                     })
                     .filter(|(n, _)| *n > 0)
                     .collect();
-                w.sort_by(|a, b| b.0.cmp(&a.0));
+                w.sort_by_key(|b| std::cmp::Reverse(b.0));
                 (
                     m.into_iter().take(CANDIDATES).map(|x| x.1).collect(),
                     w.into_iter().take(CANDIDATES).map(|x| x.1).collect(),

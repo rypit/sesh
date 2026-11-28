@@ -12,8 +12,8 @@ person's yes. See [Status](#status) for what works today.
 - **Assistant mode**: today, the Household agent (Hermes, in Open
   WebUI) uses search (SearXNG, Kiwix), weather and maps, Google mail,
   calendar and contacts, documents (Paperless-ngx) and feeds (Miniflux),
-  all through the gateway. Planned: a sandboxed browser (010), memory
-  with Mem0 (011), and each person's own agents and Telegram (012).
+  a sandboxed browser and memory, all through the gateway. Planned:
+  each person's own agents and Telegram (012).
 - **Operator mode**: the `sesh` admin CLI sets up the stack, users,
   agents and credentials. Planned (012): backups, secret rotation and
   Claude Code operator skills. No agent can reach them.
@@ -24,7 +24,7 @@ person's yes. See [Status](#status) for what works today.
 ## Architecture
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="sesh architecture: household users reach Hermes agents through Open WebUI or Telegram; agents, and the per-agent code executor that runs their scripts, reach Google, search, weather and maps, Paperless-ngx, a sandboxed browser and Mem0 only through the Code Mode gateway, which uses Infisical for secrets, an append-only audit log, and ntfy for approvals; inference runs on any OpenAI-compatible server" width="760">
+  <img src="docs/architecture.svg" alt="sesh architecture: household users reach Hermes agents through Open WebUI or Telegram; agents, and the per-agent code executor that runs their scripts, reach Google, search, weather and maps, Paperless-ngx, a sandboxed browser and their memory only through the Code Mode gateway, which uses Infisical for secrets, an append-only audit log, and ntfy for approvals; inference runs on any OpenAI-compatible server" width="760">
 </p>
 
 The diagram shows the whole design; [Status](#status) says which parts
@@ -64,7 +64,7 @@ in [`docs/decisions/`](docs/decisions/) and reference notes in
 - [x] 008 Network isolation ([`specs/008-network-isolation/`](specs/008-network-isolation/)): no shared network; each service reaches only its neighbours (merged; this follow-up finishes its remaining tasks)
 - [x] 009 One agent end to end ([`specs/009-one-agent/`](specs/009-one-agent/)): a Hermes agent in Open WebUI, using everything through the gateway
 - [x] 010 Browser ([`specs/010-browser/`](specs/010-browser/)): reading pages, logging in for you, downloads and uploads, with a live view and takeover inside the chat
-- [ ] 011 Memory: facts recalled across sessions, per person
+- [x] 011 Memory ([`specs/011-memory/`](specs/011-memory/)): facts recalled across chats, per person and for the household, never anyone else's
 - [ ] 012 Multi-user and household: everyone's agents, the Household agent, Telegram, backups, secret rotation, operator skills
 - [ ] 013 Google Docs (read-only): search and read your Google Docs
 
