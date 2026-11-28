@@ -114,10 +114,11 @@ services:
       ENABLE_SIGNUP: "False"
       ENABLE_MEMORIES: "False"
       ENABLE_ADMIN_CHAT_ACCESS: "False"
-      # Only the alias router is a model source; it lists only aliases.
+      # Model sources: the alias router (it lists only aliases) and, added
+      # by the generated overlay, each agent runtime (specs/009).
       ENABLE_OLLAMA_API: "False"
-      OPENAI_API_BASE_URL: http://litellm:4000/v1
-      OPENAI_API_KEY: ${WEBUI_ROUTER_KEY:-pending}
+      OPENAI_API_BASE_URLS: http://litellm:4000/v1
+      OPENAI_API_KEYS: ${WEBUI_ROUTER_KEY:-pending}
       BYPASS_MODEL_ACCESS_CONTROL: "True"
       TASK_MODEL_EXTERNAL: agent-main
       DATABASE_URL: postgresql://openwebui:${OPENWEBUI_DB_PASSWORD:?run sesh init}@postgres:5432/openwebui

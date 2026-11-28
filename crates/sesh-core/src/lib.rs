@@ -20,6 +20,10 @@ pub struct Agent {
     /// Every per-user scope is derived from it, never from the model.
     #[serde(default = "household")]
     pub owner: String,
+    /// The agent runtime sesh runs for it (`hermes`, specs/009), or none
+    /// for an identity only (tests, the eval). The gateway ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
 }
 
 /// The shared identity; always exists.
@@ -280,6 +284,7 @@ mod tests {
             name: name.into(),
             token_sha256: token_hash(&format!("tok-{name}")),
             connectors: vec!["search".into()],
+            runtime: None,
         }
     }
 
@@ -294,6 +299,22 @@ mod tests {
             f.by_token(&f.agents[0].token_sha256).is_none(),
             "the hash is not a token"
         );
+    }
+
+    #[test]
+    fn the_runtime_is_optional_and_omitted_when_absent() {
+        let old = format!(
+            "[[agent]]\nname = \"a\"\ntoken_sha256 = \"{}\"\nconnectors = [\"search\"]\n",
+            token_hash("t")
+        );
+        let f = AgentsFile::parse(&old).unwrap();
+        assert_eq!(f.agents[0].runtime, None);
+        assert!(!toml::to_string_pretty(&f).unwrap().contains("runtime"));
+        let mut g = f.clone();
+        g.agents[0].runtime = Some("hermes".into());
+        let text = toml::to_string_pretty(&g).unwrap();
+        assert!(text.contains("runtime = \"hermes\""));
+        assert_eq!(AgentsFile::parse(&text).unwrap(), g);
     }
 
     #[test]
@@ -413,6 +434,10 @@ pub struct GatewaySettings {
     /// Feeds (specs/006 data-model.md, Gateway settings).
     #[serde(default = "d_feeds_per_owner")]
     pub feeds_max_per_owner: u32,
+    /// The gateway's alias on each agent runtime's network (specs/009
+    /// research.md R5): its agent listener also binds there.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_listen: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -570,6 +595,7 @@ impl Default for GatewaySettings {
             upload_max_bytes: d_upload_max(),
             ref_ttl_secs: d_ref_ttl(),
             feeds_max_per_owner: d_feeds_per_owner(),
+            agent_listen: vec![],
         }
     }
 }

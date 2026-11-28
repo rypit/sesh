@@ -111,10 +111,11 @@ jobs:
           path: /tmp/sesh-*.tar
           retention-days: 1
 
-  # Stack tests in three parallel groups, balanced by duration; the tests in
-  # a group run one after another, each starting and removing its own
-  # stack. Fewer jobs pay the setup (disk, toolchain, cache, images) fewer
-  # times. A new stack test goes in the lightest group.
+  # Stack tests in parallel groups, balanced by duration; the tests in a
+  # group run one after another, each starting and removing its own stack.
+  # Fewer jobs pay the setup (disk, toolchain, cache, images) fewer times.
+  # A new stack test goes in the lightest group; `agent_stack` has its own,
+  # since only it pulls the agent runtime's image (specs/009 research.md R11).
   stack:
     needs: images
     runs-on: ubuntu-latest
@@ -126,6 +127,7 @@ jobs:
           - isolation_stack secrets_stack
           - eval_stack gateway_stack network_stack
           - foundation_stack google_docs_stack feeds_stack
+          - agent_stack
     name: stack (${{ matrix.tests }})
     steps:
       - uses: actions/checkout@v4

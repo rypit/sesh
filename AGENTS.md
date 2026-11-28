@@ -64,3 +64,9 @@ login is accepted only from its own database network.
 `sesh feed add <owner> <url> [--name <name>]`, `remove` and `list`
 manage feeds (feature 006) in Miniflux, which the gateway reaches only
 through `connectors/feeds.rs` (ADR 0009).
+`sesh agent add … --runtime hermes` also runs a Hermes Agent container
+for the agent (feature 009, ADR 0012), configured only by
+`crates/sesh-cli/src/hermes.rs`: the gateway's MCP tools and nothing
+else, on three internal pair networks (with the gateway, LiteLLM and
+Open WebUI) and no route out. `STUB_SCRIPT=agent sesh up` makes the
+stub play the runtime's scripted chat; `agent_stack` tests it.
